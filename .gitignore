@@ -1,0 +1,26 @@
+# Секреты — НИКОГДА в репозиторий
+.env
+*.env
+!.env.example
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Логи и временные файлы
+*.log
+logs/
+*.sqlite3
+
+# Данные базы
+pgdata/
+
+# Редакторы и ОС
+.vscode/
+.idea/
+.DS_Store
