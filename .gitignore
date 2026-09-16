@@ -1,9 +1,12 @@
 # Секреты — НИКОГДА в репозиторий
 .env
+.env.*
 *.env
 !.env.example
 *.key
 *.pem
+*.p12
+secrets/
 
 # Python
 __pycache__/
@@ -11,16 +14,31 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Mini App (React + Vite)
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+*.tsbuildinfo
+.eslintcache
 
 # Логи и временные файлы
 *.log
 logs/
 *.sqlite3
 
-# Данные базы
+# Данные базы и хранилища
 pgdata/
+minio-data/
+redis-data/
 
 # Редакторы и ОС
 .vscode/
 .idea/
 .DS_Store
+Thumbs.db
