@@ -1,1 +1,84 @@
+name: Sync architecture from DOCS-course-bot
 
+# Запускается: (1) вручную по кнопке, (2) раз в сутки в 03:00 UTC
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      # 1. Клонируем сам course-bot (сюда будем писать)
+      - name: Checkout course-bot
+        uses: actions/checkout@v4
+        with:
+          path: course-bot
+
+      # 2. Клонируем DOCS-course-bot (отсюда берём архитектуру)
+      - name: Checkout DOCS-course-bot
+        uses: actions/checkout@v4
+        with:
+          repository: romanticstudent07-stack/DOCS-course-bot
+          token: ${{ secrets.SYNC_DOCS_PAT }}
+          path: DOCS-course-bot
+
+      # 3. Копируем архитектуру в docs/architecture/
+      - name: Mirror architecture files
+        run: |
+          set -e
+          rm -rf course-bot/docs/architecture
+          mkdir -p course-bot/docs/architecture
+          cp -r DOCS-course-bot/architecture/. course-bot/docs/architecture/
+          cp DOCS-course-bot/AGENTS.md   course-bot/docs/architecture/AGENTS.source.md
+          cp DOCS-course-bot/CONTEXT.md  course-bot/docs/architecture/CONTEXT.source.md
+          cat > course-bot/docs/architecture/README.MIRROR.md <<'EOF'
+          # ⚠️ READ-ONLY MIRROR
+
+          Эта папка — автоматическое зеркало репозитория
+          [DOCS-course-bot](https://github.com/romanticstudent07-stack/DOCS-course-bot),
+          ветка `main`.
+
+          **Не править файлы здесь напрямую.** Все изменения делаются в
+          DOCS-course-bot и приходят сюда через
+          `.github/workflows/sync-architecture.yml`.
+
+          При обнаружении расхождения архитектуры с реальностью — писать в
+          `../DEFECTS-FOUND.md`.
+          EOF
+
+      # 4. Проверяем, есть ли изменения
+      - name: Check for changes
+        id: diff
+        working-directory: course-bot
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/architecture
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 5. Открываем PR с изменениями (если что-то поменялось)
+      - name: Create Pull Request
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          path: course-bot
+          token: ${{ secrets.SYNC_DOCS_PAT }}
+          branch: chore/sync-architecture
+          commit-message: "chore(docs): sync architecture from DOCS-course-bot"
+          title: "chore(docs): sync architecture from DOCS-course-bot"
+          body: |
+            Автоматическая синхронизация архитектуры из
+            [DOCS-course-bot](https://github.com/romanticstudent07-stack/DOCS-course-bot).
+
+            Запущено workflow `sync-architecture.yml`.
+          delete-branch: true
