@@ -49,8 +49,8 @@
 1. **Не править `docs/architecture/**`** — это read-only зеркало.
 2. **Не создавать реализацию для состояний `banned_soft` / `banned_hard`** —
    удалены Р477 (И2). Читать через `sleeping + author_pause + owner-review`.
-3. **Не помещать секретные значения в код** (`BOT_TOKEN`, PSP-ключи, `initData secret`).
-   Только через переменные окружения. В репо — только `.env.example` без значений.
+3. **Не помещать секретные значения в код** (`BOT_TOKEN`, PSP-ключи, `initData secret`,
+   реквизиты карты). Только через переменные окружения. В репо — только `.env.example`.
 4. **Не игнорировать `client_op_id`** при финансовых и state-меняющих операциях
    (идемпотентность).
 5. **Не разрешать `unsafe-eval` в CSP** Mini App production-сборки (E2 ERRATA).
@@ -60,6 +60,8 @@
    Все критичные операции — только через серверную валидацию `initData`.
 8. **Не выдумывать значения открытых решений Автора** (см. ниже).
 9. **Не пушить в `main` напрямую** — только через PR.
+10. **Не встраивать платёжные экраны внутрь Mini App** — оплата пока только
+    на внешней ссылке / реквизитах, вне Telegram.
 
 ## Структура репозитория (по DIVISION.md)
 
@@ -71,7 +73,7 @@ course-bot/
 │   └── api/               FastAPI + PostgreSQL 16 + Redis 7 + Alembic
 ├── packages/
 │   └── shared/            общие типы, схемы, константы
-├── infra/                 docker-compose, IaC, миграции
+├── infra/                 docker-compose, IaC, миграции, cloudflared config
 ├── docs/
 │   ├── architecture/      ← read-only зеркало DOCS-course-bot (не править!)
 │   └── DEFECTS-FOUND.md   ← сюда писать расхождения архитектуры с реальностью
@@ -100,15 +102,91 @@ course-bot/
 
 Никогда не доверять `Telegram.WebApp.initDataUnsafe` — только серверная валидация.
 
-## Оплата (текущее решение Автора)
+## Оплата: логика допуска (текущий режим — Вариант A, ручной)
 
-Приём оплаты происходит **вне Telegram Mini App** — на отдельной оплатной ссылке
-YooKassa (для самозанятого) или на карту с ручной проверкой. Внутри Telegram
-Mini App никаких платёжных экранов быть не должно. После подтверждения оплаты
-пользователь получает от бота инвайт-ссылку, по которой запускается Mini App.
+Приём оплаты происходит **вне Telegram Mini App**: перевод на карту самозанятого
+(через СБП или по номеру карты). Внутри Mini App никаких платёжных экранов быть
+не должно.
 
-Позже возможен перенос части оплат внутрь Mini App через Telegram Stars —
-это отдельное решение Автора, до тех пор Telegram Stars НЕ используются.
+### FSM платежа (Вариант A):
+
+```
+[created] ──/pay──> [awaiting_transfer]
+   │                     │
+   │             клиент отправляет
+   │             скриншот в бот
+   │                     │
+   │                     ▼
+   │               [screenshot_received]
+   │                     │
+   │             бот пересылает Автору
+   │                     │
+   │                     ▼
+   │            Автор глазами сверяет
+   │            выписку по карте с суммой
+   │                     │
+   │       ┌─────────────┴─────────────┐
+   │       │                           │
+   │  /confirm_payment           /reject_payment
+   │       │                           │
+   │       ▼                           ▼
+   │  [confirmed]  ──────>  [rejected]
+   │       │
+   │       ▼
+   │  бот шлёт клиенту
+   │  инвайт-ссылку
+   │  на Mini App
+   │       │
+   │       ▼
+   │  Автор в «Мой Налог»
+   │  вручную создаёт чек
+   │  и отправляет клиенту
+```
+
+### Таблицы БД (минимум для Варианта A):
+
+- `payment_pending(user_id, amount, currency, status, screenshot_file_id,
+   created_at, confirmed_at, confirmed_by, client_op_id)`
+- `payment_confirmed(user_id, amount, currency, confirmed_at, confirmed_by,
+   receipt_url_manual, client_op_id)` — куда переезжают строки после `/confirm_payment`.
+
+### Команды бота (Вариант A):
+
+- **Клиент:** `/pay` — бот показывает реквизиты и просит скриншот.
+- **Клиент:** отправка скриншота — бот меняет статус на `screenshot_received`,
+  пересылает Автору.
+- **Автор:** `/confirm_payment <user_id>` — статус `confirmed`, бот шлёт клиенту
+  инвайт-ссылку.
+- **Автор:** `/reject_payment <user_id> <причина>` — статус `rejected`,
+  бот отвечает клиенту.
+
+### Связь с Mini App (SEAM-PATCH-1):
+
+Участник **создаётся при первом запуске Mini App**, не в момент оплаты.
+`payment_confirmed` — просто «префлаг доступа». В момент запуска Mini App
+через инвайт-ссылку:
+1. `SEAM-1` создаёт `participant` в БД.
+2. Проверяется наличие записи в `payment_confirmed` для этого `user_id`.
+3. Если запись есть — Age Gate → PID создан → Курс стартовал.
+4. Если записи нет — Mini App показывает экран «сначала оплатите через бота».
+
+### Реквизиты (в `.env`, не в коде!):
+
+```
+PAYMENT_MODE=manual
+PAYMENT_CARD_NUMBER=            # 2200 XXXX XXXX XXXX
+PAYMENT_CARD_HOLDER=            # ФИО как на карте
+PAYMENT_SBP_PHONE=              # +7XXXXXXXXXX
+PAYMENT_SBP_BANK=               # Т-Банк, Сбер, ...
+PAYMENT_AMOUNT_RUB=             # 5000
+PAYMENT_CURRENCY=RUB
+```
+
+### Будущее (Вариант B — YooKassa для самозанятых):
+
+Переменные `PSP_*` в `.env.example` уже заготовлены. Когда решим переехать,
+меняем `PAYMENT_MODE=yookassa` и настраиваем webhook `/payment/webhook/yookassa`.
+Пока — **не реализовывать**, не тратить время.
 
 ## Порядок работы агента
 
@@ -129,7 +207,7 @@ Mini App никаких платёжных экранов быть не долж
 - **Bot:** Python 3.12 + aiogram 3.
 - **Backend:** FastAPI + PostgreSQL 16 + Redis 7 + Alembic.
 - **Хостинг разработки:** локальный сервер Автора (Ubuntu Server).
-  Публичный webhook — через Cloudflare Tunnel / ngrok до переезда на VPS.
+  Публичный webhook — через Cloudflare Tunnel (именованный, свой домен).
 - **Хостинг prod:** будет выбран позже (Yandex Cloud vs Timeweb — открытый вопрос).
 
 ## Открытые вопросы Автора (агент их не решает)
@@ -138,6 +216,7 @@ Mini App никаких платёжных экранов быть не долж
 - Значение `full_backup_rotation_cycle`.
 - Три несовместимости Б17 (см. `docs/architecture/normative/README.md`).
 - Определение ролей `finance` и `moderator`.
+- Дефект D-1 (доставка медиа: pre-signed URL vs внешний Telegram-канал).
 
 При задачах, задевающих эти пункты — вежливо вернуть вопрос Автору вместо угадывания.
 Не заполнять пробелы правдоподобной выдумкой — это самый опасный режим отказа.
