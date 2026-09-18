@@ -21,11 +21,13 @@ jobs:
           path: course-bot
 
       # 2. Клонируем DOCS-course-bot (отсюда берём архитектуру)
-      - name: Checkout DOCS-course-bot
+      #    Используем READ-only токен — этот токен физически
+      #    НЕ МОЖЕТ писать в DOCS-course-bot.
+      - name: Checkout DOCS-course-bot (read-only)
         uses: actions/checkout@v4
         with:
           repository: romanticstudent07-stack/DOCS-course-bot
-          token: ${{ secrets.SYNC_DOCS_PAT }}
+          token: ${{ secrets.DOCS_READ_PAT }}
           path: DOCS-course-bot
 
       # 3. Копируем архитектуру в docs/architecture/
@@ -67,12 +69,13 @@ jobs:
           fi
 
       # 5. Открываем PR с изменениями (если что-то поменялось)
+      #    Используем WRITE-токен для course-bot (не архитектуры!)
       - name: Create Pull Request
         if: steps.diff.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           path: course-bot
-          token: ${{ secrets.SYNC_DOCS_PAT }}
+          token: ${{ secrets.COURSE_WRITE_PAT }}
           branch: chore/sync-architecture
           commit-message: "chore(docs): sync architecture from DOCS-course-bot"
           title: "chore(docs): sync architecture from DOCS-course-bot"
@@ -81,4 +84,7 @@ jobs:
             [DOCS-course-bot](https://github.com/romanticstudent07-stack/DOCS-course-bot).
 
             Запущено workflow `sync-architecture.yml`.
+
+            Изменения в `docs/architecture/**` — это read-only зеркало.
+            Все исправления архитектуры делаются в DOCS-course-bot.
           delete-branch: true
