@@ -1,0 +1,147 @@
+# ============================================================
+# architecture/normative/OVERRIDES.yaml
+#
+# Машиночитаемый носитель переопределений ERRATA-UNIFIED
+# и нормализаций YAML относительно исходных патчей И1/И2/И4/Б17.
+#
+# Правило чтения (обязательное для агента):
+#   1. Прочитать YAML из целевого патча (И1/И2/И4/Б17).
+#   2. Применить поверх все записи из этого файла, у которых
+#      совпадает путь в поле `path` (dot-notation).
+#   3. Итоговое значение поля — из этого файла, не из патча.
+#
+# Формат `path` — dot-notation с указанием файла-источника:
+#   <file_id>.<top_key>.<sub_key>...
+#   file_id: I1 | I2 | I3 | I4 | B17 | 17_YAML
+#
+# Каждая запись обязана содержать:
+#   - id            — уникальный идентификатор правки (E1..E4, A1..A5,
+#                     ADD1..ADD5, FIX1..FIX2, N-01..N-99)
+#   - source        — файл, где решение принято
+#   - path          — путь к переопределяемому ключу
+#   - old_value     — что стоит в исходном патче (для сверки)
+#   - canonical     — каноническое значение (что применить)
+#   - rationale     — причина (кратко, ссылка на страницу оригинала)
+#   - status        — closed | mitigated | open_author_decision
+# ============================================================
+
+version: "1.0"
+authority: highest_over_body_and_patches   # согласовано с normative/README.md
+supersedes_stack: [И1, И2, И3, И4, Б17]
+
+overrides:
+
+  # ---------- E1 — participant_state как обычная таблица ----------
+  - id: E1
+    source: normative/errata-unified.md (E1)
+    path: I2.participant_state_contract.storage.projection.kind
+    old_value: "materialized_view"
+    canonical: "regular_table_populated_by_projector"
+    rationale: "Оригинал Архитектура.docx стр. 408. Единственный писатель — participant_state_projector; читатель — participant_state_reader."
+    status: closed
+    ci_check: single_writer_participant_state
+
+  # ---------- E2 — CSP default-src ----------
+  - id: E2
+    source: normative/errata-unified.md (E2)
+    path: I4.mini_app_client.csp_header.default_src
+    old_value: "'none'"
+    canonical: "'self'"
+    rationale: "Оригинал стр. 409. default-src 'self' + явный allowlist доменов; unsafe-eval запрещён; frame-ancestors ограничен Telegram."
+    status: closed
+    ci_check: csp_default_src_self
+
+  # ---------- E3 — hard_confirm сохранён; paste_blocked как UX-слой ----------
+  - id: E3
+    source: normative/errata-unified.md (E3) + И2 п.15
+    path: B17.hard_confirm.paste_blocked
+    old_value: "true  # RISK-L-07 CLOSED (единолично)"
+    canonical: "true  # UX-слой; риск закрыт совокупностью слоёв Mini App-only + phrase + hard-confirm"
+    rationale: "Оригинал стр. 332, 409, 410. И2 п.15 честно называет paste_blocked ослабляющей мерой. RISK-L-07 CLOSED действителен через МНОГОСЛОЙНУЮ защиту, не через одну эту меру."
+    status: mitigated_by_multilayer
+    risk_id: RISK-L-07
+
+  # ---------- E4 — каноническое число рисков ----------
+  - id: E4
+    source: normative/errata-unified.md (E4 NOTE1)
+    path: I4.totals.risk_registry_total
+    old_value: 19
+    canonical: 22
+    rationale: "Оригинал стр. 410, 420. 19 — исторический снимок И4; каноническое число после Б17 и ERRATA — 22 (RISK-L-01..22)."
+    status: closed
+    ci_check: risk_registry_canonical_22
+
+  # ---------- FIX1 — publish_epoch принадлежит Б14 ----------
+  - id: FIX1
+    source: normative/errata-unified.md (FIX1)
+    path: I1.glossary_patch.new_entities_v3_5.publish_epoch.owner_block
+    old_value: "B10"
+    canonical: "B14"
+    rationale: "Оригинал стр. 419. Владелец publish_epoch — Б14; Б10 только consumer/дедупликатор."
+    status: closed
+    ci_check: publish_epoch_single_owner_b14
+
+  # ---------- N-02 — нормализация дубля db_role в И2 (без изменения смысла) ----------
+  - id: N-02
+    source: appendix/E-yaml-normalizations.md (N-02)
+    path: I2.read_only_enforcement
+    old_value: |
+      db_role: participant_state_reader (SELECT only)
+      db_role: participant_state_projector (SELECT + INSERT on projection tables)
+    canonical:
+      db_roles:
+        - name: participant_state_reader
+          grants: SELECT
+          scope: read_only_projection
+        - name: participant_state_projector
+          grants: [SELECT, INSERT]
+          scope: projection_tables
+          restriction: "used only by Б10 projector process (INV-1)"
+    rationale: "Оригинал стр. 323–324. Две роли — намеренная запись, но синтаксически это дубль-ключ (undefined YAML). Нормализация — превратить в список без изменения смысла."
+    status: closed
+    ci_check: single_writer_participant_state
+
+  # ---------- Р477 — /block/unblock target state ----------
+  - id: R477_TARGET
+    source: И2 стр. 323 + normative/errata-unified.md
+    path: B17.commands.block.target_state
+    old_value: "banned_soft / banned_hard (удалены Р477)"
+    canonical:
+      state: sleeping
+      applied_modifier: author_pause
+      reason_class: block
+      review_required: owner_review
+    rationale: "Оригинал И2 стр. 323: «hard-block заменён на sleeping с author_pause + owner-review». banned_* удалены из FSM."
+    status: closed
+    ci_check: no_live_banned_states
+
+  # ---------- Открытые вопросы Автора (не закрывать без решения) ----------
+  - id: OPEN_A
+    source: normative/README.md (Открытые несовместимости)
+    path: B17.commands.erasure_finalize_before_cooling_off
+    old_value: "команда доступна owner"
+    canonical: "недоступна до решения Автора (более строгое требование И3 — 14-дневная отсрочка стирания)"
+    rationale: "Одна из пяти открытых несовместимостей Б17. См. normative/README.md, раздел «Открытые несовместимости».
+Требует решения Автора."
+    status: open_author_decision
+
+  - id: OPEN_B
+    source: normative/README.md (Открытые несовместимости)
+    path: B17.roles.moderator.card_visibility
+    old_value: "не определено"
+    canonical: "roles finance и moderator не разграничивать до решения Автора; использовать owner"
+    rationale: "Открытая несовместимость: роли finance/moderator упомянуты в матрице, но не определены в глоссарии. См. normative/README.md."
+    status: open_author_decision
+
+  - id: OPEN_C
+    source: normative/README.md (Открытые несовместимости)
+    path: I3.red_zone.auto_escalation_60s
+    old_value: "разрешена в И3 → sleeping (не banned)"
+    canonical: "разрешена — эскалация в sleeping не нарушает NR-17.14 (запрет банов относится к banned_*, не к sleeping)"
+    rationale: "60-секундная автоэскалация в Red Zone — сохраняется. Легитимна, потому что переводит в sleeping, а не в banned_* (Р477 удалил banned_* из FSM)."
+    status: closed
+    note: "Раньше считалось «одной из трёх несовместимостей» в 17-author-panel.md и I3. По факту противоречия нет — уточнено оригиналом стр. 293-294, 350."
+
+# ============================================================
+# КОНЕЦ РЕЕСТРА
+# ============================================================
