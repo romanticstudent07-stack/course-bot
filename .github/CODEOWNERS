@@ -1,1 +1,22 @@
-* @romanticstudent07-stack
+# CODEOWNERS — кто обязан ревьюить какие пути.
+# Синтаксис: <шаблон> <владелец1> <владелец2> ...
+# Документация: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# По умолчанию за весь репо отвечает Автор.
+*                                @romanticstudent07-stack
+
+# КРИТИЧНО: зеркало архитектуры — read-only, любое изменение требует
+# явного одобрения Автора. Это техническая защита правила из AGENTS.md.
+/docs/architecture/              @romanticstudent07-stack
+/docs/architecture/**            @romanticstudent07-stack
+
+# Инфраструктура и правила агента — тоже под Автора.
+/.github/                        @romanticstudent07-stack
+/.github/**                      @romanticstudent07-stack
+/.genspark/                      @romanticstudent07-stack
+/.genspark/**                    @romanticstudent07-stack
+/AGENTS.md                       @romanticstudent07-stack
+/CONTEXT.md                      @romanticstudent07-stack
+/.editorconfig                   @romanticstudent07-stack
+/infra/                          @romanticstudent07-stack
+/infra/**                        @romanticstudent07-stack
