@@ -1,0 +1,52 @@
+# apps/bot/.dockerignore — защита слоёв образа от лишнего и секретного.
+
+# --- КРИТИЧНО: секреты никогда не в образ ---
+.env
+.env.*
+*.env
+!.env.example
+*.key
+*.pem
+*.p12
+secrets/
+
+# --- Git и метаданные ---
+.git
+.gitignore
+.gitattributes
+
+# --- Python артефакты ---
+__pycache__
+*.py[cod]
+*.egg-info
+.venv
+venv
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.tox
+.coverage
+htmlcov
+
+# --- Docker ---
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# --- IDE и ОС ---
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# --- Логи и временное ---
+*.log
+logs/
+*.sqlite3
+
+# --- Тесты и документация ---
+tests/
+test/
+docs/
+*.md
+!README.md

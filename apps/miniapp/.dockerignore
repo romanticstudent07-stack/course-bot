@@ -1,0 +1,52 @@
+# apps/miniapp/.dockerignore — защита слоёв образа от лишнего и секретного.
+
+# --- КРИТИЧНО: секреты никогда не в образ ---
+.env
+.env.*
+*.env
+!.env.example
+*.key
+*.pem
+*.p12
+secrets/
+
+# --- Git и метаданные ---
+.git
+.gitignore
+.gitattributes
+
+# --- Node артефакты (пересобираются в builder-stage) ---
+node_modules
+dist
+build
+.vite
+coverage
+*.tsbuildinfo
+.eslintcache
+.npm
+.pnpm-store
+
+# --- Docker ---
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# --- IDE и ОС ---
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# --- Логи и временное ---
+*.log
+logs/
+
+# --- Тесты и документация ---
+tests/
+test/
+__tests__/
+*.test.*
+*.spec.*
+docs/
+*.md
+!README.md

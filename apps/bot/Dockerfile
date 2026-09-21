@@ -12,9 +12,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Безопасно даже если файлов ещё нет (glob с буквальным префиксом не падает).
 COPY requirements.txt* /app/
+COPY pyproject.toml* poetry.lock* /app/
 RUN if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
+# .dockerignore рядом защищает от .env, .git и мусора.
 COPY . /app/
 
 # Итерация 0-А: заглушка бота — просто спит, чтобы контейнер не падал.

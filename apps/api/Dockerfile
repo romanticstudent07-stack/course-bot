@@ -15,10 +15,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Python-зависимости отдельным слоем — быстрая пересборка при правке кода.
+# Обе строки безопасны при отсутствии файла (glob с буквальным префиксом не падает).
 COPY requirements.txt* /app/
+COPY pyproject.toml* poetry.lock* /app/
 RUN if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
 # Код (Агент положит его в apps/api/ при Итерации 0-А).
+# .dockerignore рядом обеспечивает, чтобы сюда не попали .env, .git, __pycache__.
 COPY . /app/
 
 # Health endpoint должен ответить 200 на /healthz.
