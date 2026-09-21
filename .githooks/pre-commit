@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — блокирует коммит, если он трогает docs/architecture/**
+# Активация (один раз): git config core.hooksPath .githooks
+
+set -e
+
+STAGED_ARCH=$(git diff --cached --name-only | grep -E '^docs/architecture/' || true)
+
+if [ -n "$STAGED_ARCH" ]; then
+  echo "❌ COMMIT ЗАБЛОКИРОВАН"
+  echo ""
+  echo "Ты пытаешься закоммитить изменения в docs/architecture/**:"
+  echo "$STAGED_ARCH" | sed 's/^/   /'
+  echo ""
+  echo "Это read-only зеркало из репо DOCS-course-bot."
+  echo "Все правки архитектуры делаются в DOCS-course-bot, оттуда прилетают"
+  echo "PR-ом через .github/workflows/sync-architecture.yml."
+  echo ""
+  echo "Если ты уверен и знаешь что делаешь — можно временно отключить хук:"
+  echo "   git commit --no-verify"
+  echo "но лучше правь в DOCS-course-bot."
+  exit 1
+fi
+
+# Дополнительная защита: не коммитить .env (даже если .gitignore каким-то чудом не сработал).
+STAGED_ENV=$(git diff --cached --name-only | grep -E '(^|/)\.env(\.|$)' | grep -v '\.env\.example$' || true)
+if [ -n "$STAGED_ENV" ]; then
+  echo "❌ COMMIT ЗАБЛОКИРОВАН"
+  echo ""
+  echo "Ты пытаешься закоммитить .env-файл(ы):"
+  echo "$STAGED_ENV" | sed 's/^/   /'
+  echo ""
+  echo "Секреты НИКОГДА не должны попадать в git."
+  echo "Убери файлы из staging: git reset HEAD -- <file>"
+  echo "И проверь .gitignore."
+  exit 1
+fi
+
+exit 0
