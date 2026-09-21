@@ -1,38 +1,112 @@
-# Локальный контур разработки (синтетический запуск).
+# Локальный контур разработки на сервере IRONCLAD (Ubuntu 26.04, bare-metal).
+# Правила сервера:
+#   - все порты биндятся на 127.0.0.1 (наружу — только Cloudflare Tunnel).
+#   - у всех контейнеров задан лимит памяти (переменные MEM_LIMIT_* в .env).
+#   - префикс проекта course-bot — не пересекается с maxmover_default.
+#   - shared_buffers Postgres ≤ 256 MB (правило хоста).
 # НЕ для прода: в проде PostgreSQL с PITR и S3 у РФ-провайдера.
+
+name: course-bot
+
 services:
   db:
     image: postgres:16
+    container_name: course-bot_db
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${TZ}
+      PGTZ: ${TZ}
     command: >
       postgres -c wal_level=replica
                -c archive_mode=on
                -c max_wal_senders=3
-    ports: ["5432:5432"]
-    volumes: ["pgdata:/var/lib/postgresql/data"]
+               -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5435}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
       retries: 10
+    restart: unless-stopped
+    networks: [course-bot_net]
+    deploy:
+      resources:
+        limits:
+          memory: ${MEM_LIMIT_DB:-384M}
 
   redis:
-    image: redis:7
-    ports: ["6379:6379"]
-    volumes: ["redis-data:/data"]
+    image: redis:7-alpine
+    container_name: course-bot_redis
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "48mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "127.0.0.1:6382:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks: [course-bot_net]
+    deploy:
+      resources:
+        limits:
+          memory: ${MEM_LIMIT_REDIS:-64M}
 
   minio:
     image: minio/minio
+    container_name: course-bot_minio
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
-    ports: ["9000:9000", "9001:9001"]
-    volumes: ["minio-data:/data"]
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+    networks: [course-bot_net]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: ${MEM_LIMIT_MINIO:-192M}
+
+  # Одноразовый init: создаёт бакеты photos/audit в MinIO при первом старте.
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $$S3_ACCESS_KEY $$S3_SECRET_KEY &&
+      mc mb -p local/$$S3_BUCKET_PHOTOS || true &&
+      mc mb -p local/$$S3_BUCKET_AUDIT  || true &&
+      mc anonymous set download local/$$S3_BUCKET_PHOTOS || true &&
+      echo 'MinIO buckets ready: photos, audit'
+      "
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET_PHOTOS: ${S3_BUCKET_PHOTOS}
+      S3_BUCKET_AUDIT: ${S3_BUCKET_AUDIT}
+    networks: [course-bot_net]
+    restart: "no"
 
 volumes:
   pgdata:
+    name: course-bot_pgdata
   redis-data:
+    name: course-bot_redis-data
   minio-data:
+    name: course-bot_minio-data
+
+networks:
+  course-bot_net:
+    name: course-bot_net
+    driver: bridge
