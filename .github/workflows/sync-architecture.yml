@@ -8,7 +8,8 @@ on:
 
 jobs:
   sync:
-    runs-on: ubuntu-latest
+    # Явно фиксируем 24.04, чтобы миграция ubuntu-latest не поломала сборку сама.
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write
