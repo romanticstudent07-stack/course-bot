@@ -1,14 +1,22 @@
-# Секреты — НИКОГДА в репозиторий
+# ============================================================
+# .gitignore — course-bot
+# Правило: секреты и артефакты сборки НИКОГДА не попадают в git.
+# .dockerignore в apps/*/ дублирует эту защиту на уровне образа.
+# ============================================================
+
+# --- КРИТИЧНО: секреты — НИКОГДА в репозиторий ---
 .env
 .env.*
 *.env
 !.env.example
+.env.local
+*.local
 *.key
 *.pem
 *.p12
 secrets/
 
-# Python
+# --- Python ---
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -17,28 +25,47 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.coverage
+htmlcov/
 
-# Node / Mini App (React + Vite)
+# --- Node / Mini App (React + Vite) ---
 node_modules/
 dist/
-build/
+/build/
+apps/*/build/
 .vite/
 coverage/
 *.tsbuildinfo
 .eslintcache
+.npm/
+.pnpm-store/
 
-# Логи и временные файлы
+# --- Логи и временные файлы ---
 *.log
 logs/
 *.sqlite3
+*.pid
+*.seed
 
-# Данные базы и хранилища
+# --- Данные базы и хранилища (при docker-compose down -v могут остаться) ---
 pgdata/
 minio-data/
 redis-data/
 
-# Редакторы и ОС
+# --- Cloudflared (никогда не коммитить credentials туннеля) ---
+.cloudflared/
+*.cloudflared.json
+
+# --- Редакторы и ОС ---
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+
+# --- Локальные скрипты Автора (не для репо) ---
+scratch/
+tmp/
+notes.local.md
