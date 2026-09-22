@@ -1,0 +1,27 @@
+# apps/api/requirements.txt — минимальный набор для Итерации 0-А.
+# Версии закреплены; Агент имеет право обновить с фиксацией в PR.
+
+# --- Web framework и ASGI ---
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# --- Валидация и настройки ---
+pydantic==2.9.2
+pydantic-settings==2.5.2
+
+# --- База данных ---
+sqlalchemy==2.0.35
+alembic==1.13.3
+psycopg[binary]==3.2.3
+
+# --- Redis ---
+redis==5.0.8
+
+# --- S3 (для MinIO и Yandex Object Storage) ---
+boto3==1.35.36
+
+# --- HTTP-клиент (для webhook-проб и т.п.) ---
+httpx==0.27.2
+
+# --- Утилиты ---
+python-dotenv==1.0.1

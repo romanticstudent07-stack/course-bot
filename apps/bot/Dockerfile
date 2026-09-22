@@ -21,5 +21,5 @@ RUN if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 COPY . /app/
 
 # Итерация 0-А: заглушка бота — просто спит, чтобы контейнер не падал.
-# Агент заменит на реальный aiogram 3 dispatcher.
-CMD ["python", "-c", "import time, os; print('bot stub is idle; waiting for Iteration 0-A code'); \nwhile True: time.sleep(3600)"]
+# Агент заменит на реальный aiogram 3 dispatcher (модуль main:app или подобный).
+CMD ["python", "stub.py"]
