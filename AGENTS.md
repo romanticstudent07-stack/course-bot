@@ -22,17 +22,33 @@
 5. Любое изменение архитектуры делается в репозитории DOCS-course-bot,
    потом приходит сюда PR-ом через `.github/workflows/sync-architecture.yml`.
 
+## Обязательная активация локальных git-хуков
+
+Сразу после клона (одноразово):
+
+```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-commit
+```
+
+Без этой команды `.githooks/pre-commit` не работает, и защита от случайного
+коммита в `docs/architecture/**` и `.env` не активна. Агент, работающий локально
+(например, через Genspark Code с sandbox), должен выполнить эту команду
+в начале сессии.
+
 ## Ключевые точки входа (в порядке чтения)
 
 1. `CONTEXT.md` — быстрое введение в проект (3 минуты).
 2. `AGENTS.md` (этот файл) — правила работы агента.
 3. `.genspark/rules.md` — жёсткие правила для Genspark Code.
-4. `docs/architecture/AGENTS.md` — правила работы с архитектурой (наследуются).
+4. `docs/architecture/AGENTS.source.md` — правила работы с архитектурой (наследуются;
+   это копия `AGENTS.md` из DOCS-course-bot, обновляется sync-workflow).
 5. `docs/architecture/CANONICAL-SOURCES.md` — правило «верхний файл vs подпапка (10/, 15/, 17/, 99/)».
 6. `docs/architecture/normative/README.md` — старшинство нормативного стека.
 7. `docs/architecture/normative/OVERRIDES.yaml` — арбитр YAML-конфликтов.
 8. `docs/architecture/build/DIVISION.md` — что реализуется в Mini App, что в боте, что в API.
 9. `docs/architecture/build/build-order.md` — порядок первых итераций.
+10. `infra/SERVER-IRONCLAD.md` — правила локального сервера (порты, лимиты, TZ).
 
 ## Правила старшинства (наследуются из архитектуры)
 
@@ -72,7 +88,7 @@ course-bot/
 │   ├── bot/               Python 3.12 + aiogram 3
 │   └── api/               FastAPI + PostgreSQL 16 + Redis 7 + Alembic
 ├── packages/
-│   └── shared/            общие типы, схемы, константы
+│   └── shared/            общие типы, схемы, константы, OpenAPI-контракт
 ├── infra/                 docker-compose, IaC, миграции, cloudflared config
 ├── docs/
 │   ├── architecture/      ← read-only зеркало DOCS-course-bot (не править!)
@@ -80,6 +96,8 @@ course-bot/
 ├── .github/
 │   ├── workflows/         CI + sync-architecture.yml
 │   └── PULL_REQUEST_TEMPLATE.md
+├── .githooks/
+│   └── pre-commit         защита от коммитов в docs/architecture/ и .env
 ├── .genspark/
 │   └── rules.md           жёсткие правила для Genspark Code
 ├── .env.example
@@ -206,7 +224,7 @@ PAYMENT_CURRENCY=RUB
 - **Mini App:** React 18 + Vite + TypeScript + `@telegram-apps/sdk-react` + Zustand + tanstack-query + dexie (IndexedDB).
 - **Bot:** Python 3.12 + aiogram 3.
 - **Backend:** FastAPI + PostgreSQL 16 + Redis 7 + Alembic.
-- **Хостинг разработки:** локальный сервер Автора (Ubuntu Server).
+- **Хостинг разработки:** локальный сервер Автора (Ubuntu Server IRONCLAD).
   Публичный webhook — через Cloudflare Tunnel (именованный, свой домен).
 - **Хостинг prod:** будет выбран позже (Yandex Cloud vs Timeweb — открытый вопрос).
 
@@ -217,9 +235,12 @@ PAYMENT_CURRENCY=RUB
 - Три несовместимости Б17 (см. `docs/architecture/normative/README.md`).
 - Определение ролей `finance` и `moderator`.
 - Дефект D-1 (доставка медиа: pre-signed URL vs внешний Telegram-канал).
+- Провайдер S3 в РФ.
 
-При задачах, задевающих эти пункты — вежливо вернуть вопрос Автору вместо угадывания.
-Не заполнять пробелы правдоподобной выдумкой — это самый опасный режим отказа.
+Полный трекер открытых вопросов — **GitHub Issues** репозитория с меткой
+`author-decision`. При задачах, задевающих эти пункты — вежливо вернуть вопрос
+Автору вместо угадывания. Не заполнять пробелы правдоподобной выдумкой —
+это самый опасный режим отказа.
 
 ## Тесты и CI
 

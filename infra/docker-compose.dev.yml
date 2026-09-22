@@ -98,6 +98,72 @@ services:
     networks: [course-bot_net]
     restart: "no"
 
+  # FastAPI backend. Заглушка до Итерации 0-А.
+  api:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    container_name: course-bot_api
+    env_file:
+      - ../.env
+    environment:
+      APP_HOST: ${APP_HOST:-0.0.0.0}
+      APP_PORT: ${APP_PORT:-8080}
+      TZ: ${TZ}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:${APP_PORT:-8080}"
+    restart: unless-stopped
+    networks: [course-bot_net]
+    deploy:
+      resources:
+        limits:
+          memory: ${MEM_LIMIT_API:-384M}
+
+  # Telegram bot (aiogram 3). Заглушка до Итерации 0-А.
+  bot:
+    build:
+      context: ../apps/bot
+      dockerfile: Dockerfile
+    container_name: course-bot_bot
+    env_file:
+      - ../.env
+    environment:
+      TZ: ${TZ}
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+    networks: [course-bot_net]
+    deploy:
+      resources:
+        limits:
+          memory: ${MEM_LIMIT_BOT:-192M}
+
+  # Mini App (nginx с собранной статикой). Заглушка до Итерации 0-А.
+  # Vite dev-режим (порт 5173) — только на dev-машине, не в этом compose.
+  miniapp:
+    build:
+      context: ../apps/miniapp
+      dockerfile: Dockerfile
+    container_name: course-bot_miniapp
+    environment:
+      TZ: ${TZ}
+    ports:
+      - "127.0.0.1:5173:80"
+    restart: unless-stopped
+    networks: [course-bot_net]
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
 volumes:
   pgdata:
     name: course-bot_pgdata

@@ -24,8 +24,23 @@
 | `infra/` | docker-compose для локального запуска |
 | `docs/architecture/` | Read-only зеркало DOCS-course-bot |
 | `docs/DEFECTS-FOUND.md` | Расхождения архитектуры с реальностью |
-| `.github/workflows/` | CI + sync-architecture.yml |
+| `.github/workflows/` | GitHub Actions: sync-architecture.yml (полноценный CI появится позже) |
+| `.githooks/` | Локальные git-хуки (защита от случайных коммитов в архитектуру и `.env`) |
 | `.genspark/rules.md` | Жёсткие правила для Genspark Code |
+
+## Клонирование и первоначальная настройка
+
+```bash
+git clone https://github.com/romanticstudent07-stack/course-bot.git
+cd course-bot
+
+# ОБЯЗАТЕЛЬНО: активировать локальные git-хуки
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-commit
+```
+
+Без активации хуков защита `docs/architecture/**` от случайных коммитов
+работать НЕ будет. Это одноразовая команда для каждого клона репозитория.
 
 ## Принцип разделения
 
@@ -59,7 +74,8 @@
 ## Секреты
 
 Никогда не коммитить. Все значения — через `.env` по образцу `.env.example`.
-Файл `.env` игнорируется через `.gitignore`.
+Файл `.env` игнорируется через `.gitignore`. Локальный git-хук
+(`.githooks/pre-commit`) дополнительно блокирует случайный `git add .env`.
 
 ## Разработка на локальном сервере
 
@@ -67,7 +83,9 @@
 Публичный HTTPS-webhook для Telegram проброшен через Cloudflare Tunnel
 (бесплатный, стабильный, `*.trycloudflare.com` или свой домен).
 
-Пошаговая инструкция запуска — в `infra/README.md` (создаётся в Итерации 0).
+Пошаговая инструкция запуска — в `infra/README.md`.
+Настройка своего домена в Cloudflare — в `infra/CLOUDFLARE-TUNNEL.md`.
+Правила сервера — в `infra/SERVER-IRONCLAD.md`.
 
 Переход на VPS/Cloud — после успешных тестов на локальном сервере.
 
@@ -89,3 +107,4 @@
 
 - Облачный провайдер prod: Yandex Cloud или Timeweb.
 - Дефекты из `docs/DEFECTS-FOUND.md`.
+- Полный трекер открытых вопросов — GitHub Issues репозитория (метка `author-decision`).
