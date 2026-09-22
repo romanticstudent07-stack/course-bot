@@ -19,7 +19,8 @@ RUN if [ -f package.json ]; then \
 # Исходники → сборка.
 # .dockerignore рядом защищает от .env, .git, node_modules, dist.
 COPY . .
-RUN if [ -f package.json ] && grep -q '"build"' package.json; then npm run build; \
+RUN if [ -f package.json ] && grep -q '"build"' package.json && [ -f index.html ]; then \
+        npm run build; \
     else \
         mkdir -p /app/dist && \
         echo '<!doctype html><html><body><h1>Mini App stub — Iteration 0-A pending</h1></body></html>' > /app/dist/index.html; \
@@ -28,11 +29,12 @@ RUN if [ -f package.json ] && grep -q '"build"' package.json; then npm run build
 # --- Stage 2: runtime ---
 FROM nginx:alpine
 
-# CSP-заголовок из E2 ERRATA: default-src 'self' + whitelist, unsafe-eval запрещён.
-# Полный конфиг nginx с CSP Агент положит в apps/miniapp/nginx.conf позже.
+# CSP-заголовок из E2 ERRATA задаётся в nginx.conf (default-src 'self',
+# unsafe-eval запрещён, frame-ancestors ограничен Telegram).
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 \
-    CMD wget -q -O - http://127.0.0.1/ >/dev/null || exit 1
+    CMD wget -q -O - http://127.0.0.1/healthz >/dev/null || exit 1
 
 EXPOSE 80
