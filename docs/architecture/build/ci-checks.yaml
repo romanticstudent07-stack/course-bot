@@ -1,0 +1,219 @@
+# ============================================================
+# build/ci-checks.yaml — сводный реестр CI-чеков
+# Скелет. Наполняется Автором.
+# Источник: И1 (ci_checks_i1), И2 (ci_checks_i2), И3 (ci_checks_i3),
+#           И4 (ci_checks_i4), Б17 (ci_checks_b17)
+# Ожидаемое число: 50+ (40 из И1–И4 + 10 из Б17)
+#
+# ВАЖНО ПРО ФОРМАТ: каждый элемент списка ci_checks начинается ровно
+# с двух пробелов и дефиса ("  - id:"). Отступ поля внутри элемента —
+# четыре пробела. Нарушение отступа делает файл нечитаемым для парсера;
+# это стережёт проверка 8 в tools/checks.sh.
+# ============================================================
+
+ci_checks:
+  # ---------------- Уникальность и целостность ----------------
+  - id: unique_text_keys
+    source: И4
+    what: "Уникальность text_key в text_registry (RISK-L-16)"
+    status: TODO
+    command: "TODO: команда-черновик нерабочая (pipe в test), переписать"
+
+  - id: command_role_match
+    source: Б17
+    what: "Каждая команда в config/commands/*.yaml имеет запись в role_capability_matrix"
+    status: TODO
+    command: "TODO"
+
+  - id: no_free_text_shadow_reason
+    source: И1
+    what: "Причины теневой паузы — только enum, без свободного текста"
+    status: TODO
+    command: "TODO: исправить regex [^enum] (D-19)"
+
+  - id: age_gate_before_pid
+    source: ADD3 ERRATA
+    what: "pid не создаётся до жёсткой проверки даты рождения (INV-AGE-GATE-BEFORE-PID)"
+    status: TODO
+    command: "TODO"
+
+  - id: outbox_sent_at_compaction
+    source: ADD1 ERRATA + И2
+    what: "Компакция outbox с sent_at (INV-OUTBOX-SENT-AT-COMPACTION)"
+    status: TODO
+    command: "TODO"
+
+  # ---------------- Роли и доступы ----------------
+  - id: single_writer_participant_state
+    source: E1 ERRATA
+    what: "Единственный писатель participant_state — роль participant_state_projector"
+    status: TODO
+    command: "TODO: проверка прав на таблице participant_state в проде"
+
+  # ---------------- Тексты ----------------
+  - id: no_pre_legal_review_in_prod
+    source: prod_launch_gate (И1)
+    what: "Прод не стартует, пока есть legal_status: pre-legal-review"
+    status: TODO
+    command: "TODO"
+
+  # ---------------- Упразднённые сущности ----------------
+  - id: no_place_command
+    source: v3.1
+    what: "Ни одного упоминания /place как действующей команды (исторические справки разрешены)"
+    status: implemented
+    excluded_files:
+      - architecture/12-reserve.md
+      - architecture/README.md
+      - architecture/appendix/A-patch1-global-rules.md
+      - architecture/appendix/B-failsafe-registry.md
+      - architecture/appendix/C-registries.md
+      - architecture/_WIP-architecture-split.md
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 2"
+
+  - id: no_live_banned_states
+    source: Р477 (И2)
+    what: "Каждое упоминание banned_soft/banned_hard имеет рядом пометку Р477"
+    status: implemented
+    excluded_files:
+      - architecture/normative/I2-wave-b.md
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 5"
+
+  # ---------------- Аудит ----------------
+  - id: audit_no_csv_export
+    source: Б17
+    what: "Экспорт /audit запрещён в CSV"
+    status: TODO
+    command: "TODO"
+
+  - id: graph_k_anonymity
+    source: И4
+    what: "/graph требует k >= 5 (защита от атаки пересечением)"
+    status: TODO
+    command: "TODO"
+
+  # ---------------- Ссылочная целостность каталога ----------------
+  - id: no_broken_links
+    source: этот отчёт
+    what: "Ни одной висячей относительной ссылки на .md в architecture/"
+    status: implemented_as_warning
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 9"
+
+  - id: errata_backrefs_present
+    source: этот отчёт
+    what: "Все файлы корпуса несут врезку «Переопределено/Уточнено ERRATA-UNIFIED»"
+    status: implemented
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 4"
+
+  - id: wip_pointer_dead
+    source: этот отчёт
+    what: "Ни один файл не отправляет читателя в _WIP-architecture-split.md как в источник"
+    status: implemented
+    excluded_files:
+      - architecture/_WIP-architecture-split.md
+      - architecture/appendix/D-source-defects.md
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 3"
+
+  - id: errata_link_path
+    source: этот отчёт
+    what: "Ссылка на errata-unified.md вне normative/ содержит префикс normative/"
+    status: implemented
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 1"
+
+  # ---------------- Старшинство ----------------
+  - id: precedence_single_source
+    source: этот отчёт
+    what: "Ступень старшинства объявлена только в normative/README.md; остальные файлы её цитируют со ссылкой на канон"
+    status: implemented
+    rule: "файл, содержащий цепочку «И1 → И2 → И3», обязан содержать строку «Канонический источник старшинства»"
+    forbidden_phrase: "ниже в цепочке старшинства"
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверки 6 и 7"
+
+  - id: ci_checks_yaml_indent
+    source: этот отчёт
+    what: "Элементы списка ci_checks начинаются ровно с двух пробелов и дефиса"
+    status: implemented
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 8"
+
+  # ---------------- Каноническая модель (новое) ----------------
+  - id: canonical_sources_doc_present
+    source: этот отчёт (наблюдение №1)
+    what: "В architecture/ существует единый арбитр канонических источников"
+    status: implemented
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 10"
+
+  - id: agents_and_context_mention_split_folders
+    source: этот отчёт (наблюдение №1)
+    what: "AGENTS.md и CONTEXT.md явно упоминают подпапки 10/, 15/, 99/ и правило приоритета"
+    status: implemented
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 11"
+
+  - id: seventeen_split_guard
+    source: этот отчёт (наблюдение №2)
+    what: "Если создана папка architecture/17/, значит выполнен протокол 17-SPLIT-PROTOCOL.md"
+    status: implemented
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 12"
+
+  - id: wip_has_historical_header
+    source: этот отчёт
+    what: "_WIP-architecture-split.md содержит явную пометку HISTORICAL"
+    status: implemented
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 13"
+
+  - id: source_defects_count
+    source: этот отчёт
+    what: "В appendix/D-source-defects.md ровно 31 запись D-01…D-31"
+    status: implemented
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 14"
+
+  - id: dangling_grant_photos_access
+    source: этот отчёт (Д-30)
+    what: "Висячая 36-я команда /grant_photos_access зафиксирована как dangling_command"
+    status: implemented
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 15"
+
+  # ---------------- Нормализации YAML (новое) ----------------
+  - id: yaml_normalizations_registry
+    source: этот отчёт + CANONICAL-SOURCES.md (эталон)
+    what: "Реестр отступлений YAML от эталона существует и содержит N-01 про снятый дубль forbidden_auto_transitions_to"
+    status: implemented
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 16"
+
+  # ---------------- ERRATA-переопределения (новое) ----------------
+  - id: overrides_registry_present
+    source: этот отчёт + normative/OVERRIDES.yaml
+    what: "Реестр ERRATA-переопределений существует и содержит обязательные id (E1, E2, E4, FIX1, R477_TARGET, N02)"
+    status: implemented
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 17"
+
+  - id: overrides_referenced_in_canonical_sources
+    source: этот отчёт
+    what: "CANONICAL-SOURCES.md и normative/README.md ссылаются на OVERRIDES.yaml"
+    status: implemented
+    command: "bash tools/checks.sh"
+    implemented_in: "tools/checks.sh, проверка 18"
+
+  # TODO: остальные 30+ чеков из ci_checks_i1..i4 и ci_checks_b17
+
+totals:
+  declared_i1_i4: 40
+  declared_b17: 10
+  implemented_in_tools: 18
+  actual: "TODO: пересчитать после наполнения"
+  gap: "actual - declared"
