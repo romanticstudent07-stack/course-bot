@@ -1,17 +1,30 @@
 # .genspark/rules.md — правила для Genspark Code Agent
 
+## Активация git-хуков перед работой (одноразово)
+
+Сразу после клона репо в sandbox Genspark выполни:
+
+```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-commit
+```
+
+Без этого локальный хук `.githooks/pre-commit` не работает,
+и защита от случайного коммита в `docs/architecture/**` и `.env` неактивна.
+
 ## Обязательный порядок чтения перед началом любой задачи
 
 1. `CONTEXT.md`
 2. `AGENTS.md`
-3. `docs/architecture/AGENTS.md` (наследуемые правила)
+3. `docs/architecture/AGENTS.source.md` (наследуемые правила из DOCS-course-bot)
 4. `docs/architecture/CANONICAL-SOURCES.md`
 5. `docs/architecture/normative/README.md`
 6. `docs/architecture/normative/OVERRIDES.yaml`
 7. `docs/architecture/build/DIVISION.md`
 8. `docs/architecture/build/build-order.md`
+9. `infra/SERVER-IRONCLAD.md`
 
-Не начинать реализацию, пока не прочитаны все восемь.
+Не начинать реализацию, пока не прочитаны все девять.
 
 ## Жёсткие запреты
 
@@ -55,9 +68,19 @@ TTL `auth_date`: 24 часа. Для `/refund` и `/erasure_*` — 1 час.
 
 ## Разработка на локальном сервере
 
-Сейчас backend разрабатывается и тестируется на локальном Linux-сервере Автора.
-Публичный HTTPS-webhook — через Cloudflare Tunnel. Все URL, порты и хосты
-берутся из `.env` (см. `.env.example`), никогда не хардкодятся в коде.
+Сейчас backend разрабатывается и тестируется на локальном Linux-сервере Автора
+(IRONCLAD). Публичный HTTPS-webhook — через Cloudflare Tunnel. Все URL, порты
+и хосты берутся из `.env` (см. `.env.example`), никогда не хардкодятся в коде.
+
+Внутри compose-сети хосты для api/bot:
+- Postgres: `db:5432`
+- Redis: `redis:6379`
+- MinIO: `minio:9000`
+
+С хоста (для psql, DBeaver, curl):
+- Postgres: `127.0.0.1:5435`
+- Redis: `127.0.0.1:6382`
+- MinIO: `127.0.0.1:9000`
 
 Тесты запускаются локально: `pytest`, `vitest`, `docker compose up`.
 Перед PR все тесты должны пройти.

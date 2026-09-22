@@ -1,14 +1,16 @@
 # infra/ — локальный запуск course-bot
 
-Пошаговая инструкция для разработки и тестирования на локальном сервере Автора.
-На VPS/Cloud переходим после успешных тестов.
+Пошаговая инструкция для разработки и тестирования на локальном сервере Автора
+(IRONCLAD, Ubuntu 26.04). На VPS/Cloud переходим после успешных тестов.
+
+Правила сервера — в `SERVER-IRONCLAD.md`. Cloudflare Tunnel — в `CLOUDFLARE-TUNNEL.md`.
 
 ---
 
 ## Что понадобится
 
 - Ubuntu Server (или любой Linux) с 4 GB RAM и 20 GB свободного места.
-- Docker + Docker Compose (`sudo apt install docker.io docker-compose-plugin`).
+- Docker + Docker Compose v2 (`sudo apt install docker.io docker-compose-plugin`).
 - Git (`sudo apt install git`).
 - Cloudflare-аккаунт (бесплатный) — для проброса HTTPS наружу.
 - Telegram-бот от `@BotFather` (см. ниже).
@@ -66,12 +68,17 @@ cloudflared --version
 
 ---
 
-## Шаг 4. Клонировать репозиторий
+## Шаг 4. Клонировать репозиторий и активировать git-хуки
 
 ```bash
 cd ~
 git clone https://github.com/romanticstudent07-stack/course-bot.git
 cd course-bot
+
+# ОБЯЗАТЕЛЬНО: активировать локальные git-хуки (защита от случайных коммитов
+# в docs/architecture/** и .env). Одноразовая команда:
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-commit
 ```
 
 Если репо приватный — сначала настрой SSH-ключ или используй HTTPS с токеном.
@@ -85,18 +92,39 @@ cp .env.example .env
 nano .env    # или любой редактор
 ```
 
-Заполни минимум:
+Заполни минимум (значения СОГЛАСОВАНЫ с `.env.example` — не выдумывай свои!):
+
+**Telegram:**
 - `BOT_TOKEN` — токен от BotFather (шаг 1).
 - `BOT_USERNAME` — username бота без @ (например `mycourse_test_bot`).
-- `WEBHOOK_SECRET` — случайная строка (сгенерируй `openssl rand -hex 32`).
-- `WEBAPP_URL` — временно оставь пустым, вернёмся сюда после запуска Cloudflare Tunnel.
+- `WEBHOOK_SECRET` — случайная строка: `openssl rand -hex 32`.
+- `WEBAPP_URL` — временно пустой; вернёмся сюда после Cloudflare Tunnel.
 - `ADMIN_USER_ID` — твой telegram-ID (узнать через `@userinfobot`).
-- `POSTGRES_HOST=postgres`, `POSTGRES_DB=coursebot`, `POSTGRES_USER=coursebot`,
-  `POSTGRES_PASSWORD` — случайная строка.
-- `REDIS_URL=redis://redis:6379/0`
-- `TZ=Europe/Moscow`, `SERVER_TIMEZONE=Europe/Moscow`, `LOG_LEVEL=INFO`.
 
-Остальные поля (S3, PSP) — оставь пустыми на старте.
+**PostgreSQL:**
+- `POSTGRES_DB=course_bot`
+- `POSTGRES_USER=course_bot`
+- `POSTGRES_PASSWORD` — случайная строка: `openssl rand -hex 24`.
+- `POSTGRES_PORT=5435` (для публикации на хосте — 5432 занят системой,
+  5434 занят maxmover).
+- `POSTGRES_HOST_INTERNAL=db` (имя сервиса в compose-сети).
+- `POSTGRES_HOST=127.0.0.1` (для доступа с хоста, например psql).
+
+**Redis:**
+- `REDIS_URL=redis://redis:6379/0` — для доступа ИЗ контейнеров compose.
+- `REDIS_URL_EXTERNAL=redis://127.0.0.1:6382/0` — для доступа с хоста.
+
+**S3 / MinIO:**
+- `S3_ENDPOINT=http://minio:9000` — из контейнеров.
+- `S3_ENDPOINT_EXTERNAL=http://127.0.0.1:9000` — с хоста.
+- `S3_ACCESS_KEY=minioadmin` (dev-дефолт).
+- `S3_SECRET_KEY=minioadmin` (dev-дефолт).
+
+**Часовой пояс:**
+- `TZ=Europe/Moscow`
+- `SERVER_TIMEZONE=Europe/Moscow`
+
+Остальные поля (PAYMENT_*, PSP_*) — оставь как в `.env.example` на старте.
 
 ---
 
@@ -107,13 +135,22 @@ docker compose -f infra/docker-compose.dev.yml up -d
 docker compose -f infra/docker-compose.dev.yml ps
 ```
 
-Все контейнеры должны быть `running`. Логи:
+Все контейнеры должны быть `running` или `healthy`. Логи:
 ```bash
 docker compose -f infra/docker-compose.dev.yml logs -f
 ```
 
-Backend будет на `http://localhost:8000`.
-Mini App (Vite dev) — на `http://localhost:5173`.
+**Что где слушает** (все — только на `127.0.0.1`):
+- Backend API: `http://127.0.0.1:8080` (эндпоинт `/healthz`).
+- PostgreSQL: `127.0.0.1:5435`.
+- Redis: `127.0.0.1:6382`.
+- MinIO S3: `http://127.0.0.1:9000` (API) / `http://127.0.0.1:9001` (Console).
+- Mini App prod-nginx: `http://127.0.0.1:5173` (внутри контейнер порт 80).
+
+**Vite dev-server** (быстрый hot-reload при разработке Mini App) —
+запускается отдельно на dev-машине через `npm run dev` внутри `apps/miniapp/`.
+Это НЕ docker-compose сервис. Docker-контейнер `miniapp` = только собранная
+production-статика под nginx.
 
 ---
 
@@ -122,7 +159,7 @@ Mini App (Vite dev) — на `http://localhost:5173`.
 **Вариант A — быстрый (временный домен, для проб):**
 
 ```bash
-cloudflared tunnel --url http://localhost:8000
+cloudflared tunnel --url http://127.0.0.1:8080
 ```
 
 В консоли появится URL вида
@@ -131,13 +168,12 @@ cloudflared tunnel --url http://localhost:8000
 
 **Вариант B — стабильный (свой домен, для долгой разработки):**
 
-Если у тебя есть свой домен, добавленный в Cloudflare —
-регистрируй именованный туннель:
+Полная инструкция — в `CLOUDFLARE-TUNNEL.md`. Кратко:
 ```bash
-cloudflared tunnel login       # откроется браузер, выбери домен
+cloudflared tunnel login
 cloudflared tunnel create coursebot
 cloudflared tunnel route dns coursebot coursebot.example.com
-cloudflared tunnel run coursebot --url http://localhost:8000
+cloudflared tunnel run coursebot --url http://127.0.0.1:8080
 ```
 
 Теперь `https://coursebot.example.com` смотрит на твой сервер.
