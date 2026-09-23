@@ -81,7 +81,7 @@ credentials-file: /home/YOUR_USER/.cloudflared/<UUID>.json
 
 ingress:
   - hostname: coursebot.example.com
-    service: http://localhost:8000
+    service: http://localhost:8080
   - service: http_status:404
 ```
 
@@ -89,8 +89,8 @@ ingress:
 - `<UUID>` на реальный.
 - `YOUR_USER` на твоё имя пользователя (см. `whoami`).
 - `coursebot.example.com` на свой поддомен.
-- `http://localhost:8000` на порт, где реально слушает твой backend
-  (по `docker-compose.dev.yml` это `8000`).
+- `http://localhost:8080` на порт, где реально слушает твой backend
+  (по `docker-compose.dev.yml` это `8080`).
 
 ---
 
@@ -123,7 +123,7 @@ WEBAPP_URL=https://coursebot.example.com
 
 Перезапусти стек:
 ```bash
-docker compose -f infra/docker-compose.dev.yml restart
+docker compose --env-file .env -f infra/docker-compose.dev.yml restart
 ```
 
 Скажи Telegram, куда слать webhook:
