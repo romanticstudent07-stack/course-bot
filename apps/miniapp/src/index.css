@@ -1,0 +1,29 @@
+/* apps/miniapp/src/index.css — базовые стили. Цвета — из темы Telegram (CSS-переменные SDK),
+   без хардкода палитры (miniapp-security-checklist.md, п.5). */
+:root {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.4;
+}
+
+body {
+  margin: 0;
+  background: var(--tg-theme-bg-color, #ffffff);
+  color: var(--tg-theme-text-color, #000000);
+  min-height: var(--tg-viewport-stable-height, 100vh);
+}
+
+.page {
+  padding: 16px;
+}
+
+.hint {
+  color: var(--tg-theme-hint-color, #708499);
+  font-size: 14px;
+}
+
+.status {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--tg-theme-secondary-bg-color, #f1f1f1);
+}

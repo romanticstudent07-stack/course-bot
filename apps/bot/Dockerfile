@@ -1,4 +1,5 @@
 # apps/bot/Dockerfile — Telegram Bot (aiogram 3, Python 3.12)
+# Правило IRONCLAD: python:3.12-slim, не хост-Python.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -8,18 +9,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
+# Зависимости отдельным слоем — быстрая пересборка при правке кода.
+COPY requirements.txt /app/
+RUN pip install -r requirements.txt
 
-# Безопасно даже если файлов ещё нет (glob с буквальным префиксом не падает).
-COPY requirements.txt* /app/
-COPY pyproject.toml* poetry.lock* /app/
-RUN if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-
-# .dockerignore рядом защищает от .env, .git и мусора.
+# Код. .dockerignore рядом не пускает в образ .env, .git, __pycache__, tests/.
 COPY . /app/
 
-# Итерация 0-А: заглушка бота — просто спит, чтобы контейнер не падал.
-# Агент заменит на реальный aiogram 3 dispatcher (модуль main:app или подобный).
-CMD ["python", "stub.py"]
+# Непривилегированный пользователь.
+RUN useradd --system --uid 10001 --no-create-home app && chown -R app /app
+USER app
+
+# Long polling: входящих портов нет, EXPOSE не нужен (правило IRONCLAD).
+# BOT_TOKEN, WEBAPP_URL — из .env (compose: env_file ../.env).
+CMD ["python", "-m", "bot"]
