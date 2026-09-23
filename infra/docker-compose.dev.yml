@@ -1,3 +1,4 @@
+# infra/docker-compose.dev.yml
 # Локальный контур разработки на сервере IRONCLAD (Ubuntu 26.04, bare-metal).
 # Правила сервера:
 #   - все порты биндятся на 127.0.0.1 (наружу — только Cloudflare Tunnel).
@@ -6,9 +7,18 @@
 #   - shared_buffers Postgres ≤ 256 MB (правило хоста).
 # НЕ для прода: в проде PostgreSQL с PITR и S3 у РФ-провайдера (Yandex Object Storage).
 #
-# S3-совместимое хранилище — Garage (dxflrs/garage), заменил MinIO
+# S3-совместимое хранилище — Garage (dxflrs/garage:v2.3.0), заменил MinIO
 # (MinIO удалил официальные Docker-образы в сентябре 2026).
 # Переезд на Yandex Object Storage — просто смена S3_ENDPOINT, код не меняется.
+#
+# ВАЖНО:
+#   - Образ dxflrs/garage собран from scratch — в нём нет /bin/sh.
+#     Поэтому healthcheck — только exec-форма ["CMD", "/garage", ...].
+#   - Флаги --single-node и --default-bucket автоматически создают
+#     кластер из одного узла и первый бакет (photos) из переменных
+#     GARAGE_DEFAULT_* — init-контейнер не нужен.
+#   - Второй бакет (audit) создаётся вручную одной командой при переходе
+#     к Итерации 5 (см. infra/README.md, раздел "Создание бакета audit").
 
 name: course-bot
 
@@ -58,13 +68,25 @@ services:
           memory: ${MEM_LIMIT_REDIS:-64M}
 
   # S3-совместимое хранилище (замена MinIO).
-  # Garage — Rust, крошечный (~30MB RAM), актуальный (dxflrs/garage:v2.1.0).
+  # Garage — Rust, крошечный (~30 MB RAM), актуальный (dxflrs/garage:v2.3.0).
   # Конфиг: infra/garage/garage.toml (примонтирован read-only).
-  # Порты Garage: 3900 (S3 API), 3901 (RPC), 3902 (Admin/Web UI).
+  # Порты Garage: 3900 (S3 API), 3901 (RPC), 3902 (Web UI), 3903 (Admin API).
   # Наружу публикуем как 9000/9001, чтобы схема портов в .env не менялась.
   garage:
-    image: dxflrs/garage:v2.1.0
+    image: dxflrs/garage:v2.3.0
     container_name: course-bot_garage
+    # --single-node: один узел без реплик; --default-bucket: авто-создание
+    # ключа и бакета из GARAGE_DEFAULT_* переменных. Инит-контейнер не нужен.
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    environment:
+      # Секреты в env, а не в garage.toml, чтобы не хранить их в git.
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN}
+      GARAGE_METRICS_TOKEN: ${GARAGE_METRICS_TOKEN}
+      # Авто-создание ключа доступа и первого бакета (photos).
+      GARAGE_DEFAULT_ACCESS_KEY: ${S3_ACCESS_KEY}
+      GARAGE_DEFAULT_SECRET_KEY: ${S3_SECRET_KEY}
+      GARAGE_DEFAULT_BUCKET: ${S3_BUCKET_PHOTOS}
     volumes:
       - garage-meta:/var/lib/garage/meta
       - garage-data:/var/lib/garage/data
@@ -75,34 +97,17 @@ services:
     restart: unless-stopped
     networks: [course-bot_net]
     healthcheck:
-      # Garage отдаёт 200 на / (S3 root) — используем для healthcheck.
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3900/ || exit 1"]
+      # Образ dxflrs/garage — from scratch, /bin/sh нет.
+      # Поэтому только exec-форма, вызываем сам бинарник /garage.
+      # `garage status` читает /etc/garage.toml и подключается к локальному RPC.
+      test: ["CMD", "/garage", "-c", "/etc/garage.toml", "status"]
       interval: 10s
       retries: 5
       start_period: 20s
     deploy:
       resources:
         limits:
-          memory: ${MEM_LIMIT_MINIO:-192M}
-
-  # Одноразовый init: инициализирует кластер Garage (один узел),
-  # создаёт бакеты photos/audit и ключ, значения которого совпадают с .env.
-  # См. infra/garage/init.sh — реальный скрипт (примонтирован read-only).
-  garage-init:
-    image: dxflrs/garage:v2.1.0
-    depends_on:
-      garage:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "/init.sh"]
-    volumes:
-      - ../infra/garage/init.sh:/init.sh:ro
-    environment:
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_BUCKET_PHOTOS: ${S3_BUCKET_PHOTOS}
-      S3_BUCKET_AUDIT: ${S3_BUCKET_AUDIT}
-    networks: [course-bot_net]
-    restart: "no"
+          memory: ${MEM_LIMIT_GARAGE:-192M}
 
   # FastAPI backend. Заглушка до Итерации 0-А.
   # Развязан от S3: api стартует без garage — S3 нужен только с Итерации 5.

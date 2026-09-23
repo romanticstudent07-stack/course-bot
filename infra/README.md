@@ -5,9 +5,13 @@
 
 Правила сервера — в `SERVER-IRONCLAD.md`. Cloudflare Tunnel — в `CLOUDFLARE-TUNNEL.md`.
 
-S3-совместимое хранилище в dev — **Garage** (`dxflrs/garage`), заменил MinIO
+S3-совместимое хранилище в dev — **Garage** (`dxflrs/garage:v2.3.0`), заменил MinIO
 (MinIO удалил официальные Docker-образы в сентябре 2026). Переезд на
 Yandex Object Storage — просто смена `S3_ENDPOINT` в `.env`, код не трогаем.
+
+Начиная с v2.3.0 Garage настраивает себя сам (флаги `--single-node --default-bucket`):
+создаёт кластер из одного узла, ключ доступа и первый бакет. Отдельного
+init-контейнера и скриптов инициализации в проекте больше НЕТ.
 
 ---
 
@@ -121,9 +125,18 @@ nano .env    # или любой редактор
 **S3 / Garage:**
 - `S3_ENDPOINT=http://garage:3900` — из контейнеров.
 - `S3_ENDPOINT_EXTERNAL=http://127.0.0.1:9000` — с хоста.
-- `S3_ACCESS_KEY=GKcoursebotdev01` (dev-дефолт; в prod генерируй свой).
-- `S3_SECRET_KEY=0000000000000000000000000000000000000001` — 40 hex-символов
-  (для prod: `openssl rand -hex 20`, тоже даст 40 hex-символов).
+- `S3_ACCESS_KEY` — формат `GK` + 32 hex-символа: `GK$(openssl rand -hex 16)`.
+- `S3_SECRET_KEY` — ровно 64 hex-символа: `openssl rand -hex 32`.
+- `S3_BUCKET_PHOTOS=photos` — этот бакет Garage создаст сам при первом старте.
+- `S3_BUCKET_AUDIT=audit` — бакет создаётся ВРУЧНУЮ на Итерации 5 (см. ниже).
+
+**Внутренние секреты Garage** (не путать с S3-ключами выше):
+- `GARAGE_RPC_SECRET` — ровно 64 hex-символа: `openssl rand -hex 32`.
+- `GARAGE_ADMIN_TOKEN` — случайная строка: `openssl rand -base64 32`.
+- `GARAGE_METRICS_TOKEN` — случайная строка: `openssl rand -base64 32`.
+
+Эти три значения перекрывают плейсхолдеры из `garage.toml` (переменные
+окружения имеют высший приоритет над конфиг-файлом).
 
 **Часовой пояс:**
 - `TZ=Europe/Moscow`
@@ -133,16 +146,47 @@ nano .env    # или любой редактор
 
 ---
 
-## Шаг 6. Поднять стек docker compose
+## Шаг 5-бис. Как сгенерировать все секреты одной командой
+
+Выполни в терминале — команда напечатает готовые строки. Скопируй их в `.env`
+вместо пустых значений:
 
 ```bash
-docker compose -f infra/docker-compose.dev.yml up -d
-docker compose -f infra/docker-compose.dev.yml ps
+cat <<EOF
+S3_ACCESS_KEY=GK$(openssl rand -hex 16)
+S3_SECRET_KEY=$(openssl rand -hex 32)
+GARAGE_RPC_SECRET=$(openssl rand -hex 32)
+GARAGE_ADMIN_TOKEN=$(openssl rand -base64 32)
+GARAGE_METRICS_TOKEN=$(openssl rand -base64 32)
+POSTGRES_PASSWORD=$(openssl rand -hex 24)
+WEBHOOK_SECRET=$(openssl rand -hex 32)
+EOF
+```
+
+**Важно:** ключ доступа и бакет Garage создаёт ОДИН раз — при первом запуске на
+пустых volume-ах. Если поменял `S3_ACCESS_KEY` / `S3_SECRET_KEY` уже ПОСЛЕ
+первого старта, Garage новый ключ не подхватит. Варианты: создать ключ вручную
+(`/garage key create`) либо снести volume-ы командой
+`docker compose --env-file .env -f infra/docker-compose.dev.yml down -v`
+(внимание: это удалит все загруженные файлы и базу).
+
+---
+
+## Шаг 6. Поднять стек docker compose
+
+Запускай из корня репозитория и обязательно с флагом `--env-file .env`:
+compose-файл лежит в `infra/`, а `.env` — в корне, без флага подстановка
+переменных вида `${POSTGRES_PASSWORD}` и `${GARAGE_RPC_SECRET}` не сработает.
+
+```bash
+cd ~/course-bot
+docker compose --env-file .env -f infra/docker-compose.dev.yml up -d
+docker compose --env-file .env -f infra/docker-compose.dev.yml ps
 ```
 
 Все контейнеры должны быть `running` или `healthy`. Логи:
 ```bash
-docker compose -f infra/docker-compose.dev.yml logs -f
+docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f
 ```
 
 **Что где слушает** (все — только на `127.0.0.1`):
@@ -158,9 +202,49 @@ docker compose -f infra/docker-compose.dev.yml logs -f
 Это НЕ docker-compose сервис. Docker-контейнер `miniapp` = только собранная
 production-статика под nginx.
 
-**Первый запуск Garage** — сервис `garage-init` создаст бакеты `photos`, `audit`
-и импортирует ключ. Смотри логи: `docker compose logs garage-init`.
-Ожидание: строка `[garage-init] DONE. Buckets: photos, audit. Ready.`
+**Первый запуск Garage.** Контейнер сам соберёт кластер из одного узла, создаст
+ключ доступа из `.env` и бакет `photos`. Проверка (образ Garage собран
+from scratch, оболочки в нём нет — бинарник вызываем по полному пути `/garage`):
+
+```bash
+docker compose --env-file .env -f infra/docker-compose.dev.yml \
+  exec garage /garage -c /etc/garage.toml status
+
+docker compose --env-file .env -f infra/docker-compose.dev.yml \
+  exec garage /garage -c /etc/garage.toml bucket list
+```
+
+Ожидание: в `status` — один узел со статусом HEALTHY; в `bucket list` — `photos`.
+
+---
+
+## Создание бакета audit — когда понадобится (Итерация 5)
+
+Garage автоматически создаёт только ОДИН бакет (`photos`). Бакет аудита нужен
+начиная с Итерации 5 — тогда выполни две команды (вместо `GK...` подставь
+значение `S3_ACCESS_KEY` из своего `.env`):
+
+```bash
+cd ~/course-bot
+
+# 1) создать бакет
+docker compose --env-file .env -f infra/docker-compose.dev.yml \
+  exec garage /garage -c /etc/garage.toml bucket create audit
+
+# 2) выдать права нашему ключу доступа
+docker compose --env-file .env -f infra/docker-compose.dev.yml \
+  exec garage /garage -c /etc/garage.toml \
+  bucket allow --read --write --owner audit --key GK...
+```
+
+Проверка:
+```bash
+docker compose --env-file .env -f infra/docker-compose.dev.yml \
+  exec garage /garage -c /etc/garage.toml bucket info audit
+```
+
+Напоминание из архитектуры: бакет фото — Object Lock ОТКЛЮЧЁН (иначе стирание
+по запросу клиента невозможно); бакет аудита в prod — режим COMPLIANCE / WORM.
 
 ---
 
@@ -199,7 +283,7 @@ WEBAPP_URL=https://<твой-tunnel-url>
 
 Перезапусти стек:
 ```bash
-docker compose -f infra/docker-compose.dev.yml restart
+docker compose --env-file .env -f infra/docker-compose.dev.yml restart
 ```
 
 Скажи Telegram, куда слать обновления боту:
@@ -232,7 +316,7 @@ curl "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo"
 Напиши боту `/start` в Telegram. Он должен ответить.
 Логи запросов увидишь через:
 ```bash
-docker compose -f infra/docker-compose.dev.yml logs -f bot api
+docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f bot api
 ```
 
 ---
@@ -243,12 +327,12 @@ docker compose -f infra/docker-compose.dev.yml logs -f bot api
 ```bash
 cd ~/course-bot
 git pull origin main
-docker compose -f infra/docker-compose.dev.yml up -d --build
+docker compose --env-file .env -f infra/docker-compose.dev.yml up -d --build
 ```
 
 Если менялись миграции БД:
 ```bash
-docker compose -f infra/docker-compose.dev.yml exec api alembic upgrade head
+docker compose --env-file .env -f infra/docker-compose.dev.yml exec api alembic upgrade head
 ```
 
 ---
@@ -257,30 +341,37 @@ docker compose -f infra/docker-compose.dev.yml exec api alembic upgrade head
 
 ```bash
 # Статус всех сервисов
-docker compose -f infra/docker-compose.dev.yml ps
+docker compose --env-file .env -f infra/docker-compose.dev.yml ps
 
 # Перезапуск одного сервиса
-docker compose -f infra/docker-compose.dev.yml restart bot
+docker compose --env-file .env -f infra/docker-compose.dev.yml restart bot
 
 # Логи одного сервиса
-docker compose -f infra/docker-compose.dev.yml logs -f api
+docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f api
 
 # Зайти внутрь контейнера
-docker compose -f infra/docker-compose.dev.yml exec api bash
+docker compose --env-file .env -f infra/docker-compose.dev.yml exec api bash
 
-# Статус Garage-кластера (должен показать 1 узел UP)
-docker compose -f infra/docker-compose.dev.yml exec garage garage status
+# Статус Garage-кластера (должен показать 1 узел HEALTHY).
+# Путь /garage обязателен: образ from scratch, оболочки нет.
+docker compose --env-file .env -f infra/docker-compose.dev.yml \
+  exec garage /garage -c /etc/garage.toml status
 
 # Список бакетов Garage
-docker compose -f infra/docker-compose.dev.yml exec garage garage bucket list
+docker compose --env-file .env -f infra/docker-compose.dev.yml \
+  exec garage /garage -c /etc/garage.toml bucket list
 
-# Проверка S3 с хоста через aws-cli (если установлен)
-AWS_ACCESS_KEY_ID=GKcoursebotdev01 \
-AWS_SECRET_ACCESS_KEY=0000000000000000000000000000000000000001 \
-aws --endpoint-url=http://127.0.0.1:9000 s3 ls
+# Список ключей доступа Garage
+docker compose --env-file .env -f infra/docker-compose.dev.yml \
+  exec garage /garage -c /etc/garage.toml key list
+
+# Проверка S3 с хоста через aws-cli (ключи подставь из своего .env)
+AWS_ACCESS_KEY_ID="<S3_ACCESS_KEY из .env>" \
+AWS_SECRET_ACCESS_KEY="<S3_SECRET_KEY из .env>" \
+aws --endpoint-url=http://127.0.0.1:9000 --region garage s3 ls
 
 # Полный wipe (осторожно — удалит БД и Garage-хранилище)
-docker compose -f infra/docker-compose.dev.yml down -v
+docker compose --env-file .env -f infra/docker-compose.dev.yml down -v
 ```
 
 ---
@@ -290,11 +381,19 @@ docker compose -f infra/docker-compose.dev.yml down -v
 - `docker compose logs -f <service>` → смотрим ошибку.
 - **Garage не поднимается:** проверь монтирование `infra/garage/garage.toml`
   и права на volume-ы. `docker compose logs garage` покажет причину.
-- **garage-init висит:** проверь, что переменные `S3_ACCESS_KEY` (16 символов)
-  и `S3_SECRET_KEY` (ровно 40 hex-символов) корректны в `.env`.
-- **api не стартует из-за db:** dwait `pg_isready` в healthcheck; обычно
+- **Garage падает сразу при старте с ошибкой про аргумент `/garage`:** убери
+  первый элемент из `command` в compose, оставив
+  `command: ["server", "--single-node", "--default-bucket"]`.
+- **Бакет `photos` не создался:** проверь, что в `.env` заполнены
+  `S3_ACCESS_KEY` (`GK` + 32 hex), `S3_SECRET_KEY` (64 hex) и
+  `S3_BUCKET_PHOTOS`, и что стек запускался с флагом `--env-file .env`.
+  Бакет создаётся только на пустых volume-ах при самом первом старте.
+- **Переменные приехали пустыми / Postgres просит пароль:** ты забыл
+  `--env-file .env`. Compose ищет `.env` рядом с compose-файлом (в `infra/`),
+  а он лежит в корне репозитория.
+- **api не стартует из-за db:** ждём `pg_isready` в healthcheck; обычно
   устраняется первым перезапуском после первого init БД.
-- `docker compose down -v` → полный сброс тoмов (потеря данных БД и Garage!).
+- `docker compose down -v` → полный сброс томов (потеря данных БД и Garage!).
 
 ---
 
