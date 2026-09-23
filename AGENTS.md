@@ -78,6 +78,8 @@ chmod +x .githooks/pre-commit
 9. **Не пушить в `main` напрямую** — только через PR.
 10. **Не встраивать платёжные экраны внутрь Mini App** — оплата пока только
     на внешней ссылке / реквизитах, вне Telegram.
+11. **Не возвращаться к MinIO** — Docker-образы удалены в сентябре 2026,
+    репо архивирован. Используем Garage (`dxflrs/garage`) как S3 в dev.
 
 ## Структура репозитория (по DIVISION.md)
 
@@ -89,7 +91,7 @@ course-bot/
 │   └── api/               FastAPI + PostgreSQL 16 + Redis 7 + Alembic
 ├── packages/
 │   └── shared/            общие типы, схемы, константы, OpenAPI-контракт
-├── infra/                 docker-compose, IaC, миграции, cloudflared config
+├── infra/                 docker-compose, IaC, миграции, cloudflared config, garage/
 ├── docs/
 │   ├── architecture/      ← read-only зеркало DOCS-course-bot (не править!)
 │   └── DEFECTS-FOUND.md   ← сюда писать расхождения архитектуры с реальностью
@@ -224,6 +226,9 @@ PAYMENT_CURRENCY=RUB
 - **Mini App:** React 18 + Vite + TypeScript + `@telegram-apps/sdk-react` + Zustand + tanstack-query + dexie (IndexedDB).
 - **Bot:** Python 3.12 + aiogram 3.
 - **Backend:** FastAPI + PostgreSQL 16 + Redis 7 + Alembic.
+- **S3 dev:** Garage (`dxflrs/garage`) — S3-совместимое хранилище, локально в compose.
+- **S3 prod:** Yandex Object Storage (или Timeweb / VK Cloud — открытый вопрос Автора).
+  Переезд dev → prod — смена `S3_ENDPOINT` в `.env`, код на `boto3` не переписывается.
 - **Хостинг разработки:** локальный сервер Автора (Ubuntu Server IRONCLAD).
   Публичный webhook — через Cloudflare Tunnel (именованный, свой домен).
 - **Хостинг prod:** будет выбран позже (Yandex Cloud vs Timeweb — открытый вопрос).
@@ -231,11 +236,12 @@ PAYMENT_CURRENCY=RUB
 ## Открытые вопросы Автора (агент их не решает)
 
 - Выбор облачного провайдера prod (Yandex Cloud vs Timeweb).
+- Провайдер S3 в prod (Yandex Object Storage vs Timeweb vs VK Cloud) —
+  dev-контур на Garage уже определён.
 - Значение `full_backup_rotation_cycle`.
 - Три несовместимости Б17 (см. `docs/architecture/normative/README.md`).
 - Определение ролей `finance` и `moderator`.
 - Дефект D-1 (доставка медиа: pre-signed URL vs внешний Telegram-канал).
-- Провайдер S3 в РФ.
 
 Полный трекер открытых вопросов — **GitHub Issues** репозитория с меткой
 `author-decision`. При задачах, задевающих эти пункты — вежливо вернуть вопрос

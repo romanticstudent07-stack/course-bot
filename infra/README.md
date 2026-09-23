@@ -5,6 +5,10 @@
 
 Правила сервера — в `SERVER-IRONCLAD.md`. Cloudflare Tunnel — в `CLOUDFLARE-TUNNEL.md`.
 
+S3-совместимое хранилище в dev — **Garage** (`dxflrs/garage`), заменил MinIO
+(MinIO удалил официальные Docker-образы в сентябре 2026). Переезд на
+Yandex Object Storage — просто смена `S3_ENDPOINT` в `.env`, код не трогаем.
+
 ---
 
 ## Что понадобится
@@ -114,11 +118,12 @@ nano .env    # или любой редактор
 - `REDIS_URL=redis://redis:6379/0` — для доступа ИЗ контейнеров compose.
 - `REDIS_URL_EXTERNAL=redis://127.0.0.1:6382/0` — для доступа с хоста.
 
-**S3 / MinIO:**
-- `S3_ENDPOINT=http://minio:9000` — из контейнеров.
+**S3 / Garage:**
+- `S3_ENDPOINT=http://garage:3900` — из контейнеров.
 - `S3_ENDPOINT_EXTERNAL=http://127.0.0.1:9000` — с хоста.
-- `S3_ACCESS_KEY=minioadmin` (dev-дефолт).
-- `S3_SECRET_KEY=minioadmin` (dev-дефолт).
+- `S3_ACCESS_KEY=GKcoursebotdev01` (dev-дефолт; в prod генерируй свой).
+- `S3_SECRET_KEY=0000000000000000000000000000000000000001` — 40 hex-символов
+  (для prod: `openssl rand -hex 20`, тоже даст 40 hex-символов).
 
 **Часовой пояс:**
 - `TZ=Europe/Moscow`
@@ -144,13 +149,18 @@ docker compose -f infra/docker-compose.dev.yml logs -f
 - Backend API: `http://127.0.0.1:8080` (эндпоинт `/healthz`).
 - PostgreSQL: `127.0.0.1:5435`.
 - Redis: `127.0.0.1:6382`.
-- MinIO S3: `http://127.0.0.1:9000` (API) / `http://127.0.0.1:9001` (Console).
+- Garage S3 API: `http://127.0.0.1:9000` — доступ по протоколу S3 (boto3/aws-cli).
+- Garage Web/Object browser: `http://127.0.0.1:9001`.
 - Mini App prod-nginx: `http://127.0.0.1:5173` (внутри контейнер порт 80).
 
 **Vite dev-server** (быстрый hot-reload при разработке Mini App) —
 запускается отдельно на dev-машине через `npm run dev` внутри `apps/miniapp/`.
 Это НЕ docker-compose сервис. Docker-контейнер `miniapp` = только собранная
 production-статика под nginx.
+
+**Первый запуск Garage** — сервис `garage-init` создаст бакеты `photos`, `audit`
+и импортирует ключ. Смотри логи: `docker compose logs garage-init`.
+Ожидание: строка `[garage-init] DONE. Buckets: photos, audit. Ready.`
 
 ---
 
@@ -258,18 +268,44 @@ docker compose -f infra/docker-compose.dev.yml logs -f api
 # Зайти внутрь контейнера
 docker compose -f infra/docker-compose.dev.yml exec api bash
 
-# Полный wipe (осторожно — удалит БД)
+# Статус Garage-кластера (должен показать 1 узел UP)
+docker compose -f infra/docker-compose.dev.yml exec garage garage status
+
+# Список бакетов Garage
+docker compose -f infra/docker-compose.dev.yml exec garage garage bucket list
+
+# Проверка S3 с хоста через aws-cli (если установлен)
+AWS_ACCESS_KEY_ID=GKcoursebotdev01 \
+AWS_SECRET_ACCESS_KEY=0000000000000000000000000000000000000001 \
+aws --endpoint-url=http://127.0.0.1:9000 s3 ls
+
+# Полный wipe (осторожно — удалит БД и Garage-хранилище)
 docker compose -f infra/docker-compose.dev.yml down -v
 ```
 
 ---
 
+## Если что-то пошло не так
+
+- `docker compose logs -f <service>` → смотрим ошибку.
+- **Garage не поднимается:** проверь монтирование `infra/garage/garage.toml`
+  и права на volume-ы. `docker compose logs garage` покажет причину.
+- **garage-init висит:** проверь, что переменные `S3_ACCESS_KEY` (16 символов)
+  и `S3_SECRET_KEY` (ровно 40 hex-символов) корректны в `.env`.
+- **api не стартует из-за db:** dwait `pg_isready` в healthcheck; обычно
+  устраняется первым перезапуском после первого init БД.
+- `docker compose down -v` → полный сброс тoмов (потеря данных БД и Garage!).
+
+---
+
 ## Куда переезжать после локальных тестов
 
-- **Yandex Cloud** — managed PostgreSQL/Redis, 152-ФЗ штатно, дороже.
+- **Yandex Cloud (Managed PostgreSQL + Object Storage)** — 152-ФЗ штатно, дороже.
+  Переезд с Garage → Yandex Object Storage: меняем `S3_ENDPOINT` на
+  `https://storage.yandexcloud.net`, `S3_REGION=ru-central1`, ключи от Yandex.
+  Код на `boto3` не переписывается.
 - **Timeweb «Облако 152-ФЗ»** — дешевле, часть работы админить самому.
-- **VPS (Selectel/Timeweb VPS)** — самый гибкий, но админить весь стек самому.
+- **VPS (Selectel/Timeweb VPS)** — самый гибкий; можно оставить Garage
+  как S3 или мигрировать на облачный S3.
 
 Выбор — открытый вопрос Автора.
-После выбора: миграция сводится к `docker compose up` на новом хосте
-и переключению DNS/webhook на новый URL.
