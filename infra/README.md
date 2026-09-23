@@ -80,7 +80,9 @@ cloudflared --version
 
 ```bash
 cd ~
-git clone https://github.com/romanticstudent07-stack/course-bot.git
+# Репозиторий ПРИВАТНЫЙ — клон по HTTPS не сработает.
+# Клонируем через deploy-ключ с SSH-алиасом (настройка алиаса — в ~/.ssh/config).
+git clone git@github-coursebot:romanticstudent07-stack/course-bot.git
 cd course-bot
 
 # ОБЯЗАТЕЛЬНО: активировать локальные git-хуки (защита от случайных коммитов
@@ -89,7 +91,14 @@ git config core.hooksPath .githooks
 chmod +x .githooks/pre-commit
 ```
 
-Если репо приватный — сначала настрой SSH-ключ или используй HTTPS с токеном.
+Репозиторий приватный, поэтому клон возможен только по SSH с deploy-ключом.
+Алиас `github-coursebot` должен быть описан в `~/.ssh/config` и указывать на
+приватный ключ, публичная часть которого добавлена в Settings → Deploy keys
+репозитория. Если алиас у тебя называется иначе — подставь своё имя.
+
+Сразу после клонирования ОБЯЗАТЕЛЬНО активируй git-хуки (команда выше:
+`git config core.hooksPath .githooks`) — без неё защита от случайных
+коммитов в `docs/architecture/**` и `.env` не работает.
 
 ---
 
@@ -125,15 +134,15 @@ nano .env    # или любой редактор
 **S3 / Garage:**
 - `S3_ENDPOINT=http://garage:3900` — из контейнеров.
 - `S3_ENDPOINT_EXTERNAL=http://127.0.0.1:9000` — с хоста.
-- `S3_ACCESS_KEY` — формат `GK` + 32 hex-символа: `GK$(openssl rand -hex 16)`.
+- `S3_ACCESS_KEY` — формат `GK` + 32 hex-символа, итого 34 символа: `GK$(openssl rand -hex 16)`.
 - `S3_SECRET_KEY` — ровно 64 hex-символа: `openssl rand -hex 32`.
 - `S3_BUCKET_PHOTOS=photos` — этот бакет Garage создаст сам при первом старте.
 - `S3_BUCKET_AUDIT=audit` — бакет создаётся ВРУЧНУЮ на Итерации 5 (см. ниже).
 
 **Внутренние секреты Garage** (не путать с S3-ключами выше):
 - `GARAGE_RPC_SECRET` — ровно 64 hex-символа: `openssl rand -hex 32`.
-- `GARAGE_ADMIN_TOKEN` — случайная строка: `openssl rand -base64 32`.
-- `GARAGE_METRICS_TOKEN` — случайная строка: `openssl rand -base64 32`.
+- `GARAGE_ADMIN_TOKEN` — случайная строка: `openssl rand -hex 32`.
+- `GARAGE_METRICS_TOKEN` — случайная строка: `openssl rand -hex 32`.
 
 Эти три значения перекрывают плейсхолдеры из `garage.toml` (переменные
 окружения имеют высший приоритет над конфиг-файлом).
@@ -156,8 +165,8 @@ cat <<EOF
 S3_ACCESS_KEY=GK$(openssl rand -hex 16)
 S3_SECRET_KEY=$(openssl rand -hex 32)
 GARAGE_RPC_SECRET=$(openssl rand -hex 32)
-GARAGE_ADMIN_TOKEN=$(openssl rand -base64 32)
-GARAGE_METRICS_TOKEN=$(openssl rand -base64 32)
+GARAGE_ADMIN_TOKEN=$(openssl rand -hex 32)
+GARAGE_METRICS_TOKEN=$(openssl rand -hex 32)
 POSTGRES_PASSWORD=$(openssl rand -hex 24)
 WEBHOOK_SECRET=$(openssl rand -hex 32)
 EOF
@@ -194,7 +203,12 @@ docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f
 - PostgreSQL: `127.0.0.1:5435`.
 - Redis: `127.0.0.1:6382`.
 - Garage S3 API: `http://127.0.0.1:9000` — доступ по протоколу S3 (boto3/aws-cli).
-- Garage Web/Object browser: `http://127.0.0.1:9001`.
+- Garage `s3_web`: `http://127.0.0.1:9001` — это НЕ админка и НЕ браузер
+  файлов. Порт 3902 раздаёт статические сайты из бакетов по доменному имени;
+  при открытии в браузере напрямую будет ошибка. Встроенного веб-интерфейса
+  в Garage не существует вовсе — бакеты и ключи смотрим только через CLI:
+  `docker exec course-bot_garage /garage -c /etc/garage.toml bucket list`
+  и `docker exec course-bot_garage /garage -c /etc/garage.toml key list`.
 - Mini App prod-nginx: `http://127.0.0.1:5173` (внутри контейнер порт 80).
 
 **Vite dev-server** (быстрый hot-reload при разработке Mini App) —
@@ -250,7 +264,14 @@ docker compose --env-file .env -f infra/docker-compose.dev.yml \
 
 ## Шаг 7. Запустить Cloudflare Tunnel
 
-**Вариант A — быстрый (временный домен, для проб):**
+**Вариант A — быстрый (временный домен, ТОЛЬКО посмотреть глазами):**
+
+⚠️ `trycloudflare.com` выдаёт ОДНОРАЗОВЫЙ URL: он меняется при каждом
+перезапуске `cloudflared`. Для Telegram-webhook и для домена Mini App он
+НЕПРИГОДЕН — webhook отвалится, как только туннель перезапустится. Используй
+этот вариант только чтобы быстро открыть страницу в браузере и убедиться, что
+она отдаётся. Для реальной работы нужен именованный туннель — см. Вариант B
+и `CLOUDFLARE-TUNNEL.md`.
 
 ```bash
 cloudflared tunnel --url http://127.0.0.1:8080
@@ -327,7 +348,17 @@ docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f bot api
 ```bash
 cd ~/course-bot
 git pull origin main
-docker compose --env-file .env -f infra/docker-compose.dev.yml up -d --build
+docker compose --env-file .env -f infra/docker-compose.dev.yml up -d
+```
+
+**Почему без `--build`:** сервер на HDD 5400 RPM, полная пересборка всех
+образов (особенно `miniapp`) занимает 15–40 минут. Обычный `up -d` соберёт
+только недостающие образы и перезапустит изменившиеся контейнеры.
+Пересобирай точечно и только когда менялся код конкретного сервиса:
+
+```bash
+docker compose --env-file .env -f infra/docker-compose.dev.yml up -d --build api
+docker compose --env-file .env -f infra/docker-compose.dev.yml up -d --build miniapp
 ```
 
 Если менялись миграции БД:

@@ -70,7 +70,7 @@ services:
   # S3-совместимое хранилище (замена MinIO).
   # Garage — Rust, крошечный (~30 MB RAM), актуальный (dxflrs/garage:v2.3.0).
   # Конфиг: infra/garage/garage.toml (примонтирован read-only).
-  # Порты Garage: 3900 (S3 API), 3901 (RPC), 3902 (Web UI), 3903 (Admin API).
+  # Порты Garage: 3900 (S3 API), 3901 (RPC), 3902 (s3_web — раздача статики, НЕ админка), 3903 (Admin API).
   # Наружу публикуем как 9000/9001, чтобы схема портов в .env не менялась.
   garage:
     image: dxflrs/garage:v2.3.0
@@ -90,7 +90,7 @@ services:
     volumes:
       - garage-meta:/var/lib/garage/meta
       - garage-data:/var/lib/garage/data
-      - ../infra/garage/garage.toml:/etc/garage.toml:ro
+      - ./garage/garage.toml:/etc/garage.toml:ro
     ports:
       - "127.0.0.1:9000:3900"
       - "127.0.0.1:9001:3902"
