@@ -6,9 +6,13 @@
 #   - Данные и метаданные — в volumes course-bot_garage-{data,meta}.
 #   - S3 API слушает на 0.0.0.0:3900 внутри контейнера, снаружи → 127.0.0.1:9000.
 #   - Web-UI (object browser) на 0.0.0.0:3902 → снаружи 127.0.0.1:9001.
+#   - Admin API на 0.0.0.0:3903 (наружу не публикуется).
 #
-# ВНИМАНИЕ: rpc_secret и admin_token — DEV-дефолты для локали.
-# В prod генерируй свои через `openssl rand -hex 32` и подставляй через переменные.
+# СЕКРЕТЫ:
+#   Значения rpc_secret / admin_token / metrics_token ниже — плейсхолдеры.
+#   Реальные секреты берутся из переменных окружения GARAGE_RPC_SECRET,
+#   GARAGE_ADMIN_TOKEN, GARAGE_METRICS_TOKEN (env имеет высший приоритет
+#   над этим файлом). См. .env.example.
 
 metadata_dir = "/var/lib/garage/meta"
 data_dir     = "/var/lib/garage/data"
@@ -17,10 +21,10 @@ db_engine = "lmdb"
 
 replication_factor = 1
 
-# RPC — 32-байтный hex. DEV-дефолт, для локали безопасно.
+# Плейсхолдер — реальное значение приходит из GARAGE_RPC_SECRET.
 rpc_bind_addr = "[::]:3901"
 rpc_public_addr = "127.0.0.1:3901"
-rpc_secret = "0000000000000000000000000000000000000000000000000000000000000001"
+rpc_secret = "0000000000000000000000000000000000000000000000000000000000000000"
 
 [s3_api]
 s3_region     = "garage"
@@ -34,6 +38,6 @@ index       = "index.html"
 
 [admin]
 api_bind_addr = "[::]:3903"
-# admin_token — DEV-дефолт. В prod — свой рандом.
-admin_token = "0000000000000000000000000000000000000000000000000000000000000002"
-metrics_token = "0000000000000000000000000000000000000000000000000000000000000003"
+# Плейсхолдеры — реальные значения из GARAGE_ADMIN_TOKEN и GARAGE_METRICS_TOKEN.
+admin_token = "0000000000000000000000000000000000000000000000000000000000000000"
+metrics_token = "0000000000000000000000000000000000000000000000000000000000000000"
