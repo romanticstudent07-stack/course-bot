@@ -1,0 +1,246 @@
+# ============================================================
+# build/miniapp-api-contract.yaml — OpenAPI 3.1 для Mini App
+# Скелет v1 (Mini App-first). Наполняется Автором и техническим партнёром.
+# Источник: Б14 (Mini App v3.3 + дельта v3.4), И4, ERRATA E2, SEAM-1
+# ============================================================
+
+openapi: 3.1.0
+info:
+  title: DOCS-course-bot — Mini App API
+  version: "0.2.0-skeleton"
+  description: |
+    Контракт клиента Mini App с сервером бота.
+    Источник истины: architecture/14-data-durability.md, normative/I4-wave-d.md,
+    normative/errata-unified.md (E2), normative/seam-patch-1-onboarding.md (SEAM-1).
+
+servers:
+  - url: "https://{s3-domain-ru}"
+    variables:
+      s3-domain-ru:
+        default: "TODO"
+        description: "Плейсхолдер {s3-domain-ru} блокирует прод. Boot-gate ERRATA раздел 6."
+
+# ---------------- Общие компоненты ----------------
+components:
+  securitySchemes:
+    TelegramInitData:
+      type: apiKey
+      in: header
+      name: X-Telegram-Init-Data
+      description: |
+        Raw initData из Telegram Web App SDK.
+        Валидация: HMAC-SHA256, secret_key = HMAC-SHA256("WebAppData", bot_token).
+        TTL auth_date: 24 ч (стандарт), 1 ч (для чувствительных: /erasure, /refund).
+
+  headers:
+    ClientOpId:
+      description: "UUID v4 клиента для идемпотентности (buttons_idempotent, money_ops_idempotent)"
+      schema: { type: string, format: uuid }
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: "TG_INIT_INVALID" }
+        message: { type: string }
+        details: { type: object, additionalProperties: true }
+
+    Consent:
+      type: object
+      properties:
+        id: { type: string, enum: [C0, C1, C2, C3, C4, C5, C6] }
+        given_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time, nullable: true }
+        legal_status: { type: string, enum: [approved, pre-legal-review] }
+
+    PidCreated:
+      type: object
+      properties:
+        pid: { type: string, format: uuid }
+        short_no: { type: string, example: "#000123" }
+
+  responses:
+    Unauthorized:
+      description: "initData невалидна / истекла"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: "Повтор с тем же client_op_id"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimited:
+      description: "Слишком много запросов"
+
+security:
+  - TelegramInitData: []
+
+# ---------------- Пути ----------------
+paths:
+
+  # ---------------- Онбординг (SEAM-1) ----------------
+  /miniapp/v1/onboarding/first-launch:
+    post:
+      summary: "Первый запуск Mini App — создание pid (SEAM-PATCH-1)"
+      description: |
+        Возрастной гейт → создание pid (INV-AGE-GATE-BEFORE-PID, ADD3 ERRATA).
+        Идемпотентность через tg_user_id: повторный вызов возвращает существующий pid.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [birth_date]
+              properties:
+                birth_date: { type: string, format: date }
+      responses:
+        "201": { description: "Создан", content: { application/json: { schema: { $ref: "#/components/schemas/PidCreated" }}}}
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "Возрастной гейт: < 18" }
+
+  # ---------------- Согласия (C0–C6) ----------------
+  /miniapp/v1/consents:
+    get:
+      summary: "Список согласий"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Consent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      summary: "Обновление / отзыв согласия"
+      parameters: [{ in: header, name: X-Client-Op-Id, required: true, schema: { type: string, format: uuid }}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, action]
+              properties:
+                id: { type: string, enum: [C0, C1, C2, C3, C4, C5, C6] }
+                action: { type: string, enum: [give, revoke] }
+      responses:
+        "200": { description: "OK" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  # ---------------- Дневной модуль (Блок 3) ----------------
+  /miniapp/v1/day/current:
+    get:
+      summary: "Текущий день + чек-лист"
+
+  /miniapp/v1/day/report/submit:
+    post:
+      summary: "Отправить отчёт дня"
+      parameters: [{ in: header, name: X-Client-Op-Id, required: true, schema: { type: string, format: uuid }}]
+      # TODO: request body, П-31 (day_counting: on_confirmed_db_write)
+
+  # ---------------- Чек-Ап (Блок 5) ----------------
+  /miniapp/v1/checkup/config:
+    get:
+      summary: "Конфигурация Чек-Апа (5 зон, шкала, дисклеймер)"
+      description: "Проходит гейт Legal (И3)"
+
+  /miniapp/v1/checkup/submit:
+    post:
+      summary: "Отправить ответы Чек-Апа"
+      parameters: [{ in: header, name: X-Client-Op-Id, required: true, schema: { type: string, format: uuid }}]
+
+  # ---------------- Карточка / данные участника (Блок 6) ----------------
+  /miniapp/v1/me/card:
+    get:
+      summary: "Моя карточка (динамическая, без секции консентов и юр.данных)"
+
+  /miniapp/v1/me/change-map:
+    get:
+      summary: "Моя полная Карта изменений"
+
+  /miniapp/v1/me/legal-data:
+    get:
+      summary: "Мои юр.данные (аудит-лог, 152-ФЗ)"
+
+  # ---------------- Экспорт данных субъекта (Б14 + И3) ----------------
+  /miniapp/v1/export/request:
+    post:
+      summary: "Запрос экспорта данных (152-ФЗ)"
+      parameters: [{ in: header, name: X-Client-Op-Id, required: true, schema: { type: string, format: uuid }}]
+      responses:
+        "202": { description: "Экспорт поставлен в очередь. Ссылка на скачивание придёт push-ом от бота." }
+
+  /miniapp/v1/export/{export_id}/download:
+    get:
+      summary: "Скачивание готового экспорта (pre-signed URL, retention 24 ч)"
+      parameters: [{ in: path, name: export_id, required: true, schema: { type: string }}]
+
+  # ---------------- Фото (Блок 15 + И3) ----------------
+  /miniapp/v1/photo/submit:
+    post:
+      summary: "Отправка фото участника (Photo Ingest Saga)"
+      parameters: [{ in: header, name: X-Client-Op-Id, required: true, schema: { type: string, format: uuid }}]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                side: { type: string, enum: [front, back, side_left, side_right] }
+                image: { type: string, format: binary }
+
+  # ---------------- Оплата и возврат (Блок 16 + И3) ----------------
+  /miniapp/v1/payment/initiate:
+    post:
+      summary: "Инициировать оплату этапа"
+      parameters: [{ in: header, name: X-Client-Op-Id, required: true, schema: { type: string, format: uuid }}]
+
+  /miniapp/v1/payment/status/{payment_id}:
+    get:
+      summary: "Статус оплаты (для poll'а на клиенте)"
+
+  /miniapp/v1/refund/request:
+    post:
+      summary: "Заявка на возврат"
+      parameters: [{ in: header, name: X-Client-Op-Id, required: true, schema: { type: string, format: uuid }}]
+
+  # ---------------- Тексты (Б9 + И4) ----------------
+  /miniapp/v1/texts/{key}:
+    get:
+      summary: "Чтение текста из text_registry по ключу {домен}.{имя}"
+      parameters: [{ in: path, name: key, required: true, schema: { type: string, pattern: "^[a-z0-9_]+\\.[a-z0-9_]+$" }}]
+
+  /miniapp/v1/texts/bulk:
+    post:
+      summary: "Пакетное чтение (список ключей)"
+      description: "Кэшируется на клиенте через IndexedDB"
+
+  # ---------------- Уведомления (Б9 + P-5) ----------------
+  /miniapp/v1/notifications/settings:
+    get:
+      summary: "Настройки уведомлений участника (чекбоксы 3-тир)"
+    put:
+      summary: "Обновить настройки уведомлений"
+
+  # ---------------- CSP-репорты (E2 ERRATA) ----------------
+  /security/csp-report:
+    post:
+      summary: "Report-URI CSP"
+      description: "application/csp-report"
+      security: []          # без initData
+      # TODO: body
+
+# ---------------- CSP-заголовок (E2 ERRATA) ----------------
+# csp_header:
+#   default-src 'self';
+#   script-src 'self';
+#   style-src 'self' 'unsafe-inline';
+#   connect-src 'self' https://api.telegram.org;
+#   img-src 'self' data: blob: <s3-domain-ru>;
+#   frame-ancestors https://web.telegram.org https://t.me;
+#   report-uri /security/csp-report;

@@ -1,0 +1,235 @@
+# ============================================================
+# build/bot-commands-registry.yaml — реестр 35 команд бота (Б17)
+# Источник истины: architecture/normative/B17-admin-panel-patch.md
+# Каноническое число — 35 (см. appendix/C-registries.md, раздел 5).
+# Патч Б17 в двух местах пишет 25 — RISK-L-22, ждёт решения Автора.
+# ============================================================
+
+version: "1.0-skeleton"
+source: "Б17 + appendix/C-registries.md#5"
+total_declared: 35
+total_declared_conflict: 25   # RISK-L-22
+
+# Скрытая команда, упомянутая в примечании к /view_photos,
+# но записи в каталоге не имеющая — висячая 36-я.
+dangling_command:
+  name: "/grant_photos_access"
+  status: "mentioned_in_view_photos_note_only"
+  action_required: "либо завести полную запись, либо убрать примечание"
+
+groups:
+
+  # ---------------- 5.1. Жизненный цикл (8) ----------------
+  lifecycle:
+    - name: "/start"
+      role: any
+      hard_confirm: false
+      audit_layer: base
+      surface: private_chat
+    - name: "/pause_author"
+      role: owner
+      hard_confirm: true
+      audit_layer: privacy
+      surface: work_group_reply
+    - name: "/unpause_author"
+      role: owner
+      hard_confirm: true
+      audit_layer: privacy
+      surface: work_group_reply
+    - name: "/block"
+      role: owner
+      hard_confirm: true
+      audit_layer: privacy
+      surface: work_group_reply
+      open_incompatibility: "Р477 удалил banned_soft/banned_hard из FSM (И2)"
+    - name: "/unblock"
+      role: owner
+      hard_confirm: true
+      audit_layer: privacy
+      surface: work_group_reply
+      open_incompatibility: "Р477 удалил banned_soft/banned_hard из FSM (И2)"
+    - name: "/life"
+      role: owner
+      hard_confirm: true
+      audit_layer: base
+      surface: work_group_reply
+      params: ["+N | -N"]
+    - name: "/erasure_initiate"
+      role: owner
+      hard_confirm: true
+      hard_confirm_phrase: true
+      audit_layer: privacy
+      surface: work_group_reply
+    - name: "/erasure_finalize_before_cooling_off"
+      role: owner
+      hard_confirm: true
+      hard_confirm_phrase: true
+      audit_layer: privacy
+      surface: work_group_reply
+      open_incompatibility: "противоречит отсрочке стирания И3 (14 дн.)"
+
+  # ---------------- 5.2. Данные (6) ----------------
+  data:
+    - name: "/card"
+      role: [owner, moderator]
+      hard_confirm: false
+      audit_layer: privacy
+      surface: work_group_reply
+    - name: "/export"
+      role: owner
+      hard_confirm: true
+      audit_layer: privacy
+      surface: work_group_reply
+      note: "CSV на аудите запрещён"
+    - name: "/view_photos"
+      role: owner
+      hard_confirm: true
+      hard_confirm_phrase: true
+      audit_layer: privacy
+      surface: work_group_reply
+      note: "→ /grant_photos_access (см. dangling_command выше)"
+    - name: "/override_baseline"
+      role: owner
+      hard_confirm: true
+      audit_layer: base
+      surface: work_group_reply
+    - name: "/publish_stage"
+      role: owner
+      hard_confirm: true
+      audit_layer: base
+      surface: work_group_reply
+      contract: "publish_epoch — владелец Б14 (FIX1); только событие"
+    - name: "/audit"
+      role: owner
+      hard_confirm: false
+      audit_layer: privacy
+      surface: work_group_reply
+      note: "мета-доступ логируется"
+
+  # ---------------- 5.3. Финансы (3) ----------------
+  finance:
+    - name: "/refund"
+      role: owner
+      hard_confirm: true
+      hard_confirm_phrase: true
+      audit_layer: base
+      surface: work_group_reply
+      saga: refund_saga
+    - name: "/refund_rollback"
+      role: owner
+      hard_confirm: true
+      hard_confirm_phrase: true
+      audit_layer: base
+      surface: work_group_reply
+    - name: "/reconcile_psp"
+      role: owner
+      hard_confirm: false
+      audit_layer: base
+      surface: work_group_reply
+      schedule: hourly
+
+  # ---------------- 5.4. Модерация и группа (6) ----------------
+  moderation:
+    - name: "/approve"
+      role: [owner, moderator]
+      hard_confirm: false
+      audit_layer: base
+      surface: work_group_reply
+    - name: "/revert"
+      role: [owner, moderator]
+      hard_confirm: true
+      audit_layer: base
+      surface: work_group_reply
+      params: ["Модуль.День"]
+    - name: "/panic_maintenance"
+      role: owner
+      hard_confirm: true
+      hard_confirm_phrase: true
+      audit_layer: privacy
+      surface: work_group_reply
+    - name: "/graph"
+      role: owner
+      hard_confirm: false
+      audit_layer: privacy
+      surface: work_group_reply
+      constraints: "k >= 5 (защита от атаки пересечением)"
+    - name: "/graph_review"
+      role: owner
+      hard_confirm: false
+      audit_layer: privacy
+      surface: work_group_reply
+      schedule: monthly
+    - name: "/announce"
+      role: owner
+      hard_confirm: true
+      audit_layer: base
+      surface: work_group_reply
+
+  # ---------------- 5.5. Правовое (3) ----------------
+  legal:
+    - name: "/legal"
+      role: owner
+      hard_confirm: false
+      audit_layer: privacy
+      surface: work_group_reply
+      note: "мета-доступ логируется"
+    - name: "/consent_export"
+      role: owner
+      hard_confirm: true
+      audit_layer: privacy
+      surface: work_group_reply
+    - name: "/privacy_report"
+      role: owner
+      hard_confirm: false
+      audit_layer: privacy
+      surface: work_group_reply
+
+  # ---------------- 5.6. Служебное (9) ----------------
+  service:
+    - name: "/help"
+      role: any
+      hard_confirm: false
+      audit_layer: base
+      surface: private_chat
+    - name: "/support"
+      role: any
+      hard_confirm: false
+      audit_layer: base
+      surface: private_chat
+    - name: "/whoami"
+      role: owner
+      hard_confirm: false
+      audit_layer: base
+      surface: work_group_reply
+    - name: "/version"
+      role: owner
+      hard_confirm: false
+      audit_layer: base
+      surface: work_group_reply
+    - name: "/features"
+      role: owner
+      hard_confirm: false
+      audit_layer: base
+      surface: work_group_reply
+    - name: "/flags"
+      role: owner
+      hard_confirm: false
+      audit_layer: base
+      surface: work_group_reply
+    - name: "/backfill_check"
+      role: owner
+      hard_confirm: false
+      audit_layer: base
+      surface: work_group_reply
+    - name: "/dlq_replay"
+      role: owner
+      hard_confirm: true
+      audit_layer: base
+      surface: work_group_reply
+    - name: "/health"
+      role: owner
+      hard_confirm: false
+      audit_layer: base
+      surface: work_group_reply
+
+# Итого: 8 + 6 + 3 + 6 + 3 + 9 = 35
