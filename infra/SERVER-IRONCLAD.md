@@ -29,29 +29,44 @@
 | API (FastAPI) | 8080 | 127.0.0.1 |
 | PostgreSQL 16 | 5435 | 127.0.0.1 |
 | Redis 7 | 6382 | 127.0.0.1 |
-| MinIO S3 | 9000 | 127.0.0.1 |
-| MinIO Console | 9001 | 127.0.0.1 |
+| Garage S3 API | 9000 | 127.0.0.1 |
+| Garage Web/Console | 9001 | 127.0.0.1 |
+| Mini App (nginx prod) | 5173 | 127.0.0.1 |
+
+## S3-совместимое хранилище
+
+**dev:** Garage (`dxflrs/garage:v2.1.0`) — S3-совместимое, Rust, ~30 MB RAM.
+Заменил MinIO (MinIO удалил официальные Docker-образы в сентябре 2026,
+проект в maintenance mode с декабря 2025).
+
+**prod:** Yandex Object Storage (или Timeweb / VK Cloud — решение Автора).
+Object Lock (WORM) для бакета аудита — только в prod (Garage single-node
+не поддерживает WORM). В dev auditing идёт в обычный бакет `audit` без WORM.
+
+**Переезд dev → prod:** меняем `S3_ENDPOINT` в `.env` — код на `boto3` не трогаем.
 
 ## Ресурсы (жёсткие лимиты)
 
 - RAM свободно ≈ 4.6 GiB. Сумма лимитов всех контейнеров course-bot **≤ 900 MB**.
 - Лимиты заданы в `.env` через `MEM_LIMIT_*` и применяются в `docker-compose.dev.yml`.
 - HDD 5400 rpm — сборки медленные. Использовать `python:3.12-slim`, `redis:7-alpine`,
-  `postgres:16` (не полные образы).
+  `postgres:16` (не полные образы), `dxflrs/garage`.
 - Docker build-cache чистить перед крупными сборками: `docker builder prune`.
 
 ## Часовой пояс
 
 - Хост в **Europe/Moscow (MSK)**. journald пишет метки в MSK.
-- Договорённость: **в БД храним UTC, отображаем MSK**.
-- `.env`: `TZ=UTC` (для процессов), `SERVER_TIMEZONE=Europe/Moscow` (для отображения).
+- Договорённость: **в БД храним timestamptz (Postgres хранит в UTC под капотом),
+  отображаем MSK**.
+- `.env`: `TZ=Europe/Moscow` (для процессов), `SERVER_TIMEZONE=Europe/Moscow`.
 
 ## Изоляция от других проектов
 
 - Compose-project name: `course-bot` (задано в `docker-compose.dev.yml`).
 - Собственная сеть: `course-bot_net` (не пересекается с `maxmover_default 172.19.0.0/16`
   и `tg_vk_bot_bot_net 172.18.0.0/16`).
-- Именованные тома: `course-bot_pgdata`, `course-bot_redis-data`, `course-bot_minio-data`.
+- Именованные тома: `course-bot_pgdata`, `course-bot_redis-data`,
+  `course-bot_garage-meta`, `course-bot_garage-data`.
 - **Не использовать чужие БД/Redis** — держать полностью отдельные контейнеры.
 
 ## Крон-окна (не пересекаться)
@@ -91,3 +106,5 @@
 - `docker system prune -a --volumes` — уничтожит 6 анонимных томов чужих проектов.
 - Обновление `cloudflared` — обслуживает и maxmover, обновлять аккуратно.
 - Порт `/miniapp/` — уже занят мониторингом keep-alive от maxmover.
+- **MinIO deprecated** — не пробовать вернуть, репо архивирован Apr 2026,
+  Docker-образы удалены Sep 2026. Мы на Garage.
