@@ -31,4 +31,37 @@
   S3 pre-signed URL для собственного хостинга или внешний Telegram-канал.
 - **Ждём решения Автора:** да.
 
-<!-- следующие записи (D-2, D-3, ...) добавляет агент по мере обнаружения -->
+## D-2. CSP: три разные редакции в зеркале
+
+- **Файл архитектуры (зеркало):** `normative/errata-unified.md` (E2 `csp_final`),
+  `build/miniapp-frontend-stack.md`, `build/miniapp-api-contract.yaml` (комментарий в конце).
+- **Файл реализации:** `apps/miniapp/nginx.conf`.
+- **Суть расхождения:** E2 разрешает `script-src 'self' https://telegram.org`
+  и `frame-ancestors https://web.telegram.org https://telegram.org`. В build-файлах
+  указаны `script-src 'self'`, `connect-src 'self' https://api.telegram.org`
+  и `frame-ancestors https://web.telegram.org https://t.me`.
+- **Решение агента:** взята редакция E2 (у ERRATA высшее старшинство). Домен
+  `{s3-domain-ru}` не подставлен: это плейсхолдер-шлюз, решение Автора.
+- **Ждём решения Автора:** да — нужно ли выровнять build-файлы в DOCS-course-bot.
+
+## D-3. Остатки MinIO и версия Garage в документах
+
+- **Файл архитектуры (зеркало):** `build/build-order.md` (Итерация 0-А: «MinIO», `minio-init`).
+- **Файлы вне зеркала:** `.genspark/rules.md` (хосты `minio:9000`),
+  `infra/SERVER-IRONCLAD.md` (`dxflrs/garage:v2.1.0`, а в compose и README — `v2.3.0`).
+- **Суть расхождения:** MinIO устарел, код использует Garage (`http://garage:3900`).
+- **Решение агента:** в коде только Garage. Документы не правились:
+  зеркало read-only, а `.genspark/**` без обоснования не трогаем.
+- **Ждём решения Автора:** да — правка в DOCS-course-bot и в `.genspark/rules.md`.
+
+## D-4. Кто принимает Telegram webhook
+
+- **Файл архитектуры (зеркало):** `build/DIVISION.md` (backend: «Обработчик Telegram Webhook»).
+- **Файлы реализации:** `apps/bot/bot/app.py`, `infra/README.md` (шаг 8: `setWebhook` → `/webhook/telegram`).
+- **Суть расхождения:** по DIVISION апдейты принимает backend, но диспетчер
+  aiogram живёт в `apps/bot`. Контракт передачи апдейтов api → bot не описан.
+- **Решение агента:** в Итерации 0-А бот работает на long polling (входящий порт
+  не нужен). Если webhook зарегистрирован, бот его не удаляет, а пишет ошибку в лог.
+- **Ждём решения Автора:** да.
+
+<!-- следующие записи (D-5, ...) добавляет агент по мере обнаружения -->

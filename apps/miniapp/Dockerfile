@@ -6,25 +6,18 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-# Зависимости отдельным слоем.
-# Паттерн 'package.json* package-lock.json*' безопасен даже если файлов пока нет:
-# glob с буквальным префиксом в Docker BuildKit не падает при пустом совпадении.
-COPY package.json* package-lock.json* pnpm-lock.yaml* yarn.lock* ./
-RUN if [ -f package.json ]; then \
-        if [ -f package-lock.json ]; then npm ci; \
-        else npm install; \
-        fi \
-    ; fi
+# Зависимости отдельным слоем — пересборка кода не переустанавливает node_modules.
+# package-lock.json закоммичен → воспроизводимая установка через npm ci.
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
-# Исходники → сборка.
+# Исходники → сборка (tsc --noEmit && vite build → /app/dist).
 # .dockerignore рядом защищает от .env, .git, node_modules, dist.
+# VITE_API_BASE_URL — build-time переменная (пусто = тот же origin, CSP E2 connect-src 'self').
+ARG VITE_API_BASE_URL=""
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 COPY . .
-RUN if [ -f package.json ] && grep -q '"build"' package.json && [ -f index.html ]; then \
-        npm run build; \
-    else \
-        mkdir -p /app/dist && \
-        echo '<!doctype html><html><body><h1>Mini App stub — Iteration 0-A pending</h1></body></html>' > /app/dist/index.html; \
-    fi
+RUN npm run build
 
 # --- Stage 2: runtime ---
 FROM nginx:alpine
