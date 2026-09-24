@@ -44,6 +44,9 @@ chmod +x .githooks/pre-commit
 2. Значение `full_backup_rotation_cycle`.
 3. Три несовместимости Б17.
 4. Роли `finance` и `moderator`.
+5. Провайдер российского VPS для входа (прод / внешние тестировщики) — D-5.
+6. Позиция по ограничениям Telegram в РФ: где хостить бота (доступ к
+   `api.telegram.org`) и где хранить данные (152-ФЗ) — D-6.
 
 ## Формат PR
 
@@ -69,18 +72,21 @@ TTL `auth_date`: 24 часа. Для `/refund` и `/erasure_*` — 1 час.
 ## Разработка на локальном сервере
 
 Сейчас backend разрабатывается и тестируется на локальном Linux-сервере Автора
-(IRONCLAD). Публичный HTTPS-webhook — через Cloudflare Tunnel. Все URL, порты
-и хосты берутся из `.env` (см. `.env.example`), никогда не хардкодятся в коде.
+(IRONCLAD). Бот — на long polling, публичный webhook не ставится (D-4).
+Вход в Mini App: dev — Tailscale serve (только tailnet, только Автор),
+прод / внешние тестировщики — позже через российский VPS (решение Автора).
+Cloudflare Tunnel не используется. Все URL, порты и хосты берутся из `.env`
+(см. `.env.example`), никогда не хардкодятся в коде.
 
 Внутри compose-сети хосты для api/bot:
 - Postgres: `db:5432`
 - Redis: `redis:6379`
-- MinIO: `minio:9000`
+- Garage (S3 API): `garage:3900`
 
 С хоста (для psql, DBeaver, curl):
 - Postgres: `127.0.0.1:5435`
 - Redis: `127.0.0.1:6382`
-- MinIO: `127.0.0.1:9000`
+- Garage (S3 API): `127.0.0.1:9000` (`127.0.0.1:9001` — `s3_web`, не админка)
 
 Тесты запускаются локально: `pytest`, `vitest`, `docker compose up`.
 Перед PR все тесты должны пройти.

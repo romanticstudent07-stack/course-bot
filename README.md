@@ -79,15 +79,21 @@ chmod +x .githooks/pre-commit
 
 ## Разработка на локальном сервере
 
-Пока проект развивается, backend работает на локальном Linux-сервере Автора.
-Публичный HTTPS-webhook для Telegram проброшен через Cloudflare Tunnel
-(бесплатный, стабильный, `*.trycloudflare.com` или свой домен).
+Пока проект развивается, backend работает на локальном Linux-сервере Автора
+(IRONCLAD). Бот получает апдейты через **long polling** — публичный webhook
+не нужен и не ставится (D-4 в `docs/DEFECTS-FOUND.md`).
+
+Вход в Mini App (решение Автора):
+- **dev** — Tailscale serve: HTTPS-адрес `https://<имя-сервера>.<tailnet>.ts.net/`,
+  доступен только внутри tailnet и только Автору;
+- **прод / внешние тестировщики** — позже: российский VPS как вход, туннель
+  дом→VPS через autossh или WireGuard; провайдер — решение Автора.
+
+Cloudflare Tunnel для course-bot не используется (из РФ нестабилен);
+`infra/CLOUDFLARE-TUNNEL.md` сохранён как архив.
 
 Пошаговая инструкция запуска — в `infra/README.md`.
-Настройка своего домена в Cloudflare — в `infra/CLOUDFLARE-TUNNEL.md`.
 Правила сервера — в `infra/SERVER-IRONCLAD.md`.
-
-Переход на VPS/Cloud — после успешных тестов на локальном сервере.
 
 ## Ключевые правила
 
@@ -106,5 +112,6 @@ chmod +x .githooks/pre-commit
 ## Открытые вопросы Автора
 
 - Облачный провайдер prod: Yandex Cloud или Timeweb.
+- Провайдер российского VPS для входа (прод / внешние тестировщики) — D-5.
 - Дефекты из `docs/DEFECTS-FOUND.md`.
 - Полный трекер открытых вопросов — GitHub Issues репозитория (метка `author-decision`).

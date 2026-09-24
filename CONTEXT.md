@@ -60,14 +60,18 @@ GitHub Actions (`.github/workflows/sync-architecture.yml`).
 
 ## Разработка на локальном сервере Автора
 
-Пока идёт разработка, backend работает на локальном Linux-сервере Автора,
-а публичный HTTPS-webhook для Telegram проброшен через Cloudflare Tunnel
-(бесплатно, HTTPS, стабильный домен `*.trycloudflare.com` или свой).
+Пока идёт разработка, backend работает на локальном Linux-сервере Автора
+(IRONCLAD). Бот — на long polling, webhook не ставится (D-4).
 
-Инструкция по подключению Cloudflare Tunnel — в `infra/README.md`
-(будет создана в Итерации 0).
+Вход в Mini App (решение Автора):
+- **dev** — Tailscale serve (`https://<имя-сервера>.<tailnet>.ts.net/`),
+  только tailnet, только Автор;
+- **прод / внешние тестировщики** — позже: российский VPS как вход, туннель
+  дом→VPS через autossh или WireGuard; провайдер VPS — решение Автора.
 
-Переход на VPS — после успешных тестов на локальном сервере.
+Cloudflare Tunnel для course-bot не используется (из РФ нестабилен).
+
+Инструкция запуска и dev-входа — в `infra/README.md`.
 
 ## Что делать агенту-новичку
 

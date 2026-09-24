@@ -42,7 +42,9 @@
   и `frame-ancestors https://web.telegram.org https://t.me`.
 - **Решение агента:** взята редакция E2 (у ERRATA высшее старшинство). Домен
   `{s3-domain-ru}` не подставлен: это плейсхолдер-шлюз, решение Автора.
-- **Ждём решения Автора:** да — нужно ли выровнять build-файлы в DOCS-course-bot.
+- **Решение Автора:** выравнивать CSP в DOCS-course-bot, не здесь.
+  В `apps/miniapp/nginx.conf` остаётся редакция E2.
+- **Ждём решения Автора:** нет.
 
 ## D-3. Остатки MinIO и версия Garage в документах
 
@@ -50,9 +52,13 @@
 - **Файлы вне зеркала:** `.genspark/rules.md` (хосты `minio:9000`),
   `infra/SERVER-IRONCLAD.md` (`dxflrs/garage:v2.1.0`, а в compose и README — `v2.3.0`).
 - **Суть расхождения:** MinIO устарел, код использует Garage (`http://garage:3900`).
-- **Решение агента:** в коде только Garage. Документы не правились:
-  зеркало read-only, а `.genspark/**` без обоснования не трогаем.
-- **Ждём решения Автора:** да — правка в DOCS-course-bot и в `.genspark/rules.md`.
+- **Решение агента:** в коде только Garage.
+- **Статус:** вне зеркала исправлено — `.genspark/rules.md` (хосты MinIO → Garage
+  `garage:3900` / `127.0.0.1:9000`) и `infra/SERVER-IRONCLAD.md` (`v2.1.0` → `v2.3.0`)
+  в PR «docs: dev-вход через Tailscale, --env-file, остатки MinIO».
+  MinIO в зеркале (`build/build-order.md`: Итерация 0-А, `minio`, `minio-init`,
+  состав `docker-compose.yaml`) — править в DOCS-course-bot.
+- **Ждём решения Автора:** нет (правка зеркала — в DOCS-course-bot).
 
 ## D-4. Кто принимает Telegram webhook
 
@@ -62,6 +68,61 @@
   aiogram живёт в `apps/bot`. Контракт передачи апдейтов api → bot не описан.
 - **Решение агента:** в Итерации 0-А бот работает на long polling (входящий порт
   не нужен). Если webhook зарегистрирован, бот его не удаляет, а пишет ошибку в лог.
+- **Решено (Автор):** long polling до отдельной итерации webhook. `setWebhook`
+  в `infra/README.md` помечен «НЕ выполнять», добавлена команда `deleteWebhook`.
+- **Ждём решения Автора:** нет.
+
+## D-5. Публичный вход: Cloudflare Tunnel неприменим
+
+- **Файл архитектуры (зеркало):** `build/build-order.md` (Итерация 0-А: «публичный
+  HTTPS через Cloudflare Tunnel», шаг 1 «`cloudflared` установлен», шаг 3
+  «именованный туннель», ссылка на `infra/CLOUDFLARE-TUNNEL.md`).
+- **Файлы реализации:** `infra/README.md`, `infra/CLOUDFLARE-TUNNEL.md`,
+  `infra/SERVER-IRONCLAD.md`.
+- **Суть расхождения:** зеркало предполагает Cloudflare Tunnel как вход. Факты
+  (проверены Автором на IRONCLAD 24.09.2026):
+  - Cloudflare Tunnel из РФ нестабилен: ~2200 обрывов за месяц;
+  - на сервере работает служба `cloudflared` чужого проекта maxmover —
+    `cloudflared service install` для course-bot с ней конфликтует; её не трогать;
+  - dev-вход — Tailscale serve (только tailnet, только Автор);
+  - прод / внешние тестировщики — позже: российский VPS как вход, туннель
+    дом→VPS через autossh или WireGuard (не Tailscale: из РФ блокируются его
+    админка и логин).
+- **Сделано здесь:** `infra/README.md` переписан под Tailscale serve;
+  `infra/CLOUDFLARE-TUNNEL.md` сохранён как архив с предупреждением «НЕ применять
+  на IRONCLAD».
+- **Предлагаемое решение:** в DOCS-course-bot поправить `build/build-order.md`
+  (вход Итерации 0-А и ссылку на `infra/CLOUDFLARE-TUNNEL.md`).
+- **Ждём решения Автора:** да — провайдер VPS.
+
+## D-6. Ограничения Telegram в РФ
+
+- **Файл архитектуры (зеркало):** `build/build-order.md` (Итерация 0-Б, хостинг),
+  `99-legal.md` / `99/` (152-ФЗ).
+- **Файлы реализации:** пока нет (инфраструктурный риск).
+- **Суть расхождения:** с февраля 2026 ограничения Telegram в РФ нарастают.
+  Архитектура не учитывает риски:
+  - участникам может понадобиться VPN, чтобы открыть бота и Mini App;
+  - боту на РФ-VPS могут ограничить доступ к `api.telegram.org`
+    (long polling и отправка сообщений перестанут работать).
+- **Предлагаемое решение:** нужна позиция Автора: где хостить бота (доступ
+  к `api.telegram.org`) и где хранить данные участников (152-ФЗ — в РФ).
+  Агент вариантов не выбирает.
 - **Ждём решения Автора:** да.
 
-<!-- следующие записи (D-5, ...) добавляет агент по мере обнаружения -->
+## D-7. initData без проверки подписи
+
+- **Файл архитектуры (зеркало):** `build/miniapp-api-contract.yaml`
+  (`securitySchemes.TelegramInitData`), `build/miniapp-security-checklist.md`,
+  `build/build-order.md` (Итерация 1: «Валидация `initData` на сервере»).
+- **Файл реализации:** `apps/api/app/telegram_init_data.py`.
+- **Суть расхождения:** в Итерации 0-А это заглушка: заголовок
+  `X-Telegram-Init-Data` обязателен (без него — `401 TG_INIT_MISSING`), но
+  HMAC-подпись и `auth_date` НЕ проверяются (`verified=False`). Пока вход только
+  через Tailscale serve (tailnet, один Автор), риск ограничен.
+- **Предлагаемое решение:** реализовать проверку подписи и TTL в Итерации 1
+  ДО любого внешнего доступа (Tailscale Funnel, VPS). План есть — AGENTS.md,
+  «Как валидировать initData».
+- **Ждём решения Автора:** нет (план есть).
+
+<!-- следующие записи (D-8, ...) добавляет агент по мере обнаружения -->

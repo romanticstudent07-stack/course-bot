@@ -3,7 +3,13 @@
 Пошаговая инструкция для разработки и тестирования на локальном сервере Автора
 (IRONCLAD, Ubuntu 26.04). На VPS/Cloud переходим после успешных тестов.
 
-Правила сервера — в `SERVER-IRONCLAD.md`. Cloudflare Tunnel — в `CLOUDFLARE-TUNNEL.md`.
+Правила сервера — в `SERVER-IRONCLAD.md`.
+
+**Dev-вход — Tailscale serve** (только tailnet, только для Автора; шаг 7).
+Cloudflare Tunnel для course-bot **не используется**: из РФ нестабилен, а на
+IRONCLAD уже работает служба `cloudflared` чужого проекта maxmover — её не трогать.
+`CLOUDFLARE-TUNNEL.md` сохранён как архив, на IRONCLAD не применять.
+Бот работает на **long polling** — webhook не ставится (D-4 в `docs/DEFECTS-FOUND.md`).
 
 S3-совместимое хранилище в dev — **Garage** (`dxflrs/garage:v2.3.0`), заменил MinIO
 (MinIO удалил официальные Docker-образы в сентябре 2026). Переезд на
@@ -20,7 +26,9 @@ init-контейнера и скриптов инициализации в пр
 - Ubuntu Server (или любой Linux) с 4 GB RAM и 20 GB свободного места.
 - Docker + Docker Compose v2 (`sudo apt install docker.io docker-compose-plugin`).
 - Git (`sudo apt install git`).
-- Cloudflare-аккаунт (бесплатный) — для проброса HTTPS наружу.
+- Tailscale на сервере, сервер уже в tailnet Автора (на IRONCLAD — так и есть).
+- Tailscale на устройстве, где открыт Telegram (ноутбук), в том же tailnet:
+  Mini App по dev-адресу открывается только на устройствах внутри tailnet.
 - Telegram-бот от `@BotFather` (см. ниже).
 
 ---
@@ -47,7 +55,7 @@ BotFather выдаст **токен вида** `1234567890:AAF...`.
 ```
 Выбери бота → название Mini App → короткое описание → пропусти
 фото/аватарки → пропусти домен (`/empty`) — вернёшься сюда позже,
-когда будет URL Cloudflare Tunnel.
+когда будет адрес Tailscale serve (шаг 7).
 
 ---
 
@@ -64,15 +72,18 @@ docker compose version   # проверка (должно быть v2)
 
 ---
 
-## Шаг 3. Установить cloudflared (Cloudflare Tunnel)
+## Шаг 3. Проверить Tailscale на сервере
+
+cloudflared для course-bot **не ставим** (см. шапку). Dev-вход — Tailscale serve.
+На IRONCLAD Tailscale уже установлен и сервер в tailnet. Проверка:
 
 ```bash
-# Скачиваем deb-пакет (архитектура amd64 или arm64 — определи через uname -m)
-ARCH=$(dpkg --print-architecture)
-wget -O cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb"
-sudo dpkg -i cloudflared.deb
-cloudflared --version
+tailscale status
 ```
+
+В выводе должны быть сервер и устройство, с которого открываешь Telegram.
+Если сервер не в tailnet — это вопрос к Автору (из РФ админка и логин
+Tailscale могут быть заблокированы, см. «Прод / внешние тестировщики — позже»).
 
 ---
 
@@ -114,8 +125,9 @@ nano .env    # или любой редактор
 **Telegram:**
 - `BOT_TOKEN` — токен от BotFather (шаг 1).
 - `BOT_USERNAME` — username бота без @ (например `mycourse_test_bot`).
-- `WEBHOOK_SECRET` — случайная строка: `openssl rand -hex 32`.
-- `WEBAPP_URL` — временно пустой; вернёмся сюда после Cloudflare Tunnel.
+- `WEBHOOK_SECRET` — случайная строка: `openssl rand -hex 32`
+  (пока не используется: бот на long polling, D-4).
+- `WEBAPP_URL` — временно пустой; вернёмся сюда после Tailscale serve (шаг 7–8).
 - `ADMIN_USER_ID` — твой telegram-ID (узнать через `@userinfobot`).
 
 **PostgreSQL:**
@@ -176,7 +188,7 @@ EOF
 пустых volume-ах. Если поменял `S3_ACCESS_KEY` / `S3_SECRET_KEY` уже ПОСЛЕ
 первого старта, Garage новый ключ не подхватит. Варианты: создать ключ вручную
 (`/garage key create`) либо снести volume-ы командой
-`docker compose --env-file .env -f infra/docker-compose.dev.yml down -v`
+`cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml down -v`
 (внимание: это удалит все загруженные файлы и базу).
 
 ---
@@ -188,14 +200,13 @@ compose-файл лежит в `infra/`, а `.env` — в корне, без ф�
 переменных вида `${POSTGRES_PASSWORD}` и `${GARAGE_RPC_SECRET}` не сработает.
 
 ```bash
-cd ~/course-bot
-docker compose --env-file .env -f infra/docker-compose.dev.yml up -d
-docker compose --env-file .env -f infra/docker-compose.dev.yml ps
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml up -d
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml ps
 ```
 
 Все контейнеры должны быть `running` или `healthy`. Логи:
 ```bash
-docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f
 ```
 
 **Что где слушает** (все — только на `127.0.0.1`):
@@ -210,6 +221,9 @@ docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f
   `docker exec course-bot_garage /garage -c /etc/garage.toml bucket list`
   и `docker exec course-bot_garage /garage -c /etc/garage.toml key list`.
 - Mini App prod-nginx: `http://127.0.0.1:5173` (внутри контейнер порт 80).
+  Сюда же смотрит Tailscale serve (шаг 7). nginx miniapp сам проксирует
+  `/miniapp/v1/**` и `/security/csp-report` в `api:8080` — отдельный вход
+  на 8080 не нужен.
 
 **Vite dev-server** (быстрый hot-reload при разработке Mini App) —
 запускается отдельно на dev-машине через `npm run dev` внутри `apps/miniapp/`.
@@ -221,10 +235,10 @@ production-статика под nginx.
 from scratch, оболочки в нём нет — бинарник вызываем по полному пути `/garage`):
 
 ```bash
-docker compose --env-file .env -f infra/docker-compose.dev.yml \
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml \
   exec garage /garage -c /etc/garage.toml status
 
-docker compose --env-file .env -f infra/docker-compose.dev.yml \
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml \
   exec garage /garage -c /etc/garage.toml bucket list
 ```
 
@@ -239,21 +253,19 @@ Garage автоматически создаёт только ОДИН баке�
 значение `S3_ACCESS_KEY` из своего `.env`):
 
 ```bash
-cd ~/course-bot
-
 # 1) создать бакет
-docker compose --env-file .env -f infra/docker-compose.dev.yml \
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml \
   exec garage /garage -c /etc/garage.toml bucket create audit
 
 # 2) выдать права нашему ключу доступа
-docker compose --env-file .env -f infra/docker-compose.dev.yml \
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml \
   exec garage /garage -c /etc/garage.toml \
   bucket allow --read --write --owner audit --key GK...
 ```
 
 Проверка:
 ```bash
-docker compose --env-file .env -f infra/docker-compose.dev.yml \
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml \
   exec garage /garage -c /etc/garage.toml bucket info audit
 ```
 
@@ -262,82 +274,104 @@ docker compose --env-file .env -f infra/docker-compose.dev.yml \
 
 ---
 
-## Шаг 7. Запустить Cloudflare Tunnel
+## Шаг 7. Включить dev-вход через Tailscale serve
 
-**Вариант A — быстрый (временный домен, ТОЛЬКО посмотреть глазами):**
+Dev-вход — **Tailscale serve**: HTTPS-адрес доступен **только внутри tailnet**
+и только Автору. Наружу (в интернет) ничего не публикуется.
 
-⚠️ `trycloudflare.com` выдаёт ОДНОРАЗОВЫЙ URL: он меняется при каждом
-перезапуске `cloudflared`. Для Telegram-webhook и для домена Mini App он
-НЕПРИГОДЕН — webhook отвалится, как только туннель перезапустится. Используй
-этот вариант только чтобы быстро открыть страницу в браузере и убедиться, что
-она отдаётся. Для реальной работы нужен именованный туннель — см. Вариант B
-и `CLOUDFLARE-TUNNEL.md`.
+Tailscale serve смотрит на nginx Mini App (`127.0.0.1:5173`). nginx miniapp
+сам проксирует `/miniapp/v1/**` и `/security/csp-report` в `api:8080`,
+поэтому отдельный вход на API не нужен.
 
+Включить (на сервере):
 ```bash
-cloudflared tunnel --url http://127.0.0.1:8080
+sudo tailscale serve --bg http://127.0.0.1:5173
 ```
 
-В консоли появится URL вида
-`https://random-slug.trycloudflare.com`.
-Скопируй его.
-
-**Вариант B — стабильный (свой домен, для долгой разработки):**
-
-Полная инструкция — в `CLOUDFLARE-TUNNEL.md`. Кратко:
+Проверить, что включено:
 ```bash
-cloudflared tunnel login
-cloudflared tunnel create coursebot
-cloudflared tunnel route dns coursebot coursebot.example.com
-cloudflared tunnel run coursebot --url http://127.0.0.1:8080
+tailscale serve status
 ```
 
-Теперь `https://coursebot.example.com` смотрит на твой сервер.
+Выключить:
+```bash
+sudo tailscale serve --https=443 off
+```
+
+Адрес будет вида `https://<имя-сервера>.<tailnet>.ts.net/` — **это и есть
+`WEBAPP_URL`** (шаг 8). Реальный адрес своего tailnet в репозиторий
+не вносить — ни в документы, ни в `.env.example`.
+
+> **Если Telegram на ноутбуке работает через VPN в режиме системного прокси**
+> (только dev): добавь в исключения прокси `*.ts.net` и IP сервера в tailnet
+> (`tailscale ip -4` на сервере). Иначе Mini App не загрузится: запрос уйдёт
+> в VPN, а не в tailnet.
 
 ---
 
 ## Шаг 8. Прописать URL в .env и Telegram
 
-Открой `.env`, впиши:
+Открой `.env`, впиши адрес из шага 7:
 ```
-WEBAPP_URL=https://<твой-tunnel-url>
+WEBAPP_URL=https://<имя-сервера>.<tailnet>.ts.net/
 ```
 
-Перезапусти стек:
+Применить `.env`. **`restart` НЕ перечитывает `.env`** — контейнер
+перезапустится со старыми переменными. Нужен `up -d` для сервисов, которые
+читают `WEBAPP_URL` (compose пересоздаст их с новым окружением):
 ```bash
-docker compose --env-file .env -f infra/docker-compose.dev.yml restart
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml up -d bot api
 ```
 
-Скажи Telegram, куда слать обновления боту:
+После старта бот выставит Menu Button на `WEBAPP_URL` (в логах `bot`:
+«Menu Button → WEBAPP_URL установлена»).
+
+**Webhook — НЕ выполнять: бот на long polling (D-4).** Webhook-режим
+не реализован, эндпоинта `/webhook/telegram` в api нет. Если webhook
+зарегистрирован, long polling не работает: бот пишет ошибку в лог
+и ждёт, пока webhook снимут.
+
+Если webhook уже стоит (например, выполнялась старая версия этого шага) —
+снять его:
 ```bash
 BOT_TOKEN='<токен>'
-WEBHOOK_URL='https://<твой-tunnel-url>/webhook/telegram'
+curl "https://api.telegram.org/bot${BOT_TOKEN}/deleteWebhook"
+```
+Ответ: `{"ok":true,...}`. Проверка — в `getWebhookInfo` поле `url` пустое:
+```bash
+curl "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo"
+```
+
+<details>
+<summary>Архив: команда setWebhook (НЕ выполнять: бот на long polling, D-4)</summary>
+
+Оставлена только для истории — до отдельной итерации webhook.
+
+```bash
+BOT_TOKEN='<токен>'
+WEBHOOK_URL='https://<публичный-адрес>/webhook/telegram'
 SECRET='<WEBHOOK_SECRET из .env>'
 curl -F "url=${WEBHOOK_URL}" \
      -F "secret_token=${SECRET}" \
      "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook"
 ```
 
-Ответ должен быть `{"ok":true, ...}`.
-
-Проверка:
-```bash
-curl "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo"
-```
+</details>
 
 Скажи BotFather, где живёт Mini App:
 ```
 /setdomain
 ```
-→ выбери бота → введи `https://<твой-tunnel-url>`.
+→ выбери бота → введи `https://<имя-сервера>.<tailnet>.ts.net`.
 
 ---
 
 ## Шаг 9. Проверить, что бот отвечает
 
-Напиши боту `/start` в Telegram. Он должен ответить.
+Напиши боту `/start` в Telegram. Он должен ответить и показать кнопку Mini App.
 Логи запросов увидишь через:
 ```bash
-docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f bot api
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f bot api
 ```
 
 ---
@@ -346,24 +380,25 @@ docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f bot api
 
 Когда Автор смерджил PR в `main`, забери изменения на сервер:
 ```bash
-cd ~/course-bot
-git pull origin main
-docker compose --env-file .env -f infra/docker-compose.dev.yml up -d
+cd ~/course-bot && git pull origin main
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml up -d
 ```
 
 **Почему без `--build`:** сервер на HDD 5400 RPM, полная пересборка всех
 образов (особенно `miniapp`) занимает 15–40 минут. Обычный `up -d` соберёт
 только недостающие образы и перезапустит изменившиеся контейнеры.
+Если PR менял только документацию / комментарии — хватит `git pull`,
+перезапуск не нужен.
 Пересобирай точечно и только когда менялся код конкретного сервиса:
 
 ```bash
-docker compose --env-file .env -f infra/docker-compose.dev.yml up -d --build api
-docker compose --env-file .env -f infra/docker-compose.dev.yml up -d --build miniapp
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml up -d --build api
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml up -d --build miniapp
 ```
 
 Если менялись миграции БД:
 ```bash
-docker compose --env-file .env -f infra/docker-compose.dev.yml exec api alembic upgrade head
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml exec api alembic upgrade head
 ```
 
 ---
@@ -372,28 +407,31 @@ docker compose --env-file .env -f infra/docker-compose.dev.yml exec api alembic 
 
 ```bash
 # Статус всех сервисов
-docker compose --env-file .env -f infra/docker-compose.dev.yml ps
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml ps
 
-# Перезапуск одного сервиса
-docker compose --env-file .env -f infra/docker-compose.dev.yml restart bot
+# Применить изменения .env к одному сервису (restart .env НЕ перечитывает!)
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml up -d bot
+
+# Просто перезапустить процесс (.env не менялся)
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml restart bot
 
 # Логи одного сервиса
-docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f api
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f api
 
 # Зайти внутрь контейнера
-docker compose --env-file .env -f infra/docker-compose.dev.yml exec api bash
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml exec api bash
 
 # Статус Garage-кластера (должен показать 1 узел HEALTHY).
 # Путь /garage обязателен: образ from scratch, оболочки нет.
-docker compose --env-file .env -f infra/docker-compose.dev.yml \
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml \
   exec garage /garage -c /etc/garage.toml status
 
 # Список бакетов Garage
-docker compose --env-file .env -f infra/docker-compose.dev.yml \
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml \
   exec garage /garage -c /etc/garage.toml bucket list
 
 # Список ключей доступа Garage
-docker compose --env-file .env -f infra/docker-compose.dev.yml \
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml \
   exec garage /garage -c /etc/garage.toml key list
 
 # Проверка S3 с хоста через aws-cli (ключи подставь из своего .env)
@@ -401,30 +439,79 @@ AWS_ACCESS_KEY_ID="<S3_ACCESS_KEY из .env>" \
 AWS_SECRET_ACCESS_KEY="<S3_SECRET_KEY из .env>" \
 aws --endpoint-url=http://127.0.0.1:9000 --region garage s3 ls
 
+# Dev-вход Tailscale serve: статус / выключить
+tailscale serve status
+sudo tailscale serve --https=443 off
+
 # Полный wipe (осторожно — удалит БД и Garage-хранилище)
-docker compose --env-file .env -f infra/docker-compose.dev.yml down -v
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml down -v
 ```
+
+---
+
+## Частые ловушки
+
+- **Команды compose — только из `~/course-bot` и только с `--env-file .env`.**
+  Форма всегда одна:
+  `cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml …`.
+  Без `--env-file .env` compose ищет `.env` рядом с compose-файлом (в `infra/`),
+  не находит — и `${TZ}`, `${POSTGRES_USER}`, `${POSTGRES_PASSWORD}` и прочие
+  подставляются пустыми (compose пишет предупреждения `variable is not set`).
+- **api отвечает на `/healthz`, а не на `/health`.**
+  `curl http://127.0.0.1:8080/healthz` → `{"status":"ok"}`.
+- **`127.0.0.1:9001` — это Garage `s3_web`, не админка.** Веб-интерфейса
+  у Garage нет. Бакеты смотрим через CLI:
+  `docker exec course-bot_garage /garage -c /etc/garage.toml bucket list`.
+- **`S3_REGION` = `garage`** — как `s3_region` в `infra/garage/garage.toml`.
+  Другое значение — тихий 403 на S3-запросах (подпись не сходится).
+- **`up -d --build` долго пересобирает `miniapp`** (HDD). Если код не менялся —
+  хватит `up -d`.
+- **`restart` не перечитывает `.env`.** После правки `.env` — `up -d <сервис>`.
+- **`POST /miniapp/v1/onboarding/first-launch` без initData → `401 TG_INIT_MISSING`** —
+  это норма: эндпоинт требует заголовок `X-Telegram-Init-Data`, который
+  присылает только Telegram при открытии Mini App.
 
 ---
 
 ## Если что-то пошло не так
 
-- `docker compose logs -f <service>` → смотрим ошибку.
+- `cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml logs -f <service>`
+  → смотрим ошибку.
 - **Garage не поднимается:** проверь монтирование `infra/garage/garage.toml`
-  и права на volume-ы. `docker compose logs garage` покажет причину.
-- **Garage падает сразу при старте с ошибкой про аргумент `/garage`:** убери
-  первый элемент из `command` в compose, оставив
-  `command: ["server", "--single-node", "--default-bucket"]`.
+  и права на volume-ы. Причину покажет
+  `cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml logs garage`.
+  `command` в compose не менять: `/garage` в нём — путь к бинарнику внутри
+  образа, так Garage v2.3.0 и запускается на IRONCLAD.
 - **Бакет `photos` не создался:** проверь, что в `.env` заполнены
   `S3_ACCESS_KEY` (`GK` + 32 hex), `S3_SECRET_KEY` (64 hex) и
   `S3_BUCKET_PHOTOS`, и что стек запускался с флагом `--env-file .env`.
   Бакет создаётся только на пустых volume-ах при самом первом старте.
 - **Переменные приехали пустыми / Postgres просит пароль:** ты забыл
-  `--env-file .env`. Compose ищет `.env` рядом с compose-файлом (в `infra/`),
-  а он лежит в корне репозитория.
+  `--env-file .env` или запускал не из `~/course-bot` (см. «Частые ловушки»).
 - **api не стартует из-за db:** ждём `pg_isready` в healthcheck; обычно
   устраняется первым перезапуском после первого init БД.
-- `docker compose down -v` → полный сброс томов (потеря данных БД и Garage!).
+- **Бот молчит, в логах `bot` — «зарегистрирован webhook»:** сними webhook
+  командой `deleteWebhook` (шаг 8).
+- **Mini App не открывается по адресу `*.ts.net`:** проверь
+  `tailscale serve status` на сервере, что устройство с Telegram в tailnet,
+  и исключения прокси VPN (шаг 7).
+- `cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml down -v`
+  → полный сброс томов (потеря данных БД и Garage!).
+
+---
+
+## Прод / внешние тестировщики — позже
+
+Tailscale serve — только для Автора внутри tailnet; внешним тестировщикам
+и участникам он не подходит. План (решение Автора, детали — позже):
+
+- **Вход** — российский VPS с публичным HTTPS.
+- **Туннель дом → VPS** — через `autossh` или WireGuard.
+  **Не Tailscale**: из РФ блокируются его админка и логин.
+- **Не Cloudflare Tunnel**: из РФ ~2200 обрывов за месяц.
+- **Провайдер VPS** — решение Автора (открыто, см. D-5 в `docs/DEFECTS-FOUND.md`).
+- **До любого внешнего доступа** должна быть закрыта проверка подписи initData
+  (Итерация 1, D-7 в `docs/DEFECTS-FOUND.md`).
 
 ---
 

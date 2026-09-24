@@ -1,5 +1,17 @@
 # infra/CLOUDFLARE-TUNNEL.md — публичный HTTPS для локального сервера
 
+> ⛔ **НЕ применять на IRONCLAD.**
+> - `sudo cloudflared service install` (шаг 6) конфликтует с действующей
+>   службой `cloudflared` чужого проекта **maxmover** — её не трогать.
+> - Туннель из РФ нестабилен (~2200 обрывов за месяц).
+> - **Dev-вход — Tailscale serve** (см. `infra/README.md`, шаг 7).
+> - Прод / внешние тестировщики — российский VPS (см. `infra/README.md`,
+>   «Прод / внешние тестировщики — позже»).
+> - Бот на long polling — `setWebhook` (шаг 7 ниже) не выполнять (D-4).
+>
+> Файл сохранён как архив (правило нулевых потерь): зеркало архитектуры
+> (`build/build-order.md`) пока ссылается на него — см. D-5 в `docs/DEFECTS-FOUND.md`.
+
 Пошаговая инструкция для настройки Cloudflare Tunnel со своим доменом.
 Даст стабильный HTTPS-URL для Telegram webhook и Mini App.
 
@@ -121,12 +133,12 @@ sudo journalctl -u cloudflared -f
 WEBAPP_URL=https://coursebot.example.com
 ```
 
-Перезапусти стек:
+Примени `.env` (`restart` его НЕ перечитывает — нужен `up -d`):
 ```bash
-docker compose --env-file .env -f infra/docker-compose.dev.yml restart
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml up -d bot api
 ```
 
-Скажи Telegram, куда слать webhook:
+Скажи Telegram, куда слать webhook (НЕ выполнять: бот на long polling, D-4):
 ```bash
 BOT_TOKEN='<токен>'
 WEBHOOK_URL='https://coursebot.example.com/webhook/telegram'
@@ -178,6 +190,10 @@ cloudflared tunnel delete coursebot
 ---
 
 ## Переезд на VPS
+
+> ⛔ Неактуально: для course-bot Cloudflare Tunnel не используется и на VPS
+> (решение Автора — вход через российский VPS, туннель дом→VPS через autossh
+> или WireGuard; см. `infra/README.md`). Текст ниже — архив.
 
 Когда переедешь на VPS, Cloudflare Tunnel можно **сохранить** —
 он работает откуда угодно. Просто:

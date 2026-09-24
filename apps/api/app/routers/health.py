@@ -1,4 +1,4 @@
-"""/healthz — liveness для Docker HEALTHCHECK, compose и Cloudflare Tunnel."""
+"""/healthz — liveness для Docker HEALTHCHECK и compose."""
 from __future__ import annotations
 
 from fastapi import APIRouter
