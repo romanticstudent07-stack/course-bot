@@ -44,7 +44,9 @@ def build_router(config: BotConfig) -> Router:
     async def on_start(message: Message) -> None:
         if not config.webapp_enabled:
             # WEBAPP_URL пуст или не HTTPS — Menu Button ставить некуда.
-            await message.answer(f"{texts.MINIAPP_UNAVAILABLE}\n\n{texts.FALLBACK_UPDATE_TELEGRAM}")
+            # Нейтральный текст без совета «обновите Telegram» — он здесь не к месту.
+            # TODO(Итерация 1): перенести в text_registry.
+            await message.answer(texts.MINIAPP_NOT_CONNECTED)
             return
 
         # Menu Button персонально для этого чата (дублирует дефолтную, выставленную

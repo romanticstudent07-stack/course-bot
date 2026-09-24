@@ -172,7 +172,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: ${MEM_LIMIT_MINIAPP:-128M}
 
 volumes:
   pgdata:

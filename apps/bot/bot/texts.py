@@ -21,7 +21,11 @@ FALLBACK_UPDATE_TELEGRAM = (
     "Установите последнюю версию Telegram и откройте кнопку меню."
 )
 
-# bot.miniapp_unavailable — WEBAPP_URL ещё не настроен (до Cloudflare Tunnel).
-MINIAPP_UNAVAILABLE = (
-    "Mini App пока недоступен. Попробуйте позже."
+# bot.miniapp_not_connected — WEBAPP_URL пуст или не HTTPS: публичный
+# HTTPS-вход для Mini App ещё не подключён. Совет «обновите Telegram» здесь
+# НЕ даём — причина на нашей стороне, а не в клиенте пользователя.
+# TODO(Итерация 1): перенести в text_registry.
+MINIAPP_NOT_CONNECTED = (
+    "Здравствуйте! Это бот курса.\n\n"
+    "Mini App ещё не подключён. Когда он заработает, здесь появится кнопка для входа."
 )
