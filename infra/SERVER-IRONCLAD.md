@@ -8,7 +8,14 @@
 
 - **Только `127.0.0.1`.** Никогда `0.0.0.0` и никогда без явного bind-хоста
   (`docker-compose` по умолчанию биндит на 0.0.0.0 → выход в LAN!).
-- Наружу — **только** через Cloudflare Tunnel (см. `CLOUDFLARE-TUNNEL.md`).
+- Вход снаружи 127.0.0.1: **dev — Tailscale serve (tailnet only)**, только для Автора
+  (`sudo tailscale serve --bg http://127.0.0.1:5173`, см. `infra/README.md`, шаг 7).
+  В документы — только шаблон адреса `<имя-сервера>.<tailnet>.ts.net`.
+- Cloudflare Tunnel для course-bot **не используется** (из РФ нестабилен; служба
+  `cloudflared` на сервере — чужая, maxmover). `CLOUDFLARE-TUNNEL.md` — архив,
+  на IRONCLAD не применять.
+- Прод / внешние тестировщики — позже: российский VPS как вход, туннель дом→VPS
+  через autossh или WireGuard (решение Автора, провайдер не выбран).
 
 ## Занятые порты (не использовать)
 
@@ -20,7 +27,7 @@
 | 5434 | maxmover PostgreSQL |
 | 6381 | maxmover Redis |
 | 8443 | maxmover webhook |
-| 20241, 38725 | cloudflared / containerd |
+| 20241, 38725 | cloudflared (служба maxmover — не трогать) / containerd |
 
 ## Порты для course-bot (свободны на 2026-09-19)
 
@@ -30,12 +37,12 @@
 | PostgreSQL 16 | 5435 | 127.0.0.1 |
 | Redis 7 | 6382 | 127.0.0.1 |
 | Garage S3 API | 9000 | 127.0.0.1 |
-| Garage Web/Console | 9001 | 127.0.0.1 |
+| Garage `s3_web` (раздача статики, НЕ админка; веб-UI у Garage нет) | 9001 | 127.0.0.1 |
 | Mini App (nginx prod) | 5173 | 127.0.0.1 |
 
 ## S3-совместимое хранилище
 
-**dev:** Garage (`dxflrs/garage:v2.1.0`) — S3-совместимое, Rust, ~30 MB RAM.
+**dev:** Garage (`dxflrs/garage:v2.3.0`) — S3-совместимое, Rust, ~30 MB RAM.
 Заменил MinIO (MinIO удалил официальные Docker-образы в сентябре 2026,
 проект в maintenance mode с декабря 2025).
 
@@ -47,7 +54,8 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
 
 ## Ресурсы (жёсткие лимиты)
 
-- RAM свободно ≈ 4.6 GiB. Сумма лимитов всех контейнеров course-bot **≤ 900 MB**.
+- RAM свободно ≈ 4.6 GiB. Сумма лимитов всех контейнеров course-bot **≤ 1.5 GB**
+  (решение Автора, подтверждено 24.09.2026; реальное потребление стека заметно ниже).
 - Лимиты заданы в `.env` через `MEM_LIMIT_*` и применяются в `docker-compose.dev.yml`.
 - HDD 5400 rpm — сборки медленные. Использовать `python:3.12-slim`, `redis:7-alpine`,
   `postgres:16` (не полные образы), `dxflrs/garage`.
@@ -99,12 +107,15 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
   2. **Деплой через Tailscale** — сервер в оверлее по адресу `100.106.29.5`,
      runner в облаке коннектится по Tailscale.
 - До первого прода автодеплой не нужен — обновление делается вручную:
-  `git pull && docker compose up -d --build`.
+  `cd ~/course-bot && git pull && docker compose --env-file .env -f infra/docker-compose.dev.yml up -d`.
+  `--build` — только если менялся код (и точечно: `up -d --build <сервис>`),
+  на HDD пересборка `miniapp` идёт долго. Если менялись только документы — хватит `git pull`.
 
 ## Стоп-факторы (не трогать без согласия Автора)
 
 - `docker system prune -a --volumes` — уничтожит 6 анонимных томов чужих проектов.
-- Обновление `cloudflared` — обслуживает и maxmover, обновлять аккуратно.
+- Служба `cloudflared` — принадлежит maxmover (course-bot её не использует):
+  не обновлять, не переустанавливать, не выполнять `cloudflared service install`.
 - Порт `/miniapp/` — уже занят мониторингом keep-alive от maxmover.
 - **MinIO deprecated** — не пробовать вернуть, репо архивирован Apr 2026,
   Docker-образы удалены Sep 2026. Мы на Garage.

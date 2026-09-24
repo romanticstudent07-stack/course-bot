@@ -1,7 +1,8 @@
 # infra/docker-compose.dev.yml
 # Локальный контур разработки на сервере IRONCLAD (Ubuntu 26.04, bare-metal).
 # Правила сервера:
-#   - все порты биндятся на 127.0.0.1 (наружу — только Cloudflare Tunnel).
+#   - все порты биндятся на 127.0.0.1 (вход: dev — Tailscale serve, только tailnet,
+#     смотрит на miniapp 127.0.0.1:5173; прод — позже через VPS, решение Автора).
 #   - у всех контейнеров задан лимит памяти (переменные MEM_LIMIT_* в .env).
 #   - префикс проекта course-bot — не пересекается с maxmover_default.
 #   - shared_buffers Postgres ≤ 256 MB (правило хоста).
@@ -109,7 +110,7 @@ services:
         limits:
           memory: ${MEM_LIMIT_GARAGE:-192M}
 
-  # FastAPI backend. Заглушка до Итерации 0-А.
+  # FastAPI backend (скелет Итерации 0-А: /healthz, mock first-launch, csp-report).
   # Развязан от S3: api стартует без garage — S3 нужен только с Итерации 5.
   api:
     build:
@@ -136,7 +137,7 @@ services:
         limits:
           memory: ${MEM_LIMIT_API:-384M}
 
-  # Telegram bot (aiogram 3). Заглушка до Итерации 0-А.
+  # Telegram bot (aiogram 3, скелет Итерации 0-А: /start + Menu Button; long polling, D-4).
   bot:
     build:
       context: ../apps/bot
@@ -156,7 +157,8 @@ services:
         limits:
           memory: ${MEM_LIMIT_BOT:-192M}
 
-  # Mini App (nginx с собранной статикой). Заглушка до Итерации 0-А.
+  # Mini App (nginx с собранной статикой, скелет Итерации 0-А). Единый origin:
+  # nginx сам проксирует /miniapp/v1/** и /security/csp-report в api:8080.
   # Vite dev-режим (порт 5173) — только на dev-машине, не в этом compose.
   miniapp:
     build:
