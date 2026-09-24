@@ -8,6 +8,7 @@ from aiogram import Bot
 from aiogram.methods import SendMessage, SetChatMenuButton
 from aiogram.types import Chat, Message, MenuButtonWebApp, Update, User
 
+from bot import texts
 from bot.app import build_dispatcher
 from bot.config import BotConfig, ConfigError, is_valid_webapp_url
 
@@ -73,12 +74,25 @@ def test_start_private_sets_menu_button_and_greets():
     assert kb[0][0].web_app.url == WEBAPP
 
 
-def test_start_without_webapp_url_sends_fallback_only():
-    calls = asyncio.run(_feed(make_config(webapp_url=""), _start_update()))
+def test_start_with_webapp_url_keeps_current_text():
+    # Поведение при заданном WEBAPP_URL не меняется: приветствие + кнопка.
+    calls = asyncio.run(_feed(make_config(), _start_update()))
+    sends = [c for c in calls if isinstance(c, SendMessage)]
+    assert len(sends) == 1
+    assert sends[0].text == f"{texts.START_WELCOME}\n\n{texts.FALLBACK_UPDATE_TELEGRAM}"
+    assert sends[0].reply_markup is not None
+
+
+@pytest.mark.parametrize("webapp_url", ["", "http://insecure.test/"])
+def test_start_without_https_webapp_url_says_not_connected(webapp_url):
+    calls = asyncio.run(_feed(make_config(webapp_url=webapp_url), _start_update()))
     assert not [c for c in calls if isinstance(c, SetChatMenuButton)]
     sends = [c for c in calls if isinstance(c, SendMessage)]
     assert len(sends) == 1 and sends[0].reply_markup is None
-    assert "последнюю версию Telegram" in sends[0].text
+    assert sends[0].text == texts.MINIAPP_NOT_CONNECTED
+    assert "ещё не подключён" in sends[0].text
+    # Совет «обновите Telegram» здесь не к месту.
+    assert "последнюю версию Telegram" not in sends[0].text
 
 
 def test_start_in_group_is_ignored():
