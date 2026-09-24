@@ -5,7 +5,7 @@
 #   - клик по «Details» у упавшей проверки → откроется лог, красным — упавший шаг.
 #
 # Jobs (каждый виден в PR отдельной строкой):
-#   api      — pytest API + миграция 0001_init на живом postgres:16
+#   api      — pytest API (вкл. тесты с БД) + миграции 0001_init, 0002_tg_user_registry на живом postgres:16
 #   bot      — pytest бота
 #   miniapp  — npm ci, tsc --noEmit, vitest, vite build
 #   docker   — сборка образов api / bot / miniapp (+ nginx -t для miniapp), без push
@@ -67,6 +67,8 @@ jobs:
       PGUSER: ci_user
       PGPASSWORD: ci_only_not_a_secret
       PGDATABASE: course_bot_ci
+      # Тесты с БД (first-launch, миграции) ОБЯЗАНЫ выполняться: без БД — падение, а не skip.
+      REQUIRE_DB_TESTS: "1"
 
     steps:
       - name: Скачать код репозитория
@@ -84,17 +86,21 @@ jobs:
       - name: Установить зависимости API (requirements-dev.txt)
         run: pip install -r requirements-dev.txt
 
-      - name: Запустить тесты API (pytest)
+      # Тесты с БД сами делают upgrade head → ... → downgrade base: после них БД пустая.
+      - name: Запустить тесты API (pytest, включая тесты с БД)
         run: python -m pytest -v
 
       - name: "Миграция: upgrade head (создать таблицы)"
         run: alembic upgrade head
 
-      - name: "Проверка: после upgrade в БД 8 таблиц"
+      # 8 таблиц 0001_init + 1 таблица 0002_tg_user_registry = 9.
+      - name: "Проверка: после upgrade в БД 9 таблиц (есть tg_user_registry)"
         run: |
           n=$(psql -tAc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename <> 'alembic_version'")
           echo "Таблиц в public: $n"
-          test "$n" -eq 8 || { echo "::error::Ожидалось 8 таблиц после upgrade, найдено $n"; exit 1; }
+          test "$n" -eq 9 || { echo "::error::Ожидалось 9 таблиц после upgrade, найдено $n"; exit 1; }
+          r=$(psql -tAc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename = 'tg_user_registry'")
+          test "$r" -eq 1 || { echo "::error::Нет таблицы tg_user_registry после upgrade"; exit 1; }
 
       - name: "Миграция: downgrade base (удалить таблицы)"
         run: alembic downgrade base
