@@ -1,0 +1,260 @@
+# .github/workflows/ci.yml — базовые проверки каждого PR (и каждого push в main).
+#
+# Как читать результат (для Автора):
+#   - в PR внизу список проверок: зелёная галочка = прошло, красный крестик = упало;
+#   - клик по «Details» у упавшей проверки → откроется лог, красным — упавший шаг.
+#
+# Jobs (каждый виден в PR отдельной строкой):
+#   api      — pytest API + миграция 0001_init на живом postgres:16
+#   bot      — pytest бота
+#   miniapp  — npm ci, tsc --noEmit, vitest, vite build
+#   docker   — сборка образов api / bot / miniapp (+ nginx -t для miniapp), без push
+#   guard    — PR не трогает docs/architecture/** и не приносит .env
+#
+# Секретов в этом workflow НЕТ и быть не должно. Все значения ENV ниже —
+# фиктивные, только для CI, и не похожи на настоящие токены.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Минимальные права: только чтение кода.
+permissions:
+  contents: read
+
+# Новый push в тот же PR отменяет предыдущий прогон.
+# Прогоны на main не отменяются — у каждого мержа свой результат.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ------------------------------------------------------------------
+  api:
+    name: api (pytest + миграция)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/api
+
+    # Временная БД только для этого прогона. Удаляется вместе с runner'ом.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: course_bot_ci
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_only_not_a_secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d course_bot_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Фиктивные значения — только для CI.
+      BOT_TOKEN: ci-fake-bot-token
+      WEBHOOK_SECRET: ci-fake-webhook-secret
+      DATABASE_URL: postgresql+psycopg://ci_user:ci_only_not_a_secret@localhost:5432/course_bot_ci
+      ALEMBIC_CONFIG: migrations/alembic.ini
+      PGHOST: localhost
+      PGUSER: ci_user
+      PGPASSWORD: ci_only_not_a_secret
+      PGDATABASE: course_bot_ci
+
+    steps:
+      - name: Скачать код репозитория
+        uses: actions/checkout@v7
+
+      - name: Установить Python 3.12 (как в Dockerfile) с кэшем pip
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            apps/api/requirements.txt
+            apps/api/requirements-dev.txt
+
+      - name: Установить зависимости API (requirements-dev.txt)
+        run: pip install -r requirements-dev.txt
+
+      - name: Запустить тесты API (pytest)
+        run: python -m pytest -v
+
+      - name: "Миграция: upgrade head (создать таблицы)"
+        run: alembic upgrade head
+
+      - name: "Проверка: после upgrade в БД 8 таблиц"
+        run: |
+          n=$(psql -tAc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename <> 'alembic_version'")
+          echo "Таблиц в public: $n"
+          test "$n" -eq 8 || { echo "::error::Ожидалось 8 таблиц после upgrade, найдено $n"; exit 1; }
+
+      - name: "Миграция: downgrade base (удалить таблицы)"
+        run: alembic downgrade base
+
+      - name: "Проверка: после downgrade таблиц не осталось"
+        run: |
+          n=$(psql -tAc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename <> 'alembic_version'")
+          echo "Таблиц в public: $n"
+          test "$n" -eq 0 || { echo "::error::После downgrade остались таблицы: $n"; exit 1; }
+
+      - name: "Миграция: повторный upgrade head (миграция повторяема)"
+        run: alembic upgrade head && alembic current
+
+  # ------------------------------------------------------------------
+  bot:
+    name: bot (pytest)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/bot
+    steps:
+      - name: Скачать код репозитория
+        uses: actions/checkout@v7
+
+      - name: Установить Python 3.12 (как в Dockerfile) с кэшем pip
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            apps/bot/requirements.txt
+            apps/bot/requirements-dev.txt
+
+      - name: Установить зависимости бота (requirements-dev.txt)
+        run: pip install -r requirements-dev.txt
+
+      # Тесты сами подставляют фейковый токен и не ходят в сеть Telegram.
+      - name: Запустить тесты бота (pytest)
+        run: python -m pytest -v
+
+  # ------------------------------------------------------------------
+  miniapp:
+    name: miniapp (tsc + vitest + build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/miniapp
+    steps:
+      - name: Скачать код репозитория
+        uses: actions/checkout@v7
+
+      - name: Установить Node 20 (как в Dockerfile) с кэшем npm
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/miniapp/package-lock.json
+
+      - name: Установить зависимости (npm ci по package-lock.json)
+        run: npm ci --no-audit --no-fund
+
+      - name: Проверить типы TypeScript (tsc --noEmit)
+        run: npx tsc --noEmit
+
+      - name: Запустить тесты Mini App (vitest)
+        run: npx vitest run
+
+      - name: Собрать Mini App (vite build)
+        run: npx vite build
+
+  # ------------------------------------------------------------------
+  docker:
+    name: docker (${{ matrix.app }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      # Если упал один образ — остальные всё равно дособираются: видно все ошибки сразу.
+      fail-fast: false
+      matrix:
+        app: [api, bot, miniapp]
+    steps:
+      - name: Скачать код репозитория
+        uses: actions/checkout@v7
+
+      - name: Собрать образ ${{ matrix.app }} из apps/${{ matrix.app }}/Dockerfile (без push)
+        run: docker build -t course-bot-${{ matrix.app }}:ci apps/${{ matrix.app }}
+
+      - name: Проверить конфиг nginx внутри образа miniapp (nginx -t)
+        if: matrix.app == 'miniapp'
+        run: docker run --rm course-bot-miniapp:ci nginx -t
+
+  # ------------------------------------------------------------------
+  guard:
+    name: guard (docs/architecture и .env)
+    # Правило про изменённые файлы имеет смысл только для PR.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Скачать код репозитория (вся история — нужна для сравнения с базой PR)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Составить список файлов, изменённых в PR
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          echo "Изменено файлов: $(wc -l < "$RUNNER_TEMP/changed.txt")"
+          cat "$RUNNER_TEMP/changed.txt"
+
+      # Исключение — PR, созданный .github/workflows/sync-architecture.yml.
+      # Признак (по самому workflow): ветка chore/sync-architecture, ветка из ЭТОГО
+      # репозитория (не форк), и PR меняет ТОЛЬКО docs/architecture/**.
+      # Вторая защита — CODEOWNERS: ревью Автора обязательно для docs/architecture/**.
+      - name: "Правило 1: docs/architecture/** — только через sync-architecture"
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          arch=$(grep -E '^docs/architecture/' "$RUNNER_TEMP/changed.txt" || true)
+          other=$(grep -vE '^docs/architecture/' "$RUNNER_TEMP/changed.txt" || true)
+
+          if [ -z "$arch" ]; then
+            echo "OK: docs/architecture/** не изменён."
+            exit 0
+          fi
+
+          if [ "$HEAD_REF" = "chore/sync-architecture" ] && [ "$HEAD_REPO" = "$THIS_REPO" ] && [ -z "$other" ]; then
+            echo "OK: это PR синхронизации из sync-architecture.yml (меняет только docs/architecture/**)."
+            exit 0
+          fi
+
+          echo "::error::PR меняет read-only зеркало docs/architecture/**"
+          echo "Файлы:"
+          echo "$arch" | sed 's/^/   /'
+          echo ""
+          echo "Архитектура правится только в репозитории DOCS-course-bot и приходит сюда"
+          echo "PR-ом из .github/workflows/sync-architecture.yml (ветка chore/sync-architecture)."
+          echo "Расхождения с реальностью записывай в docs/DEFECTS-FOUND.md."
+          exit 1
+
+      # Шаблон .githooks/pre-commit (.env, .env.<что-угодно> в любой папке)
+      # + *.env (как в .gitignore). Разрешён только *.env.example.
+      # Проверяются ВСЕ файлы в коде PR, а не только изменённые.
+      - name: "Правило 2: в PR нет файлов .env (кроме .env.example)"
+        run: |
+          bad=$(git ls-files | grep -E '(^|/)\.env(\.|$)|\.env$' | grep -vE '\.env\.example$' || true)
+          if [ -z "$bad" ]; then
+            echo "OK: файлов .env в PR нет."
+            exit 0
+          fi
+          echo "::error::В PR есть файл(ы) .env — секреты не должны попадать в git"
+          echo "$bad" | sed 's/^/   /'
+          echo ""
+          echo "Удали их из git: git rm --cached <файл>, закоммить и запушь снова."
+          echo "Если секрет уже был запушен — считай его скомпрометированным и замени."
+          exit 1
