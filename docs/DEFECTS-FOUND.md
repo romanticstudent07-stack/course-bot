@@ -125,4 +125,24 @@
   «Как валидировать initData».
 - **Ждём решения Автора:** нет (план есть).
 
-<!-- следующие записи (D-8, ...) добавляет агент по мере обнаружения -->
+## D-8. BotFather: `/setmenubutton`, `/setdomain`, `/newapp` не нужны для Mini App
+
+- **Файл архитектуры (зеркало):** `build/DIVISION.md` (Bot: «Меню-кнопка → открытие
+  Mini App (`WebAppInfo`, `/setmenubutton`)»; приоритеты бота, п.1: «Menu Button →
+  Mini App URL (`/setmenubutton` в BotFather)»), `build/build-order.md`
+  (Итерация 0-А, шаг 2: `/newbot`, `/newapp` «домен привяжется после туннеля»;
+  Итерация 0-Б, шаг 2: `/newbot`, `/newapp`, `/setmenubutton https://<s3-domain-ru>/`, `/setdomain`).
+- **Файлы реализации:** `apps/bot/bot/app.py` (Menu Button ставится ботом через
+  `set_chat_menu_button` из `WEBAPP_URL`), `infra/README.md` (шаги 1 и 8).
+- **Суть расхождения:** зеркало описывает настройку Mini App руками в BotFather.
+  Факты (проверены Автором на IRONCLAD):
+  - Menu Button бот ставит сам при старте из `WEBAPP_URL` — `/setmenubutton` не нужен;
+  - `/setdomain` — настройка Telegram Login Widget, к Mini App отношения не имеет;
+  - `/newapp` нужен только для прямой ссылки вида `t.me/<бот>/<app>`.
+- **Сделано здесь:** `infra/README.md`, шаги 1 и 8, переписаны под эти факты.
+- **Предлагаемое решение:** править в DOCS-course-bot (`build/DIVISION.md`,
+  `build/build-order.md`): Menu Button — через Bot API из `WEBAPP_URL`;
+  `/setdomain` — только для Login Widget; `/newapp` — только для прямой ссылки.
+- **Ждём решения Автора:** нет.
+
+<!-- следующие записи (D-9, ...) добавляет агент по мере обнаружения -->
