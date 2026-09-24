@@ -91,7 +91,7 @@ course-bot/
 │   └── api/               FastAPI + PostgreSQL 16 + Redis 7 + Alembic
 ├── packages/
 │   └── shared/            общие типы, схемы, константы, OpenAPI-контракт
-├── infra/                 docker-compose, IaC, миграции, cloudflared config, garage/
+├── infra/                 docker-compose, IaC, миграции, garage/, инструкции dev-входа (Tailscale serve)
 ├── docs/
 │   ├── architecture/      ← read-only зеркало DOCS-course-bot (не править!)
 │   └── DEFECTS-FOUND.md   ← сюда писать расхождения архитектуры с реальностью
@@ -230,7 +230,10 @@ PAYMENT_CURRENCY=RUB
 - **S3 prod:** Yandex Object Storage (или Timeweb / VK Cloud — открытый вопрос Автора).
   Переезд dev → prod — смена `S3_ENDPOINT` в `.env`, код на `boto3` не переписывается.
 - **Хостинг разработки:** локальный сервер Автора (Ubuntu Server IRONCLAD).
-  Публичный webhook — через Cloudflare Tunnel (именованный, свой домен).
+  Бот — на long polling, webhook не ставится (D-4). Dev-вход в Mini App —
+  Tailscale serve (только tailnet, только Автор); Cloudflare Tunnel не используется.
+- **Вход prod / внешние тестировщики:** позже — российский VPS как вход, туннель
+  дом→VPS через autossh или WireGuard; провайдер VPS — открытый вопрос Автора (D-5).
 - **Хостинг prod:** будет выбран позже (Yandex Cloud vs Timeweb — открытый вопрос).
 
 ## Открытые вопросы Автора (агент их не решает)

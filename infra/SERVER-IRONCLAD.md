@@ -104,7 +104,7 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
 - GitHub Actions **не достучится до сервера напрямую** (UFW блокирует).
 - Способы:
   1. **Self-hosted runner** на сервере (простой, но требует поддержки).
-  2. **Деплой через Tailscale** — сервер в оверлее по адресу `100.106.29.5`,
+  2. **Деплой через Tailscale** — сервер в оверлее по адресу `<IP-сервера-в-tailnet>`,
      runner в облаке коннектится по Tailscale.
 - До первого прода автодеплой не нужен — обновление делается вручную:
   `cd ~/course-bot && git pull && docker compose --env-file .env -f infra/docker-compose.dev.yml up -d`.

@@ -50,7 +50,6 @@ logs/
 
 # --- Данные базы и хранилища (при docker-compose down -v могут остаться) ---
 pgdata/
-minio-data/
 redis-data/
 
 # --- Cloudflared (никогда не коммитить credentials туннеля) ---
