@@ -24,7 +24,7 @@
 | `infra/` | docker-compose для локального запуска |
 | `docs/architecture/` | Read-only зеркало DOCS-course-bot |
 | `docs/DEFECTS-FOUND.md` | Расхождения архитектуры с реальностью |
-| `.github/workflows/` | GitHub Actions: sync-architecture.yml (полноценный CI появится позже) |
+| `.github/workflows/` | GitHub Actions: `ci.yml` (проверки каждого PR) и `sync-architecture.yml` |
 | `.githooks/` | Локальные git-хуки (защита от случайных коммитов в архитектуру и `.env`) |
 | `.genspark/rules.md` | Жёсткие правила для Genspark Code |
 
@@ -94,6 +94,8 @@ Cloudflare Tunnel для course-bot не используется (из РФ н�
 
 Пошаговая инструкция запуска — в `infra/README.md`.
 Правила сервера — в `infra/SERVER-IRONCLAD.md`.
+
+Тесты локально (Python 3.12): `pip install -r apps/api/requirements-dev.txt -r apps/bot/requirements-dev.txt`, затем `python -m pytest` в `apps/api` и `apps/bot` (в Docker-образы dev-зависимости не попадают).
 
 ## Ключевые правила
 

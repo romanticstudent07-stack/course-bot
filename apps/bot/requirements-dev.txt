@@ -1,0 +1,6 @@
+# apps/bot/requirements-dev.txt — зависимости ТОЛЬКО для тестов (CI и локально).
+# В Docker-образ НЕ попадают: Dockerfile ставит только requirements.txt.
+# Установка: pip install -r apps/bot/requirements-dev.txt
+-r requirements.txt
+
+pytest==9.1.1
