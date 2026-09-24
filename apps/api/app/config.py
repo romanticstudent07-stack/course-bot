@@ -40,9 +40,18 @@ class Settings(BaseSettings):
     s3_region: str = ""
     s3_bucket_photos: str = ""
 
-    # --- initData (AGENTS.md): TTL auth_date, 24 ч стандарт, 1 ч для чувствительных ---
+    # --- initData: свежесть auth_date (app/telegram_init_data.py) ---
+    # TTL по умолчанию 86400 (24 ч) — решение Автора (PR 1a), по источникам:
+    #   - build/miniapp-api-contract.yaml → securitySchemes.TelegramInitData: 24 ч;
+    #   - build/miniapp-security-checklist.md §2: «ориентир — 3600»;
+    #   - 14-data-durability.md §14.13 / INV-B14-INITDATA-TTL / R325: 300 (write) / 3600 (read)
+    #     при наличии session_jwt.
+    # Противоречие источников — docs/DEFECTS-FOUND.md, D-9 (решение Автора к проду).
     init_data_max_age_seconds: int = Field(default=86400, ge=1)
+    # Для /refund, /erasure_* — будущие итерации (сейчас не используется).
     init_data_sensitive_max_age_seconds: int = Field(default=3600, ge=1)
+    # Допуск на расхождение часов: auth_date > now + skew → отказ (решение Автора, PR 1a).
+    init_data_future_skew_seconds: int = Field(default=60, ge=0)
 
     # --- Часовой пояс (SERVER-IRONCLAD.md) ---
     server_timezone: str = "Europe/Moscow"
