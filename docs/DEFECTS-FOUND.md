@@ -17,6 +17,19 @@
 
 ---
 
+## ⛔ Блокеры до выхода на VPS (любой внешний доступ, кроме Автора в tailnet)
+
+Пока пункты ниже не закрыты, Mini App **не открывать** никому, кроме Автора
+(dev-вход — Tailscale serve, только tailnet). Список ведёт агент; закрывает — PR + решение Автора.
+
+| # | Блокер | Где описан | Статус |
+|---|---|---|---|
+| B-1 | Rate-limit на `/miniapp/v1/**` (Б14 R328) | D-7 | не реализован (отдельный PR) |
+| B-2 | Согласия (`legal_consents`, C1–C6) **до** создания `pid` (ADD3 ordering) | D-10 | не реализовано: сейчас `pid` создаётся сразу после проверки возраста |
+| B-3 | Роли и GRANT в БД: приложение ходит под владельцем БД; ролей/GRANT на `tg_user_registry` нет | D-13 | не реализовано |
+
+---
+
 ## D-1. Блок 15: доставка медиа
 
 - **Файл архитектуры (зеркало):** `docs/architecture/build/DIVISION.md`,
@@ -135,7 +148,8 @@
   - противоречие источников по TTL и `session_jwt` — см. D-9;
   - TTL 1 ч для `/refund`, `/erasure_*` (`init_data_sensitive_max_age_seconds` есть
     в config, но не применяется — таких маршрутов ещё нет);
-  - rate-limit на `/miniapp/v1/**` (Б14 R328) — не реализован;
+  - rate-limit на `/miniapp/v1/**` (Б14 R328) — не реализован; **блокер до VPS (B-1)**,
+    отдельный PR (решение Автора, PR 1b+1c);
   - анти-replay сверх TTL (одна initData может использоваться многократно в пределах
     24 ч) — зависит от решения по D-9;
   - R344 (сверка `user.id` vs `query_id`, security-audit) — не реализовано.
@@ -183,6 +197,10 @@
      по старшинству) делает first-launch Mini App ЕДИНСТВЕННОЙ точкой создания участника;
      R327 это прямо запрещает. Для PR 1a не критично (проверка initData от этого не
      зависит), но важно для PR 1b+ (first-launch с БД).
+     **PR 1b+1c (решение Автора):** применён SEAM-1 — неизвестный `tg_user_id` на
+     first-launch создаётся, 403 для него не отдаётся (403 — только возрастной гейт).
+     Мок 501 и `details.tg_user_id` удалены. Правка зеркала (пометить R327 отменённым) —
+     по-прежнему в DOCS-course-bot.
   3. **503:** контракт не описывает ответ при неправильной конфигурации сервера
      (пустой `BOT_TOKEN`). Реализация отвечает 503 `SERVICE_MISCONFIGURED` в формате
      `schemas.Error` — в контракте такого ответа нет.
@@ -197,4 +215,80 @@
 - **Ждём решения Автора:** да — модель авторизации и TTL к проду (когда появится
   `session_jwt` или будет решено без него); правки зеркала — в DOCS-course-bot.
 
-<!-- следующие записи (D-10, ...) добавляет агент по мере обнаружения -->
+## D-10. Порядок first-launch: согласия и оплата до `pid` — источники расходятся, в контракте их нет
+
+- **Файлы архитектуры (зеркало):**
+  - `normative/errata-unified.md` → ADD3: `ordering: [age_soft_checkbox, age_hard_check_dob,
+    legal_consents, pid_creation]`;
+  - `build/miniapp-security-checklist.md` §3: `age_gate → legal_consents → payment → pid_creation`;
+  - `AGENTS.md` (репо реализации), «Связь с Mini App»: сначала SEAM-1 создаёт participant,
+    потом проверяется `payment_confirmed`, потом Age Gate → PID;
+  - `build/miniapp-api-contract.yaml` → first-launch: в теле только `birth_date`
+    (нет ни soft-checkbox, ни согласий, ни ссылки на оплату).
+- **Файл реализации:** `apps/api/app/routers/onboarding.py`.
+- **Суть расхождения:** три разных порядка (оплата до `pid` / после / не упомянута), а контракт
+  first-launch не несёт данных ни для согласий, ни для soft-checkbox 18+.
+- **Сделано здесь (ВРЕМЕННО, решение Автора, PR 1b+1c):** `pid` создаётся сразу после
+  hard-check даты рождения (≥ 18 полных лет в `SERVER_TIMEZONE`). Согласия, soft-checkbox
+  и оплата не проверяются.
+- **⛔ БЛОКЕР до любого внешнего доступа (B-2):** согласия (`legal_consents`) до создания `pid`.
+- **Предлагаемое решение:** в DOCS-course-bot выбрать один порядок и расширить контракт
+  first-launch (или ввести отдельный эндпоинт согласий до `pid`).
+- **Ждём решения Автора:** да.
+
+## D-11. `participant_state.lifecycle_phase`: значения 0001 ≠ FSM И2
+
+- **Файлы архитектуры (зеркало):** `build/db-schema.sql` (комментарий к `lifecycle_phase`:
+  `pre_road, active, pending_erasure, erased`) vs `normative/I2-wave-b.md` →
+  `participant_state_contract.fsm_participant.states: [pre_registered, onboarding, active,
+  sleeping, muted, erased]`.
+- **Файл реализации:** `apps/api/migrations/versions/…0001_init…` (дословно из db-schema.sql).
+- **Суть расхождения:** два разных набора состояний; неясно, какая фаза у участника сразу
+  после first-launch.
+- **Сделано здесь:** ничего — в PR 1b+1c `participant_state` не пишется (решение Автора:
+  писатель — только проектор, E1/INV-1; отдельный PR вместе с проектором).
+- **Ждём решения Автора:** да — до PR с проектором.
+
+## D-12. first-launch: `short_no` и ответы вне контракта
+
+- **Файлы архитектуры (зеркало):** `normative/I1-wave-a.md` (`tg_user_id_pid_registry.columns`
+  без `short_no`), `06-participant-card.md` §6.3 (`short_number: "#000123"`,
+  `assigned_at: registration`), `build/miniapp-api-contract.yaml` (first-launch: 201/401/403).
+- **Файлы реализации:** `apps/api/migrations/versions/…0002_tg_user_registry…`,
+  `apps/api/app/routers/onboarding.py`, `apps/api/app/participants.py`.
+- **Суть расхождения / сделано здесь:**
+  1. **`short_no`** есть в контракте (`PidCreated`) и в Б6, но не в колонках И1. Добавлен в
+     `tg_user_registry` как `bigint GENERATED ALWAYS AS IDENTITY UNIQUE`, формат ответа
+     `#%06d` (после 999999 — больше цифр). **Пропуски номеров возможны** (конфликт/гонка/откат
+     расходуют значение последовательности) — допустимо, номер только для показа (решение Автора).
+  2. **Повторный вызов** → 201 с тем же телом (как в контракте, решение Автора). После
+     tombstone тот же `tg_user_id` получает новый `pid` и новый `short_no` (И1, Р243).
+  3. **503 `SERVICE_UNAVAILABLE`** (БД недоступна) — в формате `schemas.Error`, в контракте
+     такого ответа нет (решение Автора). Также 503 `SERVICE_MISCONFIGURED`, если
+     `SERVER_TIMEZONE` неизвестен (fail closed; для пустого `BOT_TOKEN` — см. D-9 п.3).
+  4. **422** (`BIRTH_DATE_IN_FUTURE` и ошибки валидации тела) — в контракте нет.
+  5. **«Сегодня» для возраста** — дата в `SERVER_TIMEZONE` (Europe/Moscow), а не
+     `tz_at(pid_candidate)` из ADD3: часовой пояс участника на first-launch ещё неизвестен
+     (решение Автора).
+  6. **Дата рождения не хранится** (решение Автора): проверка только в момент запроса.
+- **Предлагаемое решение:** в DOCS-course-bot добавить `short_no` в колонки И1, описать
+  в контракте 422/503 и семантику повторного 201.
+- **Ждём решения Автора:** нет (решения приняты); правки зеркала — в DOCS-course-bot.
+
+## D-13. Роли и GRANT для `tg_user_registry` не определены; приложение ходит под владельцем БД
+
+- **Файлы архитектуры (зеркало):** `build/db-schema.sql` (6 ролей, GRANT только на таблицы 0001),
+  `build/db-tables-index.md` (роли только для `participant_state`), `normative/I2-wave-b.md`
+  (`read_only_enforcement`), `normative/OVERRIDES.yaml` N-02.
+- **Файлы реализации:** `apps/api/migrations/versions/…0002_tg_user_registry…`,
+  `apps/api/app/db/session.py` (DSN из `.env` — сейчас пользователь-владелец БД).
+- **Суть расхождения:** для `tg_user_registry` ролей/GRANT в архитектуре нет. API подключается
+  под `POSTGRES_USER` (владелец БД) — это обходит INV-1/E1 на уровне прав (приложение
+  технически может писать и в `participant_state`).
+- **Сделано здесь:** ничего (решение Автора — отложить). В коде API запись в
+  `participant_state` отсутствует.
+- **⛔ БЛОКЕР к проду / до VPS (B-3):** отдельная роль приложения с минимальными GRANT
+  (`tg_user_registry`: SELECT, INSERT; `participant_state`: только через reader/projector).
+- **Ждём решения Автора:** да — набор ролей и кто их создаёт (миграция vs ручная операция).
+
+<!-- следующие записи (D-14, ...) добавляет агент по мере обнаружения -->

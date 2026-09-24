@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import os
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
@@ -14,7 +16,9 @@ from sqlalchemy import engine_from_config, pool
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: миграция, запущенная из процесса приложения/тестов,
+    # не должна глушить уже созданные логгеры приложения.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 def _build_dsn() -> str:
@@ -38,9 +42,16 @@ def _build_dsn() -> str:
 
 config.set_main_option("sqlalchemy.url", _build_dsn())
 
-# target_metadata будет заполнен Агентом при Итерации 0-А
-# (импорт декларативной базы SQLAlchemy).
-target_metadata = None
+# apps/api в sys.path: alembic запускается и из apps/api (CI), и из /app (контейнер).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.db import models  # noqa: F401 — регистрирует модели в Base.metadata
+from app.db.base import Base
+
+# Метаданные моделей. Схему по-прежнему создают ТОЛЬКО ручные миграции
+# (0001 — дословно из db-schema.sql); autogenerate — лишь подсказка.
+# Совпадение моделей с живой схемой проверяет tests/test_db_models.py.
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

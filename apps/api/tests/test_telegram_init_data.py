@@ -317,14 +317,18 @@ def test_http_invalid_is_401_without_leaks(api_client, caplog, make_raw):
     assert "reason=" in caplog.text  # причина в логе есть
 
 
-def test_http_valid_is_501_with_own_tg_user_id(api_client, caplog):
+def test_http_valid_passes_guard_without_leaks(api_client, caplog):
+    # Мок 501 с details.tg_user_id удалён (PR 1b+1c). Валидная initData проходит проверку
+    # и доходит до БД; у api_client БД недоступна → 503 SERVICE_UNAVAILABLE (не 401).
     caplog.set_level(logging.DEBUG)
     raw = valid_init_data(user={"id": 123456789, "first_name": "Автор"})
     r = api_client.post(FIRST_LAUNCH, json=ADULT, headers={INIT_DATA_HEADER: raw})
-    assert r.status_code == 501
-    assert r.json()["details"] == {"tg_user_id": 123456789}
+    assert r.status_code == 503
+    assert r.json()["code"] == "SERVICE_UNAVAILABLE"
+    assert "details" not in r.json()
     assert raw not in caplog.text
     assert FAKE_BOT_TOKEN not in caplog.text
+    assert "Автор" not in caplog.text
 
 
 def test_http_empty_bot_token_is_503(api_client, caplog):

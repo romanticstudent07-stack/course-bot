@@ -5,7 +5,8 @@
 
 Маршруты:
   GET  /healthz                              — liveness (без initData)
-  POST /miniapp/v1/onboarding/first-launch   — mock (SEAM-1), initData проверяется
+  POST /miniapp/v1/onboarding/first-launch   — SEAM-1: создание/поиск участника
+                                               (tg_user_registry), initData проверяется
   POST /security/csp-report                  — приёмник CSP-репортов (E2), без initData
                                                (security: [] в miniapp-api-contract.yaml)
 

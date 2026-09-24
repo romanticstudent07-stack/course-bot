@@ -1,11 +1,13 @@
-"""Тесты API: health, онбординг-мок, CSP-репорт. initData подписана по-настоящему."""
+"""Тесты API: health, отказ first-launch без initData, full_years, CSP-репорт.
+
+First-launch с БД и возрастной гейт — tests/test_first_launch.py.
+"""
 from datetime import date
 
 import pytest
 
 from app.routers.onboarding import full_years
 from app.telegram_init_data import INIT_DATA_HEADER
-from tests.conftest import TEST_USER_ID, valid_init_data
 
 FIRST_LAUNCH = "/miniapp/v1/onboarding/first-launch"
 
@@ -30,41 +32,6 @@ def test_first_launch_rejects_init_data_without_hash(api_client):
     )
     assert r.status_code == 401
     assert r.json()["code"] == "TG_INIT_INVALID"
-
-
-def test_first_launch_underage_is_403_and_no_pid(api_client):
-    today = date.today()
-    minor = today.replace(year=today.year - 17).isoformat() if not (
-        today.month == 2 and today.day == 29
-    ) else date(today.year - 17, 2, 28).isoformat()
-    r = api_client.post(
-        FIRST_LAUNCH, json={"birth_date": minor}, headers={INIT_DATA_HEADER: valid_init_data()}
-    )
-    assert r.status_code == 403
-    assert r.json()["code"] == "AGE_GATE_UNDERAGE"
-    assert "pid" not in r.json()
-
-
-def test_first_launch_adult_is_mock_501_with_tg_user_id(api_client):
-    r = api_client.post(
-        FIRST_LAUNCH,
-        json={"birth_date": "1990-01-01"},
-        headers={INIT_DATA_HEADER: valid_init_data()},
-    )
-    assert r.status_code == 501
-    body = r.json()
-    assert body["code"] == "NOT_IMPLEMENTED"
-    assert body["details"] == {"tg_user_id": TEST_USER_ID}
-    assert "pid" not in body
-
-
-def test_first_launch_future_birth_date(api_client):
-    r = api_client.post(
-        FIRST_LAUNCH,
-        json={"birth_date": "2999-01-01"},
-        headers={INIT_DATA_HEADER: valid_init_data()},
-    )
-    assert r.status_code == 422
 
 
 @pytest.mark.parametrize(
