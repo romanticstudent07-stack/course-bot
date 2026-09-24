@@ -115,15 +115,31 @@
 - **Файл архитектуры (зеркало):** `build/miniapp-api-contract.yaml`
   (`securitySchemes.TelegramInitData`), `build/miniapp-security-checklist.md`,
   `build/build-order.md` (Итерация 1: «Валидация `initData` на сервере»).
-- **Файл реализации:** `apps/api/app/telegram_init_data.py`.
-- **Суть расхождения:** в Итерации 0-А это заглушка: заголовок
-  `X-Telegram-Init-Data` обязателен (без него — `401 TG_INIT_MISSING`), но
-  HMAC-подпись и `auth_date` НЕ проверяются (`verified=False`). Пока вход только
-  через Tailscale serve (tailnet, один Автор), риск ограничен.
-- **Предлагаемое решение:** реализовать проверку подписи и TTL в Итерации 1
-  ДО любого внешнего доступа (Tailscale Funnel, VPS). План есть — AGENTS.md,
-  «Как валидировать initData».
-- **Ждём решения Автора:** нет (план есть).
+- **Файл реализации:** `apps/api/app/telegram_init_data.py`, `apps/api/main.py`.
+- **Суть расхождения (было):** в Итерации 0-А — заглушка: заголовок
+  `X-Telegram-Init-Data` обязателен, но HMAC-подпись и `auth_date` НЕ проверялись
+  (`verified=False`).
+- **Закрыто PR 1a («Итерация 1a: проверка initData (HMAC + TTL)»):**
+  - HMAC-SHA256 по алгоритму Telegram (`secret_key = HMAC("WebAppData", BOT_TOKEN)`,
+    `data_check_string` без `hash`, поле `signature` и неизвестные поля остаются),
+    сравнение `hmac.compare_digest`; только стандартная библиотека;
+  - TTL `auth_date` — `INIT_DATA_MAX_AGE_SECONDS`, по умолчанию 86400; `auth_date`
+    дальше `now + 60 с` (`init_data_future_skew_seconds`) — отказ;
+  - зависимость `require_init_data` на уровне роутера — на ВСЕХ `/miniapp/v1/**`;
+    `/healthz` и `/security/csp-report` — без проверки;
+  - ответы: 401 `TG_INIT_MISSING` (нет/пустой заголовок), 401 `TG_INIT_INVALID`
+    (всё остальное), 503 `SERVICE_MISCONFIGURED` (пустой `BOT_TOKEN`, fail closed);
+    в лог — только причина (`reason`), без initData, hash и токена;
+  - dev-обхода проверки нет.
+- **Остаётся открытым:**
+  - противоречие источников по TTL и `session_jwt` — см. D-9;
+  - TTL 1 ч для `/refund`, `/erasure_*` (`init_data_sensitive_max_age_seconds` есть
+    в config, но не применяется — таких маршрутов ещё нет);
+  - rate-limit на `/miniapp/v1/**` (Б14 R328) — не реализован;
+  - анти-replay сверх TTL (одна initData может использоваться многократно в пределах
+    24 ч) — зависит от решения по D-9;
+  - R344 (сверка `user.id` vs `query_id`, security-audit) — не реализовано.
+- **Ждём решения Автора:** нет по самой проверке; по TTL — см. D-9.
 
 ## D-8. BotFather: `/setmenubutton`, `/setdomain`, `/newapp` не нужны для Mini App
 
@@ -145,4 +161,40 @@
   `/setdomain` — только для Login Widget; `/newapp` — только для прямой ссылки.
 - **Ждём решения Автора:** нет.
 
-<!-- следующие записи (D-9, ...) добавляет агент по мере обнаружения -->
+## D-9. initData: противоречия в зеркале (TTL, session_jwt, 403 vs SEAM-1, 503)
+
+- **Файлы архитектуры (зеркало):**
+  - `build/miniapp-api-contract.yaml` → `securitySchemes.TelegramInitData`:
+    TTL `auth_date` 24 ч (1 ч для `/erasure`, `/refund`); ответы 401/403/409, **503 нет**;
+  - `AGENTS.source.md` и `build/miniapp-frontend-stack.md` (§Аутентификация): 24 ч / 1 ч;
+  - `build/miniapp-security-checklist.md` §2: `max_age_seconds`, «ориентир — 3600»;
+  - `14-data-durability.md` §14.13, `INV-B14-INITDATA-TTL`, `R325`–`R327`,
+    `auth_date_ttl: {write: 300, read: 3600}`: TTL 5 мин (write) / 60 мин (read),
+    затем `POST /miniapp/auth` → `session_jwt` HS256 TTL 60 мин;
+    `R327`: «несуществующий `tg_user_id` → 403 (участник создаётся только через
+    bot-онбординг); авто-создание участника через Mini App запрещено».
+- **Файлы реализации:** `apps/api/app/telegram_init_data.py`, `apps/api/app/config.py`,
+  `.env.example`.
+- **Суть расхождения:**
+  1. **TTL:** три разных значения (24 ч / 3600 / 300+3600). Модель Б14 опирается на
+     `session_jwt`, которого в контракте `miniapp-api-contract.yaml` нет (там initData
+     на каждом запросе). Без `session_jwt` TTL 300 с сломает Mini App через 5 минут.
+  2. **403 для неизвестного `tg_user_id` (Б14 R327) vs SEAM-PATCH-1:** SEAM-1 (выше Б14
+     по старшинству) делает first-launch Mini App ЕДИНСТВЕННОЙ точкой создания участника;
+     R327 это прямо запрещает. Для PR 1a не критично (проверка initData от этого не
+     зависит), но важно для PR 1b+ (first-launch с БД).
+  3. **503:** контракт не описывает ответ при неправильной конфигурации сервера
+     (пустой `BOT_TOKEN`). Реализация отвечает 503 `SERVICE_MISCONFIGURED` в формате
+     `schemas.Error` — в контракте такого ответа нет.
+- **Сделано здесь (решение Автора, PR 1a):** TTL по умолчанию 86400 (как в контракте);
+  `auth_date > now + 60 с` — отказ; 503 `SERVICE_MISCONFIGURED` при пустом `BOT_TOKEN`.
+  Для R327 ничего не делалось — применяется SEAM-1 как старший слой.
+- **Предлагаемое решение:** в DOCS-course-bot
+  (а) выбрать одну модель авторизации: «initData на каждом запросе, TTL N» или
+  «initData → session_jwt» (Б14) и привести к ней контракт, checklist и Б14;
+  (б) пометить R327 как отменённый SEAM-PATCH-1 (или внести в OVERRIDES);
+  (в) добавить в контракт `503` (`SERVICE_MISCONFIGURED`) в `components.responses`.
+- **Ждём решения Автора:** да — модель авторизации и TTL к проду (когда появится
+  `session_jwt` или будет решено без него); правки зеркала — в DOCS-course-bot.
+
+<!-- следующие записи (D-10, ...) добавляет агент по мере обнаружения -->
