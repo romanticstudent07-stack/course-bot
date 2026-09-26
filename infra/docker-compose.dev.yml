@@ -155,7 +155,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${MEM_LIMIT_BOT:-192M}
+          memory: ${MEM_LIMIT_BOT:-512M}
 
   # Mini App (nginx с собранной статикой, скелет Итерации 0-А). Единый origin:
   # nginx сам проксирует /miniapp/v1/** и /security/csp-report в api:8080.
