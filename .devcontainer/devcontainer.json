@@ -1,0 +1,9 @@
+{
+  "name": "course-bot",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "20" }
+  },
+  "postCreateCommand": "git config core.hooksPath .githooks && chmod +x .githooks/pre-commit && mkdir -p .tmp",
+  "hostRequirements": { "cpus": 2 }
+}
