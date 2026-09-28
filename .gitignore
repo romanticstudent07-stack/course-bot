@@ -57,7 +57,9 @@ redis-data/
 *.cloudflared.json
 
 # --- Редакторы и ОС ---
-.vscode/
+# .vscode: игнорируем всё, КРОМЕ settings.json (там правило «концы строк LF»)
+.vscode/*
+!.vscode/settings.json
 .idea/
 .DS_Store
 Thumbs.db

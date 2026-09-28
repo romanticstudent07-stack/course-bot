@@ -264,3 +264,16 @@ jobs:
           echo "Удали их из git: git rm --cached <файл>, закоммить и запушь снова."
           echo "Если секрет уже был запушен — считай его скомпрометированным и замени."
           exit 1
+      - name: "Концы строк только LF (нет CRLF в git)"
+        run: |
+          bad=$(git ls-files --eol | grep -E '^i/(crlf|mixed)' || true)
+          if [ -z "$bad" ]; then
+            echo "OK: все файлы в git с LF."
+            exit 0
+          fi
+          echo "::error::В git есть файлы с CRLF (обычно после github.dev / vscode.dev)"
+          echo "$bad" | sed 's/^/   /'
+          echo ""
+          echo "Починка в Codespaces: git add --renormalize . && git commit -m 'chore: LF' && git push"
+          exit 1
+          

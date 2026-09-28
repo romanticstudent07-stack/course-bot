@@ -3,8 +3,8 @@
 # Тесты с БД, сборку Docker-образов и guard делает CI в PR.
 #
 # Запуск (из любой папки репо):
-#   bash tools/check.sh              # api + bot + miniapp
-#   bash tools/check.sh api          # только нужное: api / bot / miniapp (можно несколько)
+#   bash tools/check.sh              # eol + api + bot + miniapp
+#   bash tools/check.sh api          # eol + только нужное: api / bot / miniapp (можно несколько)
 # Лог: .tmp/check.log  →  в чат КОДЕР:  tail -n 60 .tmp/check.log
 
 set -uo pipefail
@@ -33,6 +33,18 @@ miniapp_app() {
 }
 
 fail=0
+
+# 0. Концы строк: в git только LF (github.dev / vscode.dev игнорируют .gitattributes и пишут CRLF).
+echo "===== eol =====" | tee -a "$LOG"
+bad_eol=$(git ls-files --eol | grep -E '^i/(crlf|mixed)' || true)
+if [ -n "$bad_eol" ]; then
+  echo "$bad_eol" | tee -a "$LOG"
+  echo "[УПАЛО] eol — почини: git add --renormalize . && git commit -m 'chore: LF'" | tee -a "$LOG"
+  fail=1
+else
+  echo "[OK] eol" | tee -a "$LOG"
+fi
+
 for t in "${targets[@]}"; do
   echo "===== $t =====" | tee -a "$LOG"
   case "$t" in
