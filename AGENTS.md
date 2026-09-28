@@ -14,7 +14,8 @@
 
 ## КРИТИЧНО: папка `docs/architecture/` — только для чтения
 
-1. Агент **читает** `docs/architecture/**` для понимания требований.
+1. Агент читает `docs/architecture/**` ТОЛЬКО если промпт прямо велит (режим Р2).
+   Обычно нужные выдержки уже в промпте или в карточке `docs/tasks/<id>.md`.
 2. Агент **НИКОГДА не правит** файлы в `docs/architecture/**`.
 3. При обнаружении расхождения архитектуры с реальностью — писать в
    `docs/DEFECTS-FOUND.md` (не править зеркало).
@@ -38,17 +39,15 @@ chmod +x .githooks/pre-commit
 
 ## Ключевые точки входа (в порядке чтения)
 
-1. `CONTEXT.md` — быстрое введение в проект (3 минуты).
-2. `AGENTS.md` (этот файл) — правила работы агента.
-3. `.genspark/rules.md` — жёсткие правила для Genspark Code.
-4. `docs/architecture/AGENTS.source.md` — правила работы с архитектурой (наследуются;
-   это копия `AGENTS.md` из DOCS-course-bot, обновляется sync-workflow).
-5. `docs/architecture/CANONICAL-SOURCES.md` — правило «верхний файл vs подпапка (10/, 15/, 17/, 99/)».
-6. `docs/architecture/normative/README.md` — старшинство нормативного стека.
-7. `docs/architecture/normative/OVERRIDES.yaml` — арбитр YAML-конфликтов.
-8. `docs/architecture/build/DIVISION.md` — что реализуется в Mini App, что в боте, что в API.
-9. `docs/architecture/build/build-order.md` — порядок первых итераций.
-10. `infra/SERVER-IRONCLAD.md` — правила локального сервера (порты, лимиты, TZ).
+1. `AGENT-BRIEF.md` — ВСЕГДА первым. В части «что читать» и «как тестировать» он главнее этого файла.
+2. Файлы из раздела «ЧТО ПРОЧИТАТЬ» в промпте или карточка задачи `docs/tasks/<id>.md`.
+3. `docs/STATE.md` — текущее состояние проекта (если промпт велит).
+
+Полный список — ТОЛЬКО если промпт прямо велит (режим Р2, новая архитектурная область):
+`CONTEXT.md` → `AGENTS.md` → `.genspark/rules.md` → `docs/architecture/AGENTS.source.md` →
+`docs/architecture/CANONICAL-SOURCES.md` → `docs/architecture/normative/README.md` →
+`docs/architecture/normative/OVERRIDES.yaml` → `docs/architecture/build/DIVISION.md` →
+`docs/architecture/build/build-order.md` → `infra/SERVER-IRONCLAD.md`.
 
 ## Правила старшинства (наследуются из архитектуры)
 
@@ -210,16 +209,14 @@ PAYMENT_CURRENCY=RUB
 
 ## Порядок работы агента
 
-1. Прочитать `CONTEXT.md`, потом `docs/architecture/build/DIVISION.md`.
-2. Найти блок, к которому относится задача.
-3. Проверить нормативные наложения через `docs/architecture/normative/OVERRIDES.yaml`
-   и врезки «Переопределено/Уточнено ERRATA-UNIFIED» в шапке файла блока.
-4. Реализовать в соответствующем `apps/<layer>/`.
-5. При обнаружении расхождения с архитектурой — фиксировать в `docs/DEFECTS-FOUND.md`,
+1. Прочитать `AGENT-BRIEF.md`, затем файлы из «ЧТО ПРОЧИТАТЬ» в промпте
+   (или карточку `docs/tasks/<id>.md`). Остальное — только по прямому указанию промпта.
+2. Если в промпте дан готовый пакет (режим Р1-П) — разложить его `python3 tools/unpack.py`,
+   прогнать `bash tools/check.sh <цели>`, чинить только упавшее (`AGENT-BRIEF.md`, раздел 11).
+3. Реализовать в соответствующем `apps/<layer>/`.
+4. При обнаружении расхождения с архитектурой — фиксировать в `docs/DEFECTS-FOUND.md`,
    **не править зеркало**.
-6. Атомарные PR: одна задача — один PR. Заголовок PR = «Блок N: короткое описание».
-   В описании PR перечислить, какие файлы `docs/architecture/**` прочитаны
-   и какие правила ERRATA/OVERRIDES применены.
+5. Одна задача — один PR. Заголовок и описание PR — по промпту и `AGENT-BRIEF.md`, раздел 10.
 
 ## Стек по умолчанию
 
@@ -256,4 +253,7 @@ PAYMENT_CURRENCY=RUB
 - Тесты Mini App — Vitest + React Testing Library.
 - Тесты Bot — pytest + aiogram test framework.
 - Тесты Backend — pytest + httpx.
-- CI-чеки — по мере поднятия pipeline.
+- Быстрые тесты без БД: `bash tools/check.sh` (Codespaces или sandbox).
+- CI (`.github/workflows/ci.yml`) — 7 проверок на каждый PR: api (pytest с живым postgres:16
+  + миграции), bot, miniapp, docker ×3, guard. Тесты с БД — только в CI.
+- Красный CI не мержится.
