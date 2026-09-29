@@ -3,8 +3,8 @@
 # Тесты с БД, сборку Docker-образов и guard делает CI в PR.
 #
 # Запуск (из любой папки репо):
-#   bash tools/check.sh              # eol + api + bot + miniapp
-#   bash tools/check.sh api          # eol + только нужное: api / bot / miniapp (можно несколько)
+#   bash tools/check.sh              # eol + exec + api + bot + miniapp
+#   bash tools/check.sh api          # eol + exec + только нужное: api / bot / miniapp (можно несколько)
 # Лог: .tmp/check.log  →  в чат КОДЕР:  tail -n 60 .tmp/check.log
 
 set -uo pipefail
@@ -43,6 +43,21 @@ if [ -n "$bad_eol" ]; then
   fail=1
 else
   echo "[OK] eol" | tee -a "$LOG"
+fi
+
+# 0б. Право на запуск: каждый *.sh (в git и новый) должен быть исполняемым.
+#     github.dev и tools/unpack.py создают файлы без +x; git хранит это право (режим 100755).
+echo "===== exec =====" | tee -a "$LOG"
+bad_x=""
+while IFS= read -r f; do
+  if [ -e "$f" ] && [ ! -x "$f" ]; then bad_x="$bad_x $f"; fi
+done < <(git ls-files -co --exclude-standard -- '*.sh')
+if [ -n "$bad_x" ]; then
+  echo "Нет права на запуск:$bad_x" | tee -a "$LOG"
+  echo "[УПАЛО] exec — почини: chmod +x$bad_x  (потом снова bash tools/check.sh)" | tee -a "$LOG"
+  fail=1
+else
+  echo "[OK] exec" | tee -a "$LOG"
 fi
 
 for t in "${targets[@]}"; do

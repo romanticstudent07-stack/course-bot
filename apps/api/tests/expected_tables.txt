@@ -1,0 +1,15 @@
+# apps/api/tests/expected_tables.txt — таблицы схемы public после alembic upgrade head.
+# По этому списку CI (.github/workflows/ci.yml, job api) сверяет БД. alembic_version не писать.
+# Миграция добавила или удалила таблицу → поправь список в том же PR. Одна таблица — одна строка.
+# Строки с # и пустые строки CI пропускает. Порядок не важен.
+# 0001_init
+participant_state
+stage_publish_log
+outbox
+outbox_dlq
+issuance_log
+anomaly_log
+erasure_blacklist
+privacy_audit_log
+# 0002_tg_user_registry
+tg_user_registry
