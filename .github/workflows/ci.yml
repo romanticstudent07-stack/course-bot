@@ -93,14 +93,16 @@ jobs:
       - name: "Миграция: upgrade head (создать таблицы)"
         run: alembic upgrade head
 
-      # 8 таблиц 0001_init + 1 таблица 0002_tg_user_registry = 9.
-      - name: "Проверка: после upgrade в БД 9 таблиц (есть tg_user_registry)"
+      # Ожидаемые таблицы — apps/api/tests/expected_tables.txt (КОДЕР правит его вместе с миграцией).
+      - name: "Проверка: таблицы после upgrade = apps/api/tests/expected_tables.txt"
         run: |
-          n=$(psql -tAc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename <> 'alembic_version'")
-          echo "Таблиц в public: $n"
-          test "$n" -eq 9 || { echo "::error::Ожидалось 9 таблиц после upgrade, найдено $n"; exit 1; }
-          r=$(psql -tAc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename = 'tg_user_registry'")
-          test "$r" -eq 1 || { echo "::error::Нет таблицы tg_user_registry после upgrade"; exit 1; }
+          grep -vE '^\s*(#|$)' tests/expected_tables.txt | tr -d ' \r' | LC_ALL=C sort > "$RUNNER_TEMP/expected.txt"
+          psql -tAc "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'alembic_version'" | LC_ALL=C sort > "$RUNNER_TEMP/actual.txt"
+          echo "Ожидается таблиц: $(wc -l < "$RUNNER_TEMP/expected.txt"), найдено: $(wc -l < "$RUNNER_TEMP/actual.txt")"
+          if ! diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/actual.txt"; then
+            echo "::error::Таблицы в БД не совпадают с apps/api/tests/expected_tables.txt ('-' ждали, но нет; '+' есть, но нет в списке)"
+            exit 1
+          fi
 
       - name: "Миграция: downgrade base (удалить таблицы)"
         run: alembic downgrade base
