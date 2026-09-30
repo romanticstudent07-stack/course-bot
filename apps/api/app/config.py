@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     # --- Redis ---
     redis_url: str = ""
 
+    # --- Rate-limit /miniapp/v1/** (B-1, app/rate_limit.py) ---
+    # Не больше N запросов в минуту на один tg_user_id (решение Автора 5Б, Б14 R328).
+    rate_limit_per_minute: int = Field(60, ge=1)
+    # Таймаут соединения и ответа Redis: дольше — fail-open (запрос проходит, WARNING).
+    rate_limit_redis_timeout_seconds: float = 0.2
+
     # --- S3 (Garage в dev) ---
     s3_endpoint: str = ""
     s3_region: str = ""
