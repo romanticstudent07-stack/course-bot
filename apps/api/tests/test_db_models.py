@@ -1,8 +1,7 @@
-"""Миграции ⇔ модели ⇔ живая схема (Итерация 1b+1c). Нужен DATABASE_URL.
+"""Миграции ⇔ модели ⇔ живая схема. Нужен DATABASE_URL.
 
-- цикл upgrade head → downgrade base → upgrade head;
-- число таблиц: 8 (0001) + 1 (0002 tg_user_registry) = 9;
-- 0002 не трогает 0001: downgrade до 0001_init оставляет ровно 8 таблиц 0001;
+- после upgrade head таблицы = apps/api/tests/expected_tables.txt (тот же список, что в CI);
+- цикл: head → 0002 (без text_registry) → 0001 (ровно таблицы 0001) → base (пусто) → head;
 - модели SQLAlchemy совпадают с живой схемой (alembic compare_metadata).
 """
 from __future__ import annotations
@@ -21,6 +20,7 @@ from tests.conftest import _alembic_config
 
 API_DIR = Path(__file__).resolve().parents[1]
 MIGRATION_0001 = next((API_DIR / "migrations" / "versions").glob("*0001_init*.py"))
+EXPECTED_TABLES_FILE = API_DIR / "tests" / "expected_tables.txt"
 
 _COUNT_SQL = text(
     "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'alembic_version'"
@@ -44,10 +44,26 @@ def _tables_0001() -> set[str]:
     return set(module.TABLES_DROP_ORDER)
 
 
+def _expected_tables() -> set[str]:
+    """Список из expected_tables.txt: без комментариев (#) и пустых строк."""
+    names = set()
+    for line in EXPECTED_TABLES_FILE.read_text(encoding="utf-8").splitlines():
+        name = line.strip()
+        if name and not name.startswith("#"):
+            names.add(name)
+    return names
+
+
+def test_expected_tables_file_includes_0001():
+    assert _tables_0001() <= _expected_tables()
+
+
 def test_upgrade_downgrade_upgrade_cycle(migrated_db):
     cfg = _alembic_config()
-    assert _tables(migrated_db) == _tables_0001() | {"tg_user_registry"}
-    assert len(_tables(migrated_db)) == 9
+    assert _tables(migrated_db) == _expected_tables()
+
+    command.downgrade(cfg, "0002_tg_user_registry")
+    assert _tables(migrated_db) == _expected_tables() - {"text_registry"}  # 0003 не ломает 0002
 
     command.downgrade(cfg, "0001_init")
     assert _tables(migrated_db) == _tables_0001()  # 0002 не ломает 0001
@@ -56,7 +72,7 @@ def test_upgrade_downgrade_upgrade_cycle(migrated_db):
     assert _tables(migrated_db) == set()
 
     command.upgrade(cfg, "head")
-    assert len(_tables(migrated_db)) == 9
+    assert _tables(migrated_db) == _expected_tables()
 
 
 def test_models_match_live_schema(migrated_db):

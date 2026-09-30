@@ -13,6 +13,9 @@ uvicorn[standard]==0.53.0
 pydantic==2.13.5
 pydantic-settings==2.15.0
 
+# --- Проверка seed текстов по JSON-Schema (text_registry, 1d; решение Автора) ---
+jsonschema==4.26.0
+
 # --- База данных ---
 sqlalchemy==2.0.54
 alembic==1.20.0

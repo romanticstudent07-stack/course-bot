@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/romanticstudent07-stack/DOCS-course-bot/architecture/build/config-schemas/text_registry.schema.json",
+  "title": "text_registry — реестр всех текстов бота (владелец Б9)",
+  "description": "Единый источник текстов системы. Формат ключа: '{домен}.{имя}', где домен — код блока-владельца триггера (B2, B4, B7, B9, B10, B14, B15, B16 или legal). Тональность одна из трёх (soft/neutral/strict). Правовой статус — pre-legal-review (блокирует прод) либо approved (снят юристом).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "owner_block", "durability_block", "entries"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "SemVer версии реестра (bump при любой правке текста)."
+    },
+    "owner_block": {
+      "type": "string",
+      "const": "B9",
+      "description": "Владелец реестра (оригинал Архитектура.docx, Блок 9)."
+    },
+    "durability_block": {
+      "type": "string",
+      "const": "B14",
+      "description": "Блок, обеспечивающий физическую durability таблицы (не совладелец, только storage)."
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "tone", "legal_status", "text"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^(B2|B4|B5|B7|B9|B10|B14|B15|B16|legal)\\.[a-z][a-z0-9_]*$",
+          "description": "Формат '{домен}.{имя}'. Домен — код блока-владельца триггера. Имя — snake_case."
+        },
+        "tone": {
+          "type": "string",
+          "enum": ["soft", "neutral", "strict"],
+          "description": "Тон текста (И4). soft — эмпатичный, neutral — фактологический, strict — обязывающий."
+        },
+        "legal_status": {
+          "type": "string",
+          "enum": ["pre-legal-review", "approved"],
+          "description": "pre-legal-review блокирует прод (Boot-gate). approved — юрист подписал."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "Тело текста. Лимит Telegram — 4096 символов. HTML-разметка санитизируется Б9 (NR-17.20)."
+        },
+        "plurals_ru": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "one": { "type": "string", "maxLength": 4096 },
+            "few": { "type": "string", "maxLength": 4096 },
+            "many": { "type": "string", "maxLength": 4096 }
+          },
+          "description": "Опциональные множественные формы (plural-ru) — если в тексте есть числительное."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Свободные заметки для юриста/автора (не попадают в UI)."
+        }
+      }
+    }
+  }
+}

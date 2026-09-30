@@ -1,0 +1,32 @@
+{
+  "version": "0.1.0",
+  "owner_block": "B9",
+  "durability_block": "B14",
+  "entries": [
+    {
+      "key": "B4.onb_welcome",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Приветствие на первом экране онбординга.",
+      "notes": "Заглушка до 0-Б. Реальный текст — после юридической вычитки (И4)."
+    },
+    {
+      "key": "B4.onb_age_gate",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Просьба указать дату рождения (18+)."
+    },
+    {
+      "key": "B4.onb_age_underage",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Отказ: участнику меньше 18 лет."
+    },
+    {
+      "key": "B4.onb_done",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Онбординг завершён."
+    }
+  ]
+}
