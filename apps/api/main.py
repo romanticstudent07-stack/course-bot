@@ -7,6 +7,8 @@
   GET  /healthz                              — liveness (без initData)
   POST /miniapp/v1/onboarding/first-launch   — SEAM-1: создание/поиск участника
                                                (tg_user_registry), initData проверяется
+  GET  /miniapp/v1/texts/{key}               — текст из text_registry по ключу (1d)
+  POST /miniapp/v1/texts/bulk                — пачка текстов по списку ключей (1d)
   POST /security/csp-report                  — приёмник CSP-репортов (E2), без initData
                                                (security: [] в miniapp-api-contract.yaml)
 
@@ -21,7 +23,7 @@ from fastapi import APIRouter, Depends, FastAPI
 
 from app.config import get_settings
 from app.errors import install_error_handlers
-from app.routers import health, onboarding, security
+from app.routers import health, onboarding, security, texts
 from app.telegram_init_data import require_init_data
 
 
@@ -50,7 +52,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
 
     # /miniapp/v1/** — проверка initData на уровне роутера, для всех маршрутов.
-    app.include_router(build_miniapp_v1_router(onboarding.router))
+    app.include_router(build_miniapp_v1_router(onboarding.router, texts.router))
 
     app.include_router(security.router)
     return app

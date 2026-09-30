@@ -13,6 +13,11 @@ tg_user_registry — реестр tg_user_id ↔ pid (миграция 0002):
   - created_via: единственный канал — first-launch Mini App (SEAM-PATCH-1,
     И1 autocreate_source: mini_app_only).
 
+text_registry — реестр текстов (миграция 0003, Б9 / Б14):
+  - колонки — по config-schemas/text_registry.schema.json + registry_version, updated_at;
+  - CHECK (шаблон ключа, tone, legal_status, длина текста) — в миграции 0003;
+  - колонка text в модели — атрибут body (имя text занято функцией sqlalchemy.text).
+
 participant_state (0001) здесь НЕ моделируется: единственный писатель — проектор
 (E1/INV-1), модель появится вместе с ним (решение Автора, PR 1b+1c).
 """
@@ -32,7 +37,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -67,4 +72,19 @@ class TgUserRegistry(Base):
             unique=True,
             postgresql_where=text("tombstoned_at IS NULL"),
         ),
+    )
+
+
+class TextRegistry(Base):
+    __tablename__ = "text_registry"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    tone: Mapped[str] = mapped_column(Text, nullable=False)
+    legal_status: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column("text", Text, nullable=False)
+    plurals_ru: Mapped[dict[str, str] | None] = mapped_column(JSONB)
+    notes: Mapped[str | None] = mapped_column(Text)
+    registry_version: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -291,4 +291,25 @@
   (`tg_user_registry`: SELECT, INSERT; `participant_state`: только через reader/projector).
 - **Ждём решения Автора:** да — набор ролей и кто их создаёт (миграция vs ручная операция).
 
-<!-- следующие записи (D-14, ...) добавляет агент по мере обнаружения -->
+## D-14. text_registry: шаблон ключа, формат seed и тоны — источники расходятся
+
+- **Файлы архитектуры (зеркало):** `build/config-schemas/text_registry.schema.json`,
+  `build/miniapp-api-contract.yaml` (`GET /miniapp/v1/texts/{key}`, `POST /miniapp/v1/texts/bulk`),
+  `normative/I4-wave-d.md` §1.
+- **Файлы реализации:** `apps/api/app/texts.py` (`KEY_PATTERN`, загрузчик), `apps/api/app/routers/texts.py`,
+  `apps/api/config/texts/B4.json`, `apps/api/migrations/versions/…0003_text_registry…`.
+- **Суть расхождения:**
+  1. **Ключ:** схема — `^(B2|B4|B5|B7|B9|B10|B14|B15|B16|legal)\.[a-z][a-z0-9_]*$` (домены
+     B2…B16 с заглавной B и `legal`); контракт — только строчные `^[a-z0-9_]+\.[a-z0-9_]+$`.
+     Ключ `B4.onb_welcome` проходит схему, но не контракт; `b4.onb_welcome` — наоборот.
+  2. **Формат seed:** И4 — `versioned_yaml_in_git`, `config/texts/*.yaml`; схема проверяет JSON.
+  3. **Тоны:** И4 — soft / neutral / dry; схема — soft / neutral / strict.
+- **Сделано здесь (решение Автора, PR 1d):** seed — JSON, один файл на домен
+  (`apps/api/config/texts/<домен>.json`, как `per_domain_files` в И4), проверка схемой
+  (Draft 2020-12). API и загрузчик принимают шаблон СХЕМЫ (одна константа `KEY_PATTERN`);
+  тоны — по схеме. Те же правила — в CHECK таблицы `text_registry`.
+- **Предлагаемое решение:** в DOCS-course-bot привести к схеме шаблон ключа в контракте,
+  а в И4 — формат (JSON), путь и набор тонов.
+- **Ждём решения Автора:** да — правка зеркала в DOCS-course-bot.
+
+<!-- следующие записи (D-15, ...) добавляет агент по мере обнаружения -->

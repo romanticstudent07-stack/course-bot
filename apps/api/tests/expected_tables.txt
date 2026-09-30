@@ -13,3 +13,5 @@ erasure_blacklist
 privacy_audit_log
 # 0002_tg_user_registry
 tg_user_registry
+# 0003_text_registry
+text_registry
