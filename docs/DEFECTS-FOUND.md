@@ -25,7 +25,7 @@
 | # | Блокер | Где описан | Статус |
 |---|---|---|---|
 | B-1 | Rate-limit на `/miniapp/v1/**` (Б14 R328) | D-7 | реализован, PR #36 |
-| B-2 | Согласия (`legal_consents`, C1–C6) **до** создания `pid` (ADD3 ordering) | D-10 | не реализовано: сейчас `pid` создаётся сразу после проверки возраста |
+| B-2 | Согласия (`legal_consents`, C1–C6) **до** создания `pid` (ADD3 ordering) | D-10 | реализован (API), PR #38; экраны — 1e-1b |
 | B-3 | Роли и GRANT в БД: приложение ходит под владельцем БД; ролей/GRANT на `tg_user_registry` нет | D-13 | не реализовано |
 
 ---
@@ -162,7 +162,7 @@
   - rate-limit, РЕВЬЮЕР PR #36 (неблокирующее): при недоступном Redis каждый запрос ждёт
     до ~0,4 с (connect + read по 0,2 с) в пуле потоков. Фикс позже: «предохранитель» —
     после ошибки N секунд не обращаться к Redis;
-  - живой 429 на сервере не проверялся (нужна настоящая initData) — при 1e-1/1e-2;
+  - живой 429 на сервере не проверялся (нужна настоящая initData) — в 1e-1b;
   - TTL 1 ч для `/refund`, `/erasure_*` (`init_data_sensitive_max_age_seconds` есть
     в config, но не применяется — таких маршрутов ещё нет);
   - анти-replay сверх TTL (одна initData может использоваться многократно в пределах
@@ -239,17 +239,36 @@
   - `AGENTS.md` (репо реализации), «Связь с Mini App»: сначала SEAM-1 создаёт participant,
     потом проверяется `payment_confirmed`, потом Age Gate → PID;
   - `build/miniapp-api-contract.yaml` → first-launch: в теле только `birth_date`
-    (нет ни soft-checkbox, ни согласий, ни ссылки на оплату).
-- **Файл реализации:** `apps/api/app/routers/onboarding.py`.
+    (нет ни soft-checkbox, ни согласий, ни ссылки на оплату);
+  - И1 R_378 (`consent_events: [pid, kind, action, at, ip, ua, ver_of_text]`, append-only), И1 D_14.
+- **Файлы реализации:** `apps/api/app/routers/onboarding.py`, `apps/api/app/participants.py`,
+  `apps/api/app/db/models.py`, `apps/api/migrations/versions/…0004_consent_events…`,
+  `apps/api/config/texts/legal.json`.
 - **Суть расхождения:** три разных порядка (оплата до `pid` / после / не упомянута), а контракт
   first-launch не несёт данных ни для согласий, ни для soft-checkbox 18+.
-- **Сделано здесь (ВРЕМЕННО, решение Автора, PR 1b+1c):** `pid` создаётся сразу после
-  hard-check даты рождения (≥ 18 полных лет в `SERVER_TIMEZONE`). Согласия, soft-checkbox
-  и оплата не проверяются.
-- **⛔ БЛОКЕР до любого внешнего доступа (B-2):** согласия (`legal_consents`) до создания `pid`.
-- **Предлагаемое решение:** в DOCS-course-bot выбрать один порядок и расширить контракт
-  first-launch (или ввести отдельный эндпоинт согласий до `pid`).
-- **Ждём решения Автора:** да.
+- **Было (ВРЕМЕННО, PR 1b+1c):** `pid` создавался сразу после hard-check даты рождения,
+  без согласий.
+- **Закрыто для API — PR 1e-1a (#38), решения Автора «1А», «2А», «В1 А»:**
+  - порядок: initData → тело → hard-check 18+ без БД (403) → обязательные согласия (422) →
+    ОДНА транзакция: тексты согласий из `text_registry` → `pid` (get_or_create) →
+    `consent_events` → commit. Нет текста согласия в `text_registry` → откат,
+    503 `SERVICE_MISCONFIGURED`, `pid` не создаётся;
+  - **расширение контракта:** тело first-launch `{birth_date, consents: ["C0", "C1"]}`,
+    `consents` обязателен; 422 `CONSENTS_REQUIRED` `{details: {missing: [...]}}`;
+    дубли и id вне C0–C6 — 422 валидации тела; C2–C6 на first-launch — 422
+    `CONSENT_NOT_SUPPORTED` `{details: {unsupported: [...]}}` (текстов для них нет;
+    C5 — свой экран перед фото);
+  - текст согласия выбирает сервер (`CONSENT_TEXT_KEYS`), клиент шлёт только id;
+  - **сверх колонок R_378:** `id`, `text_key` (FK `text_registry`), `text_snapshot`
+    (принятый текст), `created_via`; `ver_of_text` = `registry_version`;
+  - **`ip` и `ua` не заполняются (NULL):** за туннелем IP недостоверен,
+    `--proxy-headers` — к проду;
+  - повтор → 201 тот же `pid`, без дублей give; участник, созданный до 0004, получает
+    согласия при повторном first-launch; гонка — строка участника блокируется до commit;
+  - append-only: UPDATE/DELETE запретит GRANT в B-3 (D-13).
+- **Остаётся:** экраны Mini App и живой проход в Telegram — 1e-1b; оплата до `pid` —
+  до решения противоречия по оплате; правка контракта — в DOCS-course-bot.
+- **Ждём решения Автора:** нет для API; по оплате — да.
 
 ## D-11. `participant_state.lifecycle_phase`: значения 0001 ≠ FSM И2
 
@@ -301,7 +320,8 @@
   под `POSTGRES_USER` (владелец БД) — это обходит INV-1/E1 на уровне прав (приложение
   технически может писать и в `participant_state`).
 - **Сделано здесь:** ничего (решение Автора — отложить). В коде API запись в
-  `participant_state` отсутствует.
+  `participant_state` отсутствует. Добавилась `consent_events` (0004): для неё в B-3 —
+  только SELECT, INSERT (append-only).
 - **⛔ БЛОКЕР к проду / до VPS (B-3):** отдельная роль приложения с минимальными GRANT
   (`tg_user_registry`: SELECT, INSERT; `participant_state`: только через reader/projector).
 - **Ждём решения Автора:** да — набор ролей и кто их создаёт (миграция vs ручная операция).
@@ -323,6 +343,7 @@
   (`apps/api/config/texts/<домен>.json`, как `per_domain_files` в И4), проверка схемой
   (Draft 2020-12). API и загрузчик принимают шаблон СХЕМЫ (одна константа `KEY_PATTERN`);
   тоны — по схеме. Те же правила — в CHECK таблицы `text_registry`.
+  PR 1e-1a: добавлен `legal.json` (3 заглушки).
 - **Предлагаемое решение:** в DOCS-course-bot привести к схеме шаблон ключа в контракте,
   а в И4 — формат (JSON), путь и набор тонов.
 - **Ждём решения Автора:** да — правка зеркала в DOCS-course-bot.

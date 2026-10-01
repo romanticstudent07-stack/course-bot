@@ -1,0 +1,26 @@
+{
+  "version": "0.1.0",
+  "owner_block": "B9",
+  "durability_block": "B14",
+  "entries": [
+    {
+      "key": "legal.onb_consent_intro",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Вступление к экрану согласий онбординга.",
+      "notes": "Заглушка до 0-Б. Реальный текст — после юридической вычитки."
+    },
+    {
+      "key": "legal.consent_c0_age_18_plus",
+      "tone": "strict",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Согласие C0: подтверждение возраста 18+."
+    },
+    {
+      "key": "legal.consent_c1_pdn",
+      "tone": "strict",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Согласие C1: обработка персональных данных."
+    }
+  ]
+}

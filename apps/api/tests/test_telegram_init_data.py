@@ -26,7 +26,7 @@ from tests.conftest import (
 )
 
 FIRST_LAUNCH = "/miniapp/v1/onboarding/first-launch"
-ADULT = {"birth_date": "1990-01-01"}
+ADULT = {"birth_date": "1990-01-01", "consents": ["C0", "C1"]}
 MAX_AGE = 86400
 SKEW = 60
 NOW = 1_800_000_000
@@ -318,7 +318,8 @@ def test_http_invalid_is_401_without_leaks(api_client, caplog, make_raw):
 
 
 def test_http_valid_passes_guard_without_leaks(api_client, caplog):
-    # Мок 501 с details.tg_user_id удалён (PR 1b+1c). Валидная initData проходит проверку
+    # Тело ADULT — с согласиями (422 без consents проверяет test_first_launch.py).
+    # Валидная initData проходит проверку
     # и доходит до БД; у api_client БД недоступна → 503 SERVICE_UNAVAILABLE (не 401).
     caplog.set_level(logging.DEBUG)
     raw = valid_init_data(user={"id": 123456789, "first_name": "Автор"})
