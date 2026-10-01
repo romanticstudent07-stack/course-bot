@@ -24,7 +24,7 @@
 
 | # | Блокер | Где описан | Статус |
 |---|---|---|---|
-| B-1 | Rate-limit на `/miniapp/v1/**` (Б14 R328) | D-7 | не реализован (отдельный PR) |
+| B-1 | Rate-limit на `/miniapp/v1/**` (Б14 R328) | D-7 | реализован, PR #36 |
 | B-2 | Согласия (`legal_consents`, C1–C6) **до** создания `pid` (ADD3 ordering) | D-10 | не реализовано: сейчас `pid` создаётся сразу после проверки возраста |
 | B-3 | Роли и GRANT в БД: приложение ходит под владельцем БД; ролей/GRANT на `tg_user_registry` нет | D-13 | не реализовано |
 
@@ -144,12 +144,20 @@
     (всё остальное), 503 `SERVICE_MISCONFIGURED` (пустой `BOT_TOKEN`, fail closed);
     в лог — только причина (`reason`), без initData, hash и токена;
   - dev-обхода проверки нет.
+- **Закрыто PR B-1 (#36, «B-1: rate-limit /miniapp/v1 — Redis, 60/мин на tg_user_id, fail-open»):**
+  - rate-limit на `/miniapp/v1/**` (Б14 R328, §14.13) — `apps/api/app/rate_limit.py`:
+    фиксированное окно 1 мин в Redis (`rl:miniapp:{tg_user_id}:{unix_minute}`, INCR + EXPIRE 120),
+    лимит `RATE_LIMIT_PER_MINUTE` (по умолчанию 60); превышение → 429 `RATE_LIMITED` + `Retry-After`;
+  - ключ — `tg_user_id` из проверенной initData, а не `pid`, как в R328 (`pid` есть не у всех:
+    его создаёт first-launch); unauth без лимита: отдельного `/auth` нет, поэтому «10/мин на unauth
+    `/auth`» из §14.13 не применяется — запросы без валидной initData отсекаются 401 раньше
+    счётчика и не считаются (решение Автора 5Б);
+  - Redis недоступен или `REDIS_URL` пуст → fail-open: запрос проходит, WARNING в лог
+    (только имя исключения); nginx-лимит не делается: за туннелем один IP (решение Автора 5Б).
 - **Остаётся открытым:**
   - противоречие источников по TTL и `session_jwt` — см. D-9;
   - TTL 1 ч для `/refund`, `/erasure_*` (`init_data_sensitive_max_age_seconds` есть
     в config, но не применяется — таких маршрутов ещё нет);
-  - rate-limit на `/miniapp/v1/**` (Б14 R328) — не реализован; **блокер до VPS (B-1)**,
-    отдельный PR (решение Автора, PR 1b+1c);
   - анти-replay сверх TTL (одна initData может использоваться многократно в пределах
     24 ч) — зависит от решения по D-9;
   - R344 (сверка `user.id` vs `query_id`, security-audit) — не реализовано.
