@@ -109,11 +109,15 @@ def migrated_db(database_url):
 
 @pytest.fixture
 def db_engine(migrated_db):
+    """Чистые участники и согласия + seed текстов (first-launch читает тексты согласий, 1e-1a)."""
     from sqlalchemy import create_engine, text
+
+    from app.texts import load_seed, write_entries
 
     engine = create_engine(migrated_db)
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE tg_user_registry RESTART IDENTITY"))
+        conn.execute(text("TRUNCATE consent_events, tg_user_registry RESTART IDENTITY CASCADE"))
+    write_entries(engine, load_seed())  # upsert всех config/texts/*.json (B4 + legal)
     try:
         yield engine
     finally:
@@ -145,4 +149,15 @@ def count_registry_rows(engine, tg_user_id: int | None = None) -> int:
         return conn.execute(
             text("SELECT count(*) FROM tg_user_registry WHERE tg_user_id = :u"),
             {"u": tg_user_id},
+        ).scalar_one()
+
+
+def count_consent_rows(engine, pid=None) -> int:
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        if pid is None:
+            return conn.execute(text("SELECT count(*) FROM consent_events")).scalar_one()
+        return conn.execute(
+            text("SELECT count(*) FROM consent_events WHERE pid = :p"), {"p": pid}
         ).scalar_one()

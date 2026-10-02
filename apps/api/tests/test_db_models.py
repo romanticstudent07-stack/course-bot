@@ -1,7 +1,8 @@
 """Миграции ⇔ модели ⇔ живая схема. Нужен DATABASE_URL.
 
 - после upgrade head таблицы = apps/api/tests/expected_tables.txt (тот же список, что в CI);
-- цикл: head → 0002 (без text_registry) → 0001 (ровно таблицы 0001) → base (пусто) → head;
+- цикл: head → 0003 (без consent_events) → 0002 (без text_registry и consent_events)
+  → 0001 (ровно таблицы 0001) → base (пусто) → head;
 - модели SQLAlchemy совпадают с живой схемой (alembic compare_metadata).
 """
 from __future__ import annotations
@@ -58,12 +59,20 @@ def test_expected_tables_file_includes_0001():
     assert _tables_0001() <= _expected_tables()
 
 
+def test_expected_tables_count_after_0004():
+    assert len(_expected_tables()) == 11
+    assert "consent_events" in _expected_tables()
+
+
 def test_upgrade_downgrade_upgrade_cycle(migrated_db):
     cfg = _alembic_config()
     assert _tables(migrated_db) == _expected_tables()
 
+    command.downgrade(cfg, "0003_text_registry")
+    assert _tables(migrated_db) == _expected_tables() - {"consent_events"}  # 0004 не ломает 0003
+
     command.downgrade(cfg, "0002_tg_user_registry")
-    assert _tables(migrated_db) == _expected_tables() - {"text_registry"}  # 0003 не ломает 0002
+    assert _tables(migrated_db) == _expected_tables() - {"text_registry", "consent_events"}
 
     command.downgrade(cfg, "0001_init")
     assert _tables(migrated_db) == _tables_0001()  # 0002 не ломает 0001

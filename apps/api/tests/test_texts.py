@@ -1,9 +1,10 @@
-"""1d: text_registry — seed, загрузчик, GET/POST /miniapp/v1/texts (docs/tasks/1d.md, раздел 9).
+"""1d + 1e-1a: text_registry — seed, загрузчик, GET/POST /miniapp/v1/texts.
 
-Без БД: схема = зеркало, seed по схеме, только заглушки, загрузчик отклоняет плохой seed,
-401 / 422 / 503 от API.
+Без БД: схема = зеркало, seed по схеме (B4 и legal), только заглушки, тексты согласий
+first-launch есть в legal.json, загрузчик отклоняет плохой seed, 401 / 422 / 503 от API.
 С БД (DATABASE_URL, в CI обязательно): загрузка идемпотентна, лишние ключи не удаляются,
 GET 200 без notes, 404, bulk texts + missing, CHECK на tone.
+Очистка: TRUNCATE consent_events, text_registry — consent_events ссылается на text_registry (FK, 0004).
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from jsonschema import Draft202012Validator
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
+from app.routers.onboarding import CONSENT_TEXT_KEYS
 from app.telegram_init_data import INIT_DATA_HEADER
 from app.texts import (
     KEY_PATTERN,
@@ -36,6 +38,7 @@ MIRROR_SCHEMA = (
 )
 MIGRATION_0003 = next((API_DIR / "migrations" / "versions").glob("*0003_text_registry*.py"))
 B4_KEYS = {"B4.onb_welcome", "B4.onb_age_gate", "B4.onb_age_underage", "B4.onb_done"}
+LEGAL_KEYS = {"legal.onb_consent_intro", "legal.consent_c0_age_18_plus", "legal.consent_c1_pdn"}
 URL = "/miniapp/v1/texts"
 
 
@@ -86,6 +89,18 @@ def test_b4_seed_passes_schema():
     assert {e["key"] for e in data["entries"]} == B4_KEYS
 
 
+def test_legal_seed_passes_schema():
+    data = _read_json(TEXTS_DIR / "legal.json")
+    Draft202012Validator(_read_json(SCHEMA_PATH)).validate(data)
+    assert data["version"] == "0.1.0"
+    assert {e["key"] for e in data["entries"]} == LEGAL_KEYS
+
+
+def test_consent_text_keys_are_in_legal_seed():
+    # first-launch берёт тексты согласий отсюда; нет ключа в seed → 503 на сервере.
+    assert set(CONSENT_TEXT_KEYS.values()) <= LEGAL_KEYS
+
+
 def test_all_seed_entries_are_placeholders():
     files = sorted(TEXTS_DIR.glob("*.json"))
     assert files
@@ -99,8 +114,12 @@ def test_all_seed_entries_are_placeholders():
 
 def test_load_seed_reads_repo_files():
     entries = load_seed()
-    assert B4_KEYS <= {e.key for e in entries}
+    keys = {e.key for e in entries}
+    assert B4_KEYS <= keys
+    assert LEGAL_KEYS <= keys
+    assert len(entries) == len(keys)  # дублей между файлами нет
     assert all(e.registry_version == "0.1.0" for e in entries if e.source == "B4.json")
+    assert all(e.registry_version == "0.1.0" for e in entries if e.source == "legal.json")
 
 
 def test_loader_rejects_bad_tone(tmp_path, capsys):
@@ -168,8 +187,9 @@ def test_get_db_unavailable_503(api_client):
 
 
 def _truncate(engine) -> None:
+    # consent_events ссылается на text_registry (FK, 0004) — чистим вместе.
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE text_registry"))
+        conn.execute(text("TRUNCATE consent_events, text_registry"))
 
 
 @pytest.fixture
@@ -200,6 +220,7 @@ def test_load_twice_same_rows(text_engine):
     assert len(rows) == len(entries)
     assert {r[0] for r in rows} == keys
     assert B4_KEYS <= keys
+    assert LEGAL_KEYS <= keys
 
 
 def test_extra_db_keys_are_listed_not_deleted(text_engine):
@@ -227,6 +248,12 @@ def test_get_text_200_without_notes(seeded_db, db_api_client):
     assert body["key"] == "B4.onb_welcome"
     assert body["text"].startswith("[ЗАГЛУШКА]")
     assert body["plurals_ru"] is None
+
+
+def test_get_legal_text_200(seeded_db, db_api_client):
+    r = db_api_client.get(f"{URL}/legal.consent_c1_pdn", headers=_headers())
+    assert r.status_code == 200, r.text
+    assert r.json()["text"].startswith("[ЗАГЛУШКА]")
 
 
 def test_get_missing_404(seeded_db, db_api_client):

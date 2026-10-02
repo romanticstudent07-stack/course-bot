@@ -15,3 +15,5 @@ privacy_audit_log
 tg_user_registry
 # 0003_text_registry
 text_registry
+# 0004_consent_events
+consent_events
