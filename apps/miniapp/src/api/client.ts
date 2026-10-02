@@ -68,11 +68,16 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 }
 
 // ---- Онбординг (SEAM-1) — контракт build/miniapp-api-contract.yaml ----
-// UI экранов онбординга — Итерация 1. Здесь только типизированный вызов.
+// UI экранов онбординга — apps/miniapp/src/components/OnboardingFlow.tsx (1e-1b).
+
+/** Единый реестр согласий C0–C6 (Consent.id в контракте). До pid обязательны C0 и C1. */
+export type ConsentId = 'C0' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'C6';
 
 export interface FirstLaunchRequest {
   /** Дата рождения, ISO-8601 (YYYY-MM-DD). Возрастной гейт — на сервере (ADD3). */
   birth_date: string;
+  /** Только id согласий; текст и его версию выбирает сервер (B-2, D-10). */
+  consents: ConsentId[];
 }
 
 export interface PidCreated {
@@ -82,3 +87,22 @@ export interface PidCreated {
 
 export const postFirstLaunch = (body: FirstLaunchRequest) =>
   apiRequest<PidCreated>('/miniapp/v1/onboarding/first-launch', { method: 'POST', body });
+
+// ---- Тексты (text_registry, 1d) ----
+
+export interface TextOut {
+  key: string;
+  tone: string;
+  legal_status: string;
+  text: string;
+  plurals_ru?: Record<string, string> | null;
+}
+
+export interface TextsBulkResponse {
+  texts: TextOut[];
+  /** Ключи, которых нет в реестре; клиент показывает нейтральную заглушку. */
+  missing: string[];
+}
+
+export const postTextsBulk = (keys: string[]) =>
+  apiRequest<TextsBulkResponse>('/miniapp/v1/texts/bulk', { method: 'POST', body: { keys } });
