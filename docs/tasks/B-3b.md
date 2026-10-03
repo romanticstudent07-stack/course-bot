@@ -25,6 +25,9 @@
 - D-15 (г): «в B-3 добавить тесты: откат после get_or_create (OperationalError на INSERT consent_events →
   0 строк участника); гонка для участника до 0004 (8 потоков → ровно 2 give); явный rollback для любых
   исключений в first-launch».
+- D-15 (е): «compare_metadata не сравнивает CHECK: ограничения consent_events сейчас
+  сверены глазами; тест через pg_constraint — позже.» Имена CHECK (миграция 0004):
+  consent_events_kind_check, consent_events_action_check, consent_events_created_via_check.  
 - Код (18cf0ac): errors.py ловит только HTTPException; main.py — FastAPI без debug, install_error_handlers;
   session.py — `_engine_for(dsn)` (lru_cache) и `get_db_session` (yield, finally close).
 - conftest (не читать): `api_client` (БД недоступна), `db_api_client`, `db_engine`, `valid_init_data`,
@@ -75,8 +78,12 @@ test_first_launch_rollback.py (с БД, CI):
 7. Участник до 0004: `INSERT INTO tg_user_registry (pid, tg_user_id, created_via, created_at) VALUES
    (gen_random_uuid(), 2101, 'mini_app_first_launch', now())`; 8 потоков (ThreadPoolExecutor, у каждого свой
    TestClient(main.app)) → все 201, один pid; give по pid ровно 2 (C0 и C1).
+8. (D-15 е) CHECK consent_events через pg_constraint: SELECT conname, pg_get_constraintdef(oid)
+   FROM pg_constraint WHERE conrelid = 'consent_events'::regclass AND contype = 'c' → ровно 3 имени
+   из раздела 4; в определении kind — все C0…C6, action — give и revoke, created_via —
+   mini_app_first_launch. Проверять вхождение значений, не точную строку определения.   
 Триггер и функцию удалять в finally (DROP … IF EXISTS). NOT NULL на другой колонке → добавить, записать в PR.
-Цель check.sh: api. Только CI: 5–7.
+Цель check.sh: api. Только CI: 5–8.
 
 ## 10. Живые проверки (после мержа; сервер пересобирает api)
 Все сервисы Up, healthy; Автор открывает Mini App — работает; logs api за 10 мин без «Traceback».
