@@ -1,19 +1,26 @@
-// apps/miniapp/src/components/OnboardingFlow.tsx — онбординг до pid (1e-1b; B-2, D-10, D-14).
+// apps/miniapp/src/components/OnboardingFlow.tsx — онбординг до pid (1e-1b, 1e-2; B-2, D-10, D-14, D-17).
 //
 // Порядок шагов строгий: welcome → age-gate (галочка C0 + дата) → consent (галочка C1)
 // → POST first-launch → done. Пока шаг done не пройден и не нажата «Начать», App не
-// рендерит ничего другого (block_all_ui_until_checked).
+// рендерит ничего другого (block_all_ui_until_checked). Шаги после pid — LaterSteps.tsx.
 //
 // Дата рождения живёт только в состоянии React этого компонента и уходит на сервер
 // в теле POST. Больше она никуда не пишется и нигде не выводится. 18+ считает сервер
 // (ADD3, Europe/Moscow); клиент проверяет только формат и что такая дата существует.
 //
+// 1e-2: шаги с полями (age-gate, consent) — <form> с onSubmit (preventDefault) и основной
+// кнопкой type="submit"; Enter при невыполненных условиях ничего не отправляет.
+// X-Client-Op-Id — один uuid v4 на весь онбординг (ref); повтор после ошибки — с тем же id (D-17).
+//
 // Тексты — один POST /texts/bulk при монтировании; ключ в missing → нейтральная заглушка.
+// Ошибка загрузки текстов: 429 → «Слишком много запросов…», 401 / 503 — как errorMessage,
+// «Проверьте интернет» — только при сетевой ошибке (textsErrorMessage).
 // Чистые функции и презентационные компоненты экспортируются для vitest (environment node).
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import {
   ApiError,
+  newClientOpId,
   postFirstLaunch,
   postTextsBulk,
   type ConsentId,
@@ -87,6 +94,17 @@ export function buildFirstLaunchBody(state: OnboardingState): FirstLaunchRequest
   return { birth_date: state.birthDate, consents: [...REQUIRED_CONSENTS] };
 }
 
+/**
+ * Обработчик onSubmit формы шага: всегда preventDefault (страница не перезагружается);
+ * onContinue — только если условия шага выполнены. Enter при enabled=false ничего не делает.
+ */
+export function makeSubmitHandler(enabled: boolean, onContinue: () => void) {
+  return (event: { preventDefault: () => void }) => {
+    event.preventDefault();
+    if (enabled) onContinue();
+  };
+}
+
 export type ErrorScreen = 'underage' | 'consent' | 'age-gate' | 'error';
 
 /** Куда вести пользователя после ошибки first-launch. */
@@ -111,6 +129,18 @@ export function errorMessage(err: unknown): string {
     return 'Что-то пошло не так. Нажмите «Повторить».';
   }
   return 'Не удалось связаться с сервером. Проверьте интернет и нажмите «Повторить».';
+}
+
+export const TEXTS_429_MESSAGE = 'Слишком много запросов. Подождите минуту и нажмите «Повторить».';
+export const TEXTS_NETWORK_MESSAGE = 'Не удалось загрузить приложение. Проверьте интернет и нажмите «Повторить».';
+
+/** Сообщение при ошибке загрузки текстов (/texts/bulk). «Проверьте интернет» — только сеть. */
+export function textsErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 429) return TEXTS_429_MESSAGE;
+    return errorMessage(err);
+  }
+  return TEXTS_NETWORK_MESSAGE;
 }
 
 export type TextMap = Readonly<Record<string, string>>;
@@ -150,7 +180,7 @@ export interface AgeGateViewProps {
 export function AgeGateView(props: AgeGateViewProps) {
   const disabled = !canContinueAgeGate(props.state);
   return (
-    <div className="page" style={pageStyle}>
+    <form className="page" style={pageStyle} onSubmit={makeSubmitHandler(!disabled, props.onContinue)}>
       <p>{props.text}</p>
       {props.notice ? <p role="alert" style={noticeStyle}>{props.notice}</p> : null}
       <label style={rowStyle}>
@@ -170,10 +200,10 @@ export function AgeGateView(props: AgeGateViewProps) {
           onChange={(e) => props.onBirthDateChange(e.target.value)}
         />
       </label>
-      <button type="button" disabled={disabled} onClick={props.onContinue}>
+      <button type="submit" disabled={disabled}>
         Продолжить
       </button>
-    </div>
+    </form>
   );
 }
 
@@ -190,7 +220,7 @@ export interface ConsentViewProps {
 export function ConsentView(props: ConsentViewProps) {
   const disabled = props.submitting || !canSubmit(props.state);
   return (
-    <div className="page" style={pageStyle}>
+    <form className="page" style={pageStyle} onSubmit={makeSubmitHandler(!disabled, props.onContinue)}>
       <p>{props.intro}</p>
       {props.notice ? <p role="alert" style={noticeStyle}>{props.notice}</p> : null}
       <label style={rowStyle}>
@@ -201,10 +231,10 @@ export function ConsentView(props: ConsentViewProps) {
         />
         <span>{props.c1Label}</span>
       </label>
-      <button type="button" disabled={disabled} onClick={props.onContinue}>
+      <button type="submit" disabled={disabled}>
         {props.submitting ? 'Отправляем…' : 'Продолжить'}
       </button>
-    </div>
+    </form>
   );
 }
 
@@ -224,6 +254,7 @@ export interface OnboardingFlowProps {
 export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   const [texts, setTexts] = useState<TextMap>({});
   const [textsStatus, setTextsStatus] = useState<TextsStatus>('loading');
+  const [textsError, setTextsError] = useState<unknown>(null);
   const [textsAttempt, setTextsAttempt] = useState(0);
   const [step, setStep] = useState<Step>('welcome');
   const [state, setState] = useState<OnboardingState>(INITIAL_STATE);
@@ -233,6 +264,8 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   const [submitting, setSubmitting] = useState(false);
   // Флаг «отправка идёт»: ref срабатывает синхронно, поэтому двойной клик не шлёт два POST.
   const submittingRef = useRef(false);
+  // Один X-Client-Op-Id на весь онбординг (D-17): создаётся при первой отправке, повтор — с ним же.
+  const clientOpIdRef = useRef('');
 
   useEffect(() => {
     let cancelled = false;
@@ -243,8 +276,10 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
         setTexts(textsToMap(resp));
         setTextsStatus('ready');
       })
-      .catch(() => {
-        if (!cancelled) setTextsStatus('failed');
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setTextsError(err);
+        setTextsStatus('failed');
       });
     return () => {
       cancelled = true;
@@ -254,9 +289,10 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   const submit = useCallback(() => {
     if (submittingRef.current || !canSubmit(state)) return;
     submittingRef.current = true;
+    if (!clientOpIdRef.current) clientOpIdRef.current = newClientOpId();
     setSubmitting(true);
     setNotice(undefined);
-    postFirstLaunch(buildFirstLaunchBody(state))
+    postFirstLaunch(buildFirstLaunchBody(state), clientOpIdRef.current)
       .then((created) => {
         setShortNo(created.short_no);
         setStep('done');
@@ -287,7 +323,7 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   if (textsStatus === 'failed') {
     return (
       <div className="page" style={pageStyle}>
-        <p>Не удалось загрузить приложение. Проверьте интернет и нажмите «Повторить».</p>
+        <p>{textsErrorMessage(textsError)}</p>
         <button type="button" onClick={() => setTextsAttempt((n) => n + 1)}>
           Повторить
         </button>

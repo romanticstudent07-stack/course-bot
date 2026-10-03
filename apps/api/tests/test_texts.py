@@ -1,10 +1,11 @@
-"""1d + 1e-1a: text_registry — seed, загрузчик, GET/POST /miniapp/v1/texts.
+"""1d + 1e-1a + 1e-2: text_registry — seed, загрузчик, GET/POST /miniapp/v1/texts.
 
 Без БД: схема = зеркало, seed по схеме (B4 и legal), только заглушки, тексты согласий
 first-launch есть в legal.json, загрузчик отклоняет плохой seed, 401 / 422 / 503 от API.
 С БД (DATABASE_URL, в CI обязательно): загрузка идемпотентна, лишние ключи не удаляются,
 GET 200 без notes, 404, bulk texts + missing, CHECK на tone.
 Очистка: TRUNCATE consent_events, text_registry — consent_events ссылается на text_registry (FK, 0004).
+1e-2: B4 + 4 экрана после pid, legal + оферта; версия обоих seed — 0.2.0.
 """
 from __future__ import annotations
 
@@ -37,8 +38,23 @@ MIRROR_SCHEMA = (
     REPO_ROOT / "docs" / "architecture" / "build" / "config-schemas" / "text_registry.schema.json"
 )
 MIGRATION_0003 = next((API_DIR / "migrations" / "versions").glob("*0003_text_registry*.py"))
-B4_KEYS = {"B4.onb_welcome", "B4.onb_age_gate", "B4.onb_age_underage", "B4.onb_done"}
-LEGAL_KEYS = {"legal.onb_consent_intro", "legal.consent_c0_age_18_plus", "legal.consent_c1_pdn"}
+B4_KEYS = {
+    "B4.onb_welcome",
+    "B4.onb_age_gate",
+    "B4.onb_age_underage",
+    "B4.onb_done",
+    "B4.onb_email",
+    "B4.onb_city",
+    "B4.onb_checkup",
+    "B4.onb_rules",
+}
+LEGAL_KEYS = {
+    "legal.onb_consent_intro",
+    "legal.consent_c0_age_18_plus",
+    "legal.consent_c1_pdn",
+    "legal.offer",
+}
+SEED_VERSION = "0.2.0"
 URL = "/miniapp/v1/texts"
 
 
@@ -85,20 +101,22 @@ def test_migration_check_uses_key_pattern():
 def test_b4_seed_passes_schema():
     data = _read_json(TEXTS_DIR / "B4.json")
     Draft202012Validator(_read_json(SCHEMA_PATH)).validate(data)
-    assert data["version"] == "0.1.0"
+    assert data["version"] == SEED_VERSION
     assert {e["key"] for e in data["entries"]} == B4_KEYS
 
 
 def test_legal_seed_passes_schema():
     data = _read_json(TEXTS_DIR / "legal.json")
     Draft202012Validator(_read_json(SCHEMA_PATH)).validate(data)
-    assert data["version"] == "0.1.0"
+    assert data["version"] == SEED_VERSION
     assert {e["key"] for e in data["entries"]} == LEGAL_KEYS
 
 
 def test_consent_text_keys_are_in_legal_seed():
     # first-launch берёт тексты согласий отсюда; нет ключа в seed → 503 на сервере.
     assert set(CONSENT_TEXT_KEYS.values()) <= LEGAL_KEYS
+    # Оферта — только чтение (решение «В2 А»): first-launch её не принимает.
+    assert "legal.offer" not in CONSENT_TEXT_KEYS.values()
 
 
 def test_all_seed_entries_are_placeholders():
@@ -118,8 +136,8 @@ def test_load_seed_reads_repo_files():
     assert B4_KEYS <= keys
     assert LEGAL_KEYS <= keys
     assert len(entries) == len(keys)  # дублей между файлами нет
-    assert all(e.registry_version == "0.1.0" for e in entries if e.source == "B4.json")
-    assert all(e.registry_version == "0.1.0" for e in entries if e.source == "legal.json")
+    assert all(e.registry_version == SEED_VERSION for e in entries if e.source == "B4.json")
+    assert all(e.registry_version == SEED_VERSION for e in entries if e.source == "legal.json")
 
 
 def test_loader_rejects_bad_tone(tmp_path, capsys):
@@ -254,6 +272,13 @@ def test_get_legal_text_200(seeded_db, db_api_client):
     r = db_api_client.get(f"{URL}/legal.consent_c1_pdn", headers=_headers())
     assert r.status_code == 200, r.text
     assert r.json()["text"].startswith("[ЗАГЛУШКА]")
+
+
+def test_get_offer_text_200(seeded_db, db_api_client):
+    r = db_api_client.get(f"{URL}/legal.offer", headers=_headers())
+    assert r.status_code == 200, r.text
+    assert r.json()["text"].startswith("[ЗАГЛУШКА]")
+    assert "notes" not in r.json()
 
 
 def test_get_missing_404(seeded_db, db_api_client):

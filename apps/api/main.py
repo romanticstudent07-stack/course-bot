@@ -7,6 +7,7 @@
   GET  /healthz                              — liveness (без initData, без rate-limit)
   POST /miniapp/v1/onboarding/first-launch   — SEAM-1: создание/поиск участника
                                                (tg_user_registry), initData проверяется
+  GET  /miniapp/v1/consents                  — свои согласия (1e-2), только чтение
   GET  /miniapp/v1/texts/{key}               — текст из text_registry по ключу (1d)
   POST /miniapp/v1/texts/bulk                — пачка текстов по списку ключей (1d)
   POST /security/csp-report                  — приёмник CSP-репортов (E2), без initData
@@ -26,7 +27,7 @@ from fastapi import APIRouter, Depends, FastAPI
 from app.config import get_settings
 from app.errors import install_error_handlers
 from app.rate_limit import rate_limit
-from app.routers import health, onboarding, security, texts
+from app.routers import consents, health, onboarding, security, texts
 from app.telegram_init_data import require_init_data
 
 
@@ -62,7 +63,9 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
 
     # /miniapp/v1/** — проверка initData и rate-limit на уровне роутера, для всех маршрутов.
-    app.include_router(build_miniapp_v1_router(onboarding.router, texts.router))
+    app.include_router(
+        build_miniapp_v1_router(onboarding.router, consents.router, texts.router)
+    )
 
     app.include_router(security.router)
     return app
