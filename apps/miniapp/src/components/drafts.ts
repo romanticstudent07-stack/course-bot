@@ -1,16 +1,19 @@
-// apps/miniapp/src/components/drafts.ts — черновик анкеты после pid (1e-2).
+// apps/miniapp/src/components/drafts.ts — черновик анкеты после pid (1e-2, 1e-2b-2).
 //
 // Нативный IndexedDB без библиотек, за интерфейсом DraftStore (в тестах — хранилище в памяти).
 // Это ЕДИНСТВЕННЫЙ файл Mini App, который пишет на устройство.
 //
-// Правила (I4 §7 R380_cleanup, карточка 1e-2 §7):
+// Правила (I4 §7 R380_cleanup, карточка 1e-2 §7, карточка 1e-2b-2 §7):
 //   - в черновике только step, email, city + служебные v, tgUserId, savedAt;
 //     дату рождения сюда не класть НИКОГДА (её и нет в типе Draft; sanitizeDraft
 //     отбрасывает любые лишние поля);
 //   - черновик привязан к tg_user_id: другой tg_user_id или неизвестный → полная
 //     очистка сразу при открытии;
 //   - черновик старше 24 ч (от последнего сохранения) → удалить при открытии;
-//   - битая запись → удалить.
+//   - битая запись → удалить;
+//   - «Перейти к курсу» → в черновике только {step: 'finished'} (finishDraft): email и город
+//     стираются; пользователь неизвестен → черновик удаляется; ошибка хранилища переход
+//     не блокирует и в лог не пишется.
 // На сервер черновик не уходит: эндпоинта анкеты нет.
 
 export const LATER_STEPS = ['offer', 'email', 'city', 'checkup', 'rules', 'finished'] as const;
@@ -26,6 +29,9 @@ export interface Draft {
 }
 
 export const EMPTY_DRAFT: Draft = { step: 'offer', email: '', city: '' };
+
+/** Черновик после «Перейти к курсу»: только метка шага, без email и города. */
+export const FINISHED_DRAFT: Draft = { step: 'finished', email: '', city: '' };
 
 export const DRAFT_VERSION = 1;
 export const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -105,6 +111,30 @@ export async function openDraft(store: DraftStore, tgUserId: number | null, now:
 export async function saveDraft(store: DraftStore, tgUserId: number | null, draft: Draft, now: number): Promise<void> {
   if (tgUserId === null) return;
   await store.put({ v: DRAFT_VERSION, tgUserId, savedAt: now, ...sanitizeDraft(draft) });
+}
+
+/**
+ * «Перейти к курсу»: в черновике остаётся только метка finished (email и город стёрты);
+ * пользователь неизвестен → черновик удаляется. Ошибка хранилища (reject или синхронный
+ * throw) глотается без лога; onFinish вызывается ровно 1 раз — после попытки записи.
+ * Ошибка внутри самого onFinish не перехватывается.
+ */
+export async function finishDraft(
+  store: DraftStore,
+  tgUserId: number | null,
+  now: number,
+  onFinish: () => void,
+): Promise<void> {
+  try {
+    if (tgUserId !== null) {
+      await saveDraft(store, tgUserId, FINISHED_DRAFT, now);
+    } else {
+      await store.clear();
+    }
+  } catch {
+    // Хранилище недоступно — переход к курсу не блокируем, в лог ничего (ПДн).
+  }
+  onFinish();
 }
 
 // ---- Хранилище в памяти (тесты; запасной вариант, если IndexedDB нет) ----

@@ -7,6 +7,7 @@
 // вернуться к согласиям нельзя).
 // Анкета на сервер НЕ уходит: эндпоинта нет — только черновик на устройстве (drafts.ts:
 // привязка к tg_user_id, TTL 24 ч, только step / email / city).
+// «Перейти к курсу» → в черновике только метка finished (finishDraft, 1e-2b-2).
 // Шаги с полями (email, city) — <form> с onSubmit (preventDefault) и основной кнопкой
 // type="submit"; Enter при невыполненных условиях ничего не делает.
 // Тексты — один POST /texts/bulk; ключ в missing → нейтральная заглушка.
@@ -19,6 +20,7 @@ import {
   EMAIL_MAX_LENGTH,
   EMPTY_DRAFT,
   LATER_STEPS,
+  finishDraft,
   openDraft,
   saveDraft,
   type Draft,
@@ -358,7 +360,9 @@ export function LaterSteps({ tgUserId, store, onFinish }: LaterStepsProps) {
       text={key ? pickText(texts, key) : ''}
       consentsText={draft.step === 'finished' ? consentsLabel(consents) : undefined}
       onAction={dispatch}
-      onFinish={onFinish}
+      onFinish={() => {
+        void finishDraft(store, tgUserId, Date.now(), onFinish);
+      }}
     />
   );
 }

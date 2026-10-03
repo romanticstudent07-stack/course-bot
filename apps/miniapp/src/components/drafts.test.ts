@@ -1,5 +1,6 @@
 // apps/miniapp/src/components/drafts.test.ts — vitest, environment node.
-// DraftStore: сохранение/чтение, очистка при смене tg_user_id, TTL 24 ч, только step/email/city.
+// DraftStore: сохранение/чтение, очистка при смене tg_user_id, TTL 24 ч, только step/email/city;
+// finishDraft: после «Перейти к курсу» в черновике только метка finished, ошибка хранилища не блокирует.
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -9,6 +10,7 @@ import {
   EMAIL_MAX_LENGTH,
   EMPTY_DRAFT,
   createMemoryDraftStore,
+  finishDraft,
   openDraft,
   parseStoredDraft,
   sanitizeDraft,
@@ -134,5 +136,106 @@ describe('битые записи', () => {
     const dirty = { step: 'payment', email: 'x@y.z', city: 'Атлантида' } as unknown as Draft;
     expect(sanitizeDraft(dirty)).toEqual({ step: 'offer', email: 'x@y.z', city: '' });
     expect(sanitizeDraft(EMPTY_DRAFT)).toEqual(EMPTY_DRAFT);
+  });
+});
+
+describe('finishDraft', () => {
+  it('сохранён черновик с email и городом → остаётся только метка finished; onFinish 1 раз после записи', async () => {
+    const store = createMemoryDraftStore();
+    await saveDraft(store, USER, DRAFT, NOW - 5000);
+    let calls = 0;
+    let seenAtFinish: unknown = undefined;
+    const onFinish = () => {
+      calls += 1;
+      seenAtFinish = store.peek();
+    };
+    await finishDraft(store, USER, NOW, onFinish);
+    const expected = { v: 1, tgUserId: USER, savedAt: NOW, step: 'finished', email: '', city: '' };
+    expect(store.peek()).toEqual(expected);
+    expect(seenAtFinish).toEqual(expected);
+    expect(calls).toBe(1);
+    expect(JSON.stringify(store.peek())).not.toContain('a@example.com');
+  });
+
+  it('после finishDraft следующее открытие → экран finished без email и города', async () => {
+    const store = createMemoryDraftStore();
+    await saveDraft(store, USER, DRAFT, NOW - 5000);
+    let calls = 0;
+    const onFinish = () => {
+      calls += 1;
+    };
+    await finishDraft(store, USER, NOW, onFinish);
+    expect(await openDraft(store, USER, NOW + 1000)).toEqual({ step: 'finished', email: '', city: '' });
+    expect(calls).toBe(1);
+  });
+
+  it('put возвращает reject → finishDraft резолвится, onFinish 1 раз', async () => {
+    let calls = 0;
+    const onFinish = () => {
+      calls += 1;
+    };
+    const store: DraftStore = {
+      get: async () => undefined,
+      put: async () => {
+        throw new Error('put failed');
+      },
+      clear: async () => undefined,
+    };
+    await expect(finishDraft(store, USER, NOW, onFinish)).resolves.toBeUndefined();
+    expect(calls).toBe(1);
+  });
+
+  it('put бросает синхронно → finishDraft резолвится, onFinish 1 раз', async () => {
+    let calls = 0;
+    const onFinish = () => {
+      calls += 1;
+    };
+    const store: DraftStore = {
+      get: async () => undefined,
+      put: () => {
+        throw new Error('put failed sync');
+      },
+      clear: async () => undefined,
+    };
+    await expect(finishDraft(store, USER, NOW, onFinish)).resolves.toBeUndefined();
+    expect(calls).toBe(1);
+  });
+
+  it('tgUserId неизвестен → clear вызван, put не вызван, onFinish 1 раз', async () => {
+    let calls = 0;
+    const onFinish = () => {
+      calls += 1;
+    };
+    let cleared = false;
+    let putCalled = false;
+    const store: DraftStore = {
+      get: async () => undefined,
+      put: async () => {
+        putCalled = true;
+      },
+      clear: async () => {
+        cleared = true;
+      },
+    };
+    await finishDraft(store, null, NOW, onFinish);
+    expect(cleared).toBe(true);
+    expect(putCalled).toBe(false);
+    expect(calls).toBe(1);
+  });
+
+  it('tgUserId неизвестен и clear возвращает reject → finishDraft резолвится, onFinish 1 раз', async () => {
+    let calls = 0;
+    const onFinish = () => {
+      calls += 1;
+    };
+    const store: DraftStore = {
+      get: async () => undefined,
+      put: async () => undefined,
+      clear: async () => {
+        throw new Error('clear failed');
+      },
+    };
+    await expect(finishDraft(store, null, NOW, onFinish)).resolves.toBeUndefined();
+    expect(calls).toBe(1);
   });
 });
