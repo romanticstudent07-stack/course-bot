@@ -1,9 +1,11 @@
-"""GET /miniapp/v1/consents — чтение своих согласий (1e-2, B-2).
+"""GET /miniapp/v1/consents — чтение своих согласий (1e-2, B-2; ревью #43 — 1e-2b-3).
 
-Без БД: fold_events (последнее событие решает), 401, 503.
+Без БД: fold_events (последнее событие решает), 401, 503,
+невалидная initData → 401 раньше rate-limit (фейковый счётчик не вызван).
 С БД (DATABASE_URL, в CI обязательно): нет участника → [], после first-launch → C0 и C1,
-изоляция между tg_user_id (параметры запроса игнорируются), revoke, tombstone,
-GET ничего не пишет, перезагрузка текстов не меняет ver_of_text старых записей (D-15 в).
+изоляция между tg_user_id (параметры запроса игнорируются; в т.ч. когда у обоих есть pid),
+revoke, tombstone, GET ничего не пишет, перезагрузка текстов не меняет ver_of_text
+старых записей (D-15 в).
 """
 from __future__ import annotations
 
@@ -93,6 +95,35 @@ def test_db_unavailable_is_503(api_client):
     assert "127.0.0.1" not in r.text and "nopass" not in r.text
 
 
+def test_invalid_init_data_401_rate_limit_counter_not_called(api_client):
+    # Ревью #43: без валидной initData — 401 раньше счётчика rate-limit.
+    from main import app
+    from app.rate_limit import get_counter
+
+    class FakeCounter:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, int]] = []
+
+        def incr(self, key: str, ttl_seconds: int) -> int:
+            self.calls.append((key, ttl_seconds))
+            return 1
+
+    counter = FakeCounter()
+    # Подмену очистит фикстура api_client (app.dependency_overrides.clear()).
+    app.dependency_overrides[get_counter] = lambda: counter
+
+    forged = valid_init_data().replace("Test", "Evil")
+    r = api_client.get(URL, headers={INIT_DATA_HEADER: forged})
+    assert r.status_code == 401
+    assert r.json()["code"] == "TG_INIT_INVALID"
+    assert counter.calls == []
+
+    # Контроль подмены: с валидной initData счётчик вызывается (дальше 503 — БД недоступна).
+    r = api_client.get(URL, headers=_headers(42))
+    assert r.status_code == 503
+    assert len(counter.calls) == 1
+
+
 # ============================ с БД ============================
 
 
@@ -131,6 +162,31 @@ def test_isolation_between_users(db_api_client, db_engine):
     assert a_view["C0"]["revoked_at"] is None
     assert set(b_view) == {"C0", "C1"}
     assert all(c["revoked_at"] is None for c in b_view.values())
+
+
+def test_isolation_both_have_pid_query_params_ignored(db_api_client, db_engine):
+    # Ревью #43: у A и B свои pid; B подставляет pid и tg_user_id A — видит только свои согласия.
+    ra = db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_headers(1501))
+    rb = db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_headers(1502))
+    assert ra.status_code == 201
+    assert rb.status_code == 201
+    pid_a = ra.json()["pid"]
+    pid_b = rb.json()["pid"]
+    assert pid_a != pid_b
+    # Метка: у A C1 отозвано — утечка согласий A в ответ B стала бы видна.
+    _insert_event(db_engine, pid_a, "C1", "revoke")
+
+    r1 = db_api_client.get(
+        URL, params={"pid": pid_a, "tg_user_id": 1501}, headers=_headers(1502)
+    )
+    assert r1.status_code == 200
+    body = r1.json()
+    assert [c["id"] for c in body] == ["C0", "C1"]
+    assert all(c["revoked_at"] is None for c in body)
+
+    r2 = db_api_client.get(URL, headers=_headers(1502))
+    assert r2.status_code == 200
+    assert r1.json() == r2.json()
 
 
 def test_tombstoned_participant_is_empty_list(db_api_client, db_engine):
