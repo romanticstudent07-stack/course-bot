@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "owner_block": "B9",
   "durability_block": "B14",
   "entries": [
@@ -27,6 +27,31 @@
       "tone": "neutral",
       "legal_status": "pre-legal-review",
       "text": "[ЗАГЛУШКА] Онбординг завершён."
+    },
+    {
+      "key": "B4.onb_email",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Экран email: адрес почты (необязательно).",
+      "notes": "1e-2: экран после pid. Email остаётся черновиком на устройстве, на сервер не уходит."
+    },
+    {
+      "key": "B4.onb_city",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Экран города: выберите город."
+    },
+    {
+      "key": "B4.onb_checkup",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Экран чекапа перед стартом."
+    },
+    {
+      "key": "B4.onb_rules",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Правила участия."
     }
   ]
 }

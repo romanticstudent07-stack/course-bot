@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "owner_block": "B9",
   "durability_block": "B14",
   "entries": [
@@ -21,6 +21,13 @@
       "tone": "strict",
       "legal_status": "pre-legal-review",
       "text": "[ЗАГЛУШКА] Согласие C1: обработка персональных данных."
+    },
+    {
+      "key": "legal.offer",
+      "tone": "strict",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Оферта. Экран только для чтения; акцепт — вместе с оплатой (позже).",
+      "notes": "1e-2, решение «В2 А»: показ после pid, в consent_events не пишется."
     }
   ]
 }

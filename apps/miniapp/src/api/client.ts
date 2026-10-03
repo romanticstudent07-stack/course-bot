@@ -4,7 +4,7 @@
 //   - на сервер уходит СЫРАЯ строка initData в заголовке X-Telegram-Init-Data;
 //     initDataUnsafe для решений не используется;
 //   - базовый URL — из VITE_API_BASE_URL (пусто = тот же origin, CSP E2 connect-src 'self');
-//   - state-меняющие вызовы несут X-Client-Op-Id (uuid v4) — идемпотентность.
+//   - state-меняющие вызовы несут X-Client-Op-Id (uuid v4) — идемпотентность (D-17).
 import { retrieveRawInitData } from '@telegram-apps/sdk-react';
 
 export const INIT_DATA_HEADER = 'X-Telegram-Init-Data';
@@ -39,6 +39,39 @@ function readInitData(): string | undefined {
   }
 }
 
+/**
+ * tg_user_id из сырой строки initData — ТОЛЬКО для привязки локального черновика
+ * к пользователю (drafts.ts: другой пользователь → полная очистка). Для решений
+ * сервера не используется: сервер берёт tg_user_id из проверенной initData.
+ */
+export function tgUserIdFromInitData(raw: string | undefined): number | null {
+  if (!raw) return null;
+  try {
+    const userRaw = new URLSearchParams(raw).get('user');
+    if (!userRaw) return null;
+    const user: unknown = JSON.parse(userRaw);
+    if (typeof user !== 'object' || user === null) return null;
+    const id = (user as { id?: unknown }).id;
+    return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readTgUserId(): number | null {
+  return tgUserIdFromInitData(readInitData());
+}
+
+/** uuid v4 для X-Client-Op-Id (getRandomValues есть во всех webview, randomUUID — не везде). */
+export function newClientOpId(): string {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT';
   body?: unknown;
@@ -68,7 +101,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 }
 
 // ---- Онбординг (SEAM-1) — контракт build/miniapp-api-contract.yaml ----
-// UI экранов онбординга — apps/miniapp/src/components/OnboardingFlow.tsx (1e-1b).
+// UI: apps/miniapp/src/components/OnboardingFlow.tsx (до pid) и LaterSteps.tsx (после pid).
 
 /** Единый реестр согласий C0–C6 (Consent.id в контракте). До pid обязательны C0 и C1. */
 export type ConsentId = 'C0' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'C6';
@@ -85,8 +118,20 @@ export interface PidCreated {
   short_no: string;
 }
 
-export const postFirstLaunch = (body: FirstLaunchRequest) =>
-  apiRequest<PidCreated>('/miniapp/v1/onboarding/first-launch', { method: 'POST', body });
+/** clientOpId — один на весь онбординг; повтор после ошибки уходит с тем же id (D-17). */
+export const postFirstLaunch = (body: FirstLaunchRequest, clientOpId: string) =>
+  apiRequest<PidCreated>('/miniapp/v1/onboarding/first-launch', { method: 'POST', body, clientOpId });
+
+// ---- Согласия (1e-2): только чтение своих ----
+
+export interface ConsentOut {
+  id: ConsentId;
+  given_at: string;
+  revoked_at: string | null;
+  legal_status: string;
+}
+
+export const getConsents = () => apiRequest<ConsentOut[]>('/miniapp/v1/consents');
 
 // ---- Тексты (text_registry, 1d) ----
 
