@@ -1,4 +1,4 @@
-# SHTAB — правила чата ШТАБ проекта course-bot (версия 3.6, 02.10.2026)
+# SHTAB — правила чата ШТАБ проекта course-bot (версия 3.7, 03.10.2026)
 # ЧАСТЬ 2 из 2 — разделы 4–9.
 # ЧАСТЬ 1 (разделы 0–3) ОБЯЗАТЕЛЬНА:
 # https://raw.githubusercontent.com/romanticstudent07-stack/course-bot/main/docs/process/SHTAB.md
