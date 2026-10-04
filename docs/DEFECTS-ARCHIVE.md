@@ -3,7 +3,6 @@
 Сюда переносятся записи из `docs/DEFECTS-FOUND.md`, у которых «Ждём решения Автора: нет»
 и нет открытых пунктов «Остаётся», а также закрытые части действующих записей.
 Тексты — дословно. Новые записи сюда не пишут: они идут в `docs/DEFECTS-FOUND.md`.
-Ждут правки зеркала DOCS-course-bot: D-2, D-3, D-8, D-12.
 
 ---
 
@@ -20,6 +19,7 @@
   `{s3-domain-ru}` не подставлен: это плейсхолдер-шлюз, решение Автора.
 - **Решение Автора:** выравнивать CSP в DOCS-course-bot, не здесь.
   В `apps/miniapp/nginx.conf` остаётся редакция E2.
+- **Зеркало исправлено:** DOCS PR #10 (`build/miniapp-frontend-stack.md`, `build/miniapp-api-contract.yaml`: CSP = E2 `csp_final`), sync PR #51.
 - **Ждём решения Автора:** нет.
 
 ## D-3. Остатки MinIO и версия Garage в документах
@@ -34,6 +34,7 @@
   в PR «docs: dev-вход через Tailscale, --env-file, остатки MinIO».
   MinIO в зеркале (`build/build-order.md`: Итерация 0-А, `minio`, `minio-init`,
   состав `docker-compose.yaml`) — править в DOCS-course-bot.
+- **Зеркало исправлено:** DOCS PR #9 (`build/build-order.md`: MinIO → Garage), sync PR #51.
 - **Ждём решения Автора:** нет (правка зеркала — в DOCS-course-bot).
 
 ## D-4. Кто принимает Telegram webhook
@@ -66,6 +67,7 @@
 - **Предлагаемое решение:** править в DOCS-course-bot (`build/DIVISION.md`,
   `build/build-order.md`): Menu Button — через Bot API из `WEBAPP_URL`;
   `/setdomain` — только для Login Widget; `/newapp` — только для прямой ссылки.
+- **Зеркало исправлено:** DOCS PR #9 (`build/DIVISION.md`, `build/build-order.md`), sync PR #51.
 - **Ждём решения Автора:** нет.
 
 ## D-12. first-launch: `short_no` и ответы вне контракта
@@ -92,6 +94,7 @@
   6. **Дата рождения не хранится** (решение Автора): проверка только в момент запроса.
 - **Предлагаемое решение:** в DOCS-course-bot добавить `short_no` в колонки И1, описать
   в контракте 422/503 и семантику повторного 201.
+- **Зеркало исправлено:** DOCS PR #11 (контракт first-launch; И1 — врезка «Уточнено реализацией»; DOCS D-32), sync PR #51.
 - **Ждём решения Автора:** нет (решения приняты); правки зеркала — в DOCS-course-bot.
 
 ### D-7 (закрытые части) — initData и rate-limit
