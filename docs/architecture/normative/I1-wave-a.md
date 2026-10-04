@@ -16,6 +16,8 @@ contains: [meta, invariants I-1…I-6, glossary_patch, role_capability_matrix, h
 
 > **Переопределено ERRATA-UNIFIED.** `publish_epoch.owner_block` в `glossary_patch.new_entities_v3_5` отменён: владелец сущности — блок 14, блок 10 только потребляет (FIX1). Возрастной гейт и создание `pid` связаны явным порядком: `pid` не создаётся до жёсткой проверки даты рождения в first-launch Mini App, инвариант `INV-AGE-GATE-BEFORE-PID` (ADD3); при этом `autocreate_source: mini_app_only` подтверждён и не откатывается, а сам регистрационный тупик канонизирован патчем SEAM-1 как проектное решение. Инварианты И-1…И-6 сохранены (попытка их отзыва отклонена). Каноническое число рисков — 22 (E4, NOTE1). Плейсхолдер `{s3-domain-ru}` унифицирован и блокирует прод (раздел 6). См. [errata-unified.md](errata-unified.md) и [seam-patch-1-onboarding.md](seam-patch-1-onboarding.md).
 
+> **Уточнено реализацией (course-bot).** В реализации `tg_user_id_pid_registry` (таблица `tg_user_registry`) есть колонка `short_no` — короткий номер участника из Б6 §6.3 (`#000123`), выдаётся при создании `pid`; в `columns` ниже её нет. YAML ниже перенесён дословно и не меняется. См. [../appendix/D-source-defects.md](../appendix/D-source-defects.md) (D-32) и [../build/miniapp-api-contract.yaml](../build/miniapp-api-contract.yaml) (`PidCreated`).
+
 ## Место в стеке старшинства
 
 Первый уровень нормативного стека. При расхождении с корпусом `consolidated v3`

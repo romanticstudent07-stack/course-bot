@@ -56,9 +56,13 @@ components:
 
     PidCreated:
       type: object
+      required: [pid, short_no]
       properties:
         pid: { type: string, format: uuid }
-        short_no: { type: string, example: "#000123" }
+        short_no:
+          type: string
+          example: "#000123"
+          description: "Короткий номер участника (Б6 §6.3): # и не меньше 6 цифр (после 999999 — больше). Выдаётся при создании pid, только для показа; пропуски номеров возможны."
 
   responses:
     Unauthorized:
@@ -73,6 +77,15 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     RateLimited:
       description: "Слишком много запросов"
+    ServiceUnavailable:
+      description: |
+        Сервис временно недоступен (fail closed), формат Error:
+        SERVICE_UNAVAILABLE — БД недоступна;
+        SERVICE_MISCONFIGURED — сервер настроен неверно (пустой BOT_TOKEN,
+        неизвестный SERVER_TIMEZONE, нет текста согласия в text_registry).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
 
 security:
   - TelegramInitData: []
@@ -85,21 +98,54 @@ paths:
     post:
       summary: "Первый запуск Mini App — создание pid (SEAM-PATCH-1)"
       description: |
-        Возрастной гейт → создание pid (INV-AGE-GATE-BEFORE-PID, ADD3 ERRATA).
-        Идемпотентность через tg_user_id: повторный вызов возвращает существующий pid.
+        Возрастной гейт → согласия → создание pid (INV-AGE-GATE-BEFORE-PID, ADD3 ERRATA).
+        Порядок на сервере: initData → тело запроса → возраст (без БД; < 18 → 403)
+        → обязательные согласия C0 и C1 (нет → 422) → одна транзакция: тексты согласий
+        из text_registry → участник (pid, short_no) → события согласий give.
+        Место оплаты в этом порядке не решено (course-bot D-10).
+        «Сегодня» для возраста — дата в часовом поясе сервера (SERVER_TIMEZONE,
+        Europe/Moscow): пояс участника на first-launch ещё неизвестен.
+        Дата рождения не хранится: проверка только в момент запроса.
+        Неизвестный tg_user_id не даёт 403: first-launch — единственная точка
+        создания участника (SEAM-PATCH-1).
+        Идемпотентность через tg_user_id: повторный вызов → 201 с тем же телом
+        (тот же pid и short_no); уже данные согласия повторно не записываются.
+        После tombstone тот же tg_user_id получает новый pid и новый short_no (И1, Р243).
+        Уточнено реализацией course-bot (course-bot D-10, D-12; appendix/D-source-defects.md, D-32).
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [birth_date]
+              required: [birth_date, consents]
               properties:
                 birth_date: { type: string, format: date }
+                consents:
+                  type: array
+                  uniqueItems: true
+                  description: "Обязательны C0 (18+) и C1 (ПДн). C2–C6 на first-launch не принимаются (422 CONSENT_NOT_SUPPORTED). Текст согласия выбирает сервер, клиент шлёт только id."
+                  items: { type: string, enum: [C0, C1, C2, C3, C4, C5, C6] }
       responses:
-        "201": { description: "Создан", content: { application/json: { schema: { $ref: "#/components/schemas/PidCreated" }}}}
+        "201": { description: "Создан или уже существует (тот же pid и short_no)", content: { application/json: { schema: { $ref: "#/components/schemas/PidCreated" }}}}
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { description: "Возрастной гейт: < 18" }
+        "403":
+          description: "Возрастной гейт: < 18 (AGE_GATE_UNDERAGE). pid не создаётся."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: |
+            CONSENTS_REQUIRED — нет C0 или C1 (details.missing);
+            CONSENT_NOT_SUPPORTED — согласие из C2–C6 (details.unsupported);
+            BIRTH_DATE_IN_FUTURE — дата рождения позже «сегодня»;
+            VALIDATION_ERROR — тело не по схеме (details.errors: [{loc, type}], без значений полей).
+            course-bot: VALIDATION_ERROR — с задачи B-3b; до неё — стандартный ответ FastAPI с полем detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   # ---------------- Согласия (C0–C6) ----------------
   /miniapp/v1/consents:
@@ -236,11 +282,13 @@ paths:
       # TODO: body
 
 # ---------------- CSP-заголовок (E2 ERRATA) ----------------
+# Источник: normative/errata-unified.md → E2_csp_default_src.csp_final (дословно).
 # csp_header:
 #   default-src 'self';
-#   script-src 'self';
+#   script-src 'self' https://telegram.org;
+#   img-src 'self' https://{s3-domain-ru} data: blob:;
+#   connect-src 'self' https://{s3-domain-ru};
 #   style-src 'self' 'unsafe-inline';
-#   connect-src 'self' https://api.telegram.org;
-#   img-src 'self' data: blob: <s3-domain-ru>;
-#   frame-ancestors https://web.telegram.org https://t.me;
+#   frame-ancestors https://web.telegram.org https://telegram.org;
 #   report-uri /security/csp-report;
+#   unsafe-eval запрещён (INV-B14-CSP-STRICT).

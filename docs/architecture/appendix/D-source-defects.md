@@ -70,6 +70,10 @@ policy: "Дефекты не правятся в каталоге. YAML пере
 
 - **D-31.** Опечатка «отмель text_registry» вместо «отмена text_registry» в [normative/errata-unified.md](../normative/errata-unified.md), раздел 8, `rejected_explicitly.from_document_A`. Влияние: `none_semantic`. Ручная правка в источнике при удобном случае. См. `known_typo_for_manual_fix` в [normative/seam-patch-1-onboarding.md](../normative/seam-patch-1-onboarding.md).
 
+## Реализация course-bot (D-32)
+
+- **D-32.** `normative/I1-wave-a.md`, `tg_user_id_pid_registry.columns`: нет колонки `short_no`, хотя `PidCreated.short_no` есть в [../build/miniapp-api-contract.yaml](../build/miniapp-api-contract.yaml), а короткий номер `#000123` — в Б6 §6.3 (`assigned_at: registration`). Реализация (запись course-bot D-12) добавила `short_no` в `tg_user_registry` (`bigint GENERATED ALWAYS AS IDENTITY UNIQUE`, показ `#%06d`; пропуски номеров возможны — номер только для показа). YAML И1 не правится (правило переноса); врезка «Уточнено реализацией» — в шапке И1.
+
 ## Что делать с реестром
 
 Правило переноса (из `_WIP`, п. 7): дефекты **не правятся в каталоге** — YAML переносится дословно, дефект фиксируется здесь. Правка вносится в источник (`Архитектура(1).docx` или в следующую волну патча) и следующей волной поднимается в каталог. До правки в источнике агент бота при генерации кода должен читать этот реестр и делать поправку локально.
