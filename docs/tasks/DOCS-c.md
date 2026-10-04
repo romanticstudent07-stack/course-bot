@@ -9,7 +9,7 @@
 
 ## 2. Цель
 Контракт first-launch описывает то, что принято Автором и работает в course-bot:
-согласия в теле, 403/422/503, повторный 201, `short_no`. В И1 — врезка «Уточнено
+согласия в теле, 403/422/429/503, повторный 201, `short_no`. В И1 — врезка «Уточнено
 реализацией». YAML И1 не правится (6Б). Модель авторизации (course-bot D-9 п.(а)) не трогаем.
 
 ## 3. Решения Автора (дословно)
@@ -28,9 +28,9 @@
 Тело `{birth_date, consents}`; обязательны C0 и C1; C2–C6 → 422 `CONSENT_NOT_SUPPORTED`;
 коды: 401 `TG_INIT_MISSING` / `TG_INIT_INVALID`, 403 `AGE_GATE_UNDERAGE`, 422 `CONSENTS_REQUIRED`
 (`details.missing`), `CONSENT_NOT_SUPPORTED` (`details.unsupported`), `BIRTH_DATE_IN_FUTURE`;
-503 `SERVICE_UNAVAILABLE` (БД), `SERVICE_MISCONFIGURED` (пустой `BOT_TOKEN`, неизвестный
-`SERVER_TIMEZONE`, нет текста согласия). Неизвестный `tg_user_id` → 403 не отдаётся (SEAM-1).
-«Было» — дословно из зеркала 4cae002 (= DOCS main).
+429 — rate-limit `/miniapp/v1/**` (course-bot B-1); 503 `SERVICE_UNAVAILABLE` (БД),
+`SERVICE_MISCONFIGURED` (пустой `BOT_TOKEN`, неизвестный `SERVER_TIMEZONE`, нет текста согласия).
+Неизвестный `tg_user_id` → 403 не отдаётся (SEAM-1). «Было» — дословно из зеркала 4cae002 (= DOCS main).
 
 ## 5. ЧТО ПРОЧИТАТЬ
 КОДЕРа нет. `architecture/build/miniapp-api-contract.yaml` (около 10 КБ),
@@ -141,6 +141,7 @@
               content:
                 application/json:
                   schema: { $ref: "#/components/schemas/Error" }
+            "429": { $ref: "#/components/responses/RateLimited" }
             "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
 **Файл 2: `architecture/normative/I1-wave-a.md`** — вставка в шапку (YAML не трогать).
@@ -169,11 +170,13 @@
 ## 9. Проверки: `tools/checks.sh` зелёный (4/15, 9/15, 14/15 — см. выше).
 
 ## 10. Шаги Автора (сайт GitHub; до старта DOCS-b смержен)
+Блоки «станет» копируй кнопкой копирования в правом верхнем углу блока на странице карточки в GitHub (не из Raw: там лишние 4 пробела в начале строк).
 Шаг 1. Ты, браузер: открой
 https://github.com/romanticstudent07-stack/DOCS-course-bot/blob/main/architecture/build/miniapp-api-contract.yaml
 → карандаш. Правки 1.1 и 1.2: Ctrl+F первой строки «было» → выдели блок → Ctrl+V «станет».
-Правка 1.3: Ctrl+F `/miniapp/v1/onboarding/first-launch:` → клик в начало строки → Ctrl+F
-`"Возрастной гейт: < 18" }` → Shift+клик в конец этой строки → Ctrl+V «станет».
+Правка 1.3: Ctrl+F `/miniapp/v1/onboarding/first-launch:` → Esc → клик в самое начало этой строки →
+прокрути вниз (около 20 строк, второй Ctrl+F НЕ нажимать) → Shift+клик в конец строки
+`"403": { description: "Возрастной гейт: < 18" }` → Ctrl+V «станет».
 Строка `/miniapp/v1/onboarding/first-launch:` должна начинаться с 2 пробелов, `post:` — с 4.
 Шаг 2. «Commit changes» → `contract: first-launch по реализации (course-bot D-12, D-10, D-9в)` →
 «Create a new branch for this commit and start a pull request» → ветка
@@ -185,6 +188,7 @@ https://github.com/romanticstudent07-stack/DOCS-course-bot/blob/main/architectur
     normative/errata-unified.md (ADD3), appendix/D-source-defects.md.
     ERRATA: ADD3 (INV-AGE-GATE-BEFORE-PID, порядок age → consents → pid) — описан в first-launch.
     И1 YAML не изменён: врезка «Уточнено реализацией» в шапке + D-32 (правило переноса).
+    429 — rate-limit /miniapp/v1 (course-bot B-1).
     Не решено и не описано как решённое: место оплаты (course-bot D-10), модель TTL (course-bot D-9).
 
 Шаг 4. Ты, браузер:
