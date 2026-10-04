@@ -20,7 +20,7 @@ policy: "Проект реализуется как Mini App-first. Основн
 - CSP `default-src 'self'` + белый список (E2 ERRATA).
 
 **Bot** (Telegram-бот, `apps/bot/`):
-- Меню-кнопка → открытие Mini App (`WebAppInfo`, `/setmenubutton`).
+- Меню-кнопка → открытие Mini App (`WebAppInfo`): бот ставит её сам при старте через Bot API (`setChatMenuButton`) из URL Mini App (`WEBAPP_URL` в course-bot); `/setmenubutton` в BotFather не нужен.
 - Три-тир уведомления (P-5): системные / напоминания / мотивационные.
 - Admin-команды из whitelist (35 команд Б17). **Ровно этот набор — и ничего сверх.**
 - Reply-команды в Рабочей группе (`/revert`, `/approve`, `/refund`, `/life`, `/pause_grant`, `/audit`, `/legal`, `/graph`, `/announce`, `/panic_maintenance`).
@@ -71,7 +71,7 @@ policy: "Проект реализуется как Mini App-first. Основн
 
 ## Что реализуется в боте **приоритетно**
 
-1. **Menu Button → Mini App URL** (`/setmenubutton` в BotFather).
+1. **Menu Button → Mini App URL** (бот ставит через Bot API `setChatMenuButton` из `WEBAPP_URL`; BotFather не нужен).
 2. **Whitelist admin-ID + hard-confirm** — Б17, 35 команд.
 3. **Reply-команды в Рабочей группе** — `/revert`, `/approve`, `/refund`, `/life`, `/pause_grant`.
 4. **Три-тир push** — уведомления через Bot API.

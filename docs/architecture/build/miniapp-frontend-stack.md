@@ -49,15 +49,15 @@ doc_version: "скелет v0"
 
 ```
 default-src 'self';
-script-src 'self';
+script-src 'self' https://telegram.org;
+img-src 'self' https://{s3-domain-ru} data: blob:;
+connect-src 'self' https://{s3-domain-ru};
 style-src 'self' 'unsafe-inline';
-connect-src 'self' https://api.telegram.org;
-img-src 'self' data: blob: <s3-domain-ru>;
-frame-ancestors https://web.telegram.org https://t.me;
+frame-ancestors https://web.telegram.org https://telegram.org;
 report-uri /security/csp-report;
 ```
 
-`unsafe-eval` **запрещён**. `<s3-domain-ru>` заменяется на реальный домен после решения Автора (Boot-gate).
+`unsafe-eval` **запрещён**. Значения — дословно E2 `csp_final` ([../normative/errata-unified.md](../normative/errata-unified.md)). `{s3-domain-ru}` — плейсхолдер-шлюз: заменяется на реальный домен после решения Автора (Boot-gate); пока не заменён, CSP не проходит валидацию.
 
 ## Оффлайн и идемпотентность (И4)
 

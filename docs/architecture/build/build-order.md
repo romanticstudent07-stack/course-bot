@@ -23,7 +23,7 @@ contains: [4 уровня сборки, 6 итераций Mini App-first, boot-
 Уровень 0 разделён на две подступени, чтобы разработка велась на сервере Автора
 до принятия решения об облачном провайдере:
 
-- **Итерация 0-А (локальная инфра)** — Postgres 16 / Redis 7 / MinIO (S3-совместимый)
+- **Итерация 0-А (локальная инфра)** — Postgres 16 / Redis 7 / Garage (S3-совместимый, образ `dxflrs/garage`)
   в контейнерах на сервере Автора, публичный HTTPS через Cloudflare Tunnel.
 - **Итерация 0-Б (переезд на облако)** — Yandex Cloud / Timeweb / VK Cloud, Managed
   PostgreSQL + Object Storage, реальный `{s3-domain-ru}`.
@@ -98,14 +98,14 @@ contains: [4 уровня сборки, 6 итераций Mini App-first, boot-
 Работает на сервере IRONCLAD, без облачных зависимостей. См. `infra/SERVER-IRONCLAD.md`.
 
 1. Docker + Docker Compose v2 + `cloudflared` — установлены на сервере (уже готово).
-2. Telegram Bot регистрация в BotFather: `/newbot`, `/newapp` (домен привяжется после туннеля).
+2. Telegram Bot регистрация в BotFather: `/newbot`. `/newapp` — только если нужна прямая ссылка вида `t.me/<бот>/<app>`; `/setdomain` — настройка Telegram Login Widget, для Mini App не нужна.
 3. Cloudflare Tunnel — именованный туннель на свой домен
    (см. `infra/CLOUDFLARE-TUNNEL.md` в репо реализации).
 4. Vite + React + TypeScript скелет через `npx @telegram-apps/create-mini-app` —
    в multi-stage Docker (`node:20-alpine`), т.к. Node на сервере не установлен.
 5. FastAPI скелет в `apps/api/`: `main.py`, `/healthz`, alembic init.
 6. aiogram 3 скелет в `apps/bot/`: `/start` + Menu Button на `WEBAPP_URL`.
-7. `infra/docker-compose.dev.yml` — сервисы `db`, `redis`, `minio`, `minio-init`,
+7. `infra/docker-compose.dev.yml` — сервисы `db`, `redis`, `garage` (первый бакет создаётся при старте, init-контейнер не нужен),
    позже `api`, `bot`. Всё на 127.0.0.1 (правило IRONCLAD), с лимитами памяти.
 8. Проверка: `docker compose up -d`, бот отвечает на `/start`, Mini App открывается
    по Menu Button через HTTPS туннеля.
@@ -116,7 +116,7 @@ contains: [4 уровня сборки, 6 итераций Mini App-first, boot-
 Параллельно с Итерацией 4 (оплата).
 
 1. Yandex Cloud аккаунт + Managed PostgreSQL + Object Storage.
-2. Telegram Bot регистрация в BotFather: `/newbot`, `/newapp`, `/setmenubutton https://<s3-domain-ru>/`, `/setdomain`.
+2. Telegram Bot регистрация в BotFather: `/newbot`. Menu Button бот ставит сам через Bot API из URL Mini App (`WEBAPP_URL` в course-bot) — `/setmenubutton` не нужен; `/newapp` — только для прямой ссылки `t.me/<бот>/<app>`; `/setdomain` — только для Login Widget.
 3. Vite + React + TypeScript скелет через `npx @telegram-apps/create-mini-app`.
 4. FastAPI скелет + alembic + docker-compose.
 
@@ -198,7 +198,7 @@ hard-confirm (E3), whitelist admin-ID, дашборд владельца, palett
 
 - `postgres:16` с WAL-репликацией.
 - `redis:7`.
-- `minio` (S3-mock для синтетики).
+- `garage` (S3-совместимое хранилище для синтетики, образ `dxflrs/garage`; версия — в compose репо реализации).
 - `bot` — Python 3.12 + Telegram Bot API + FastAPI (Mini App back-end).
 - `miniapp` — статика (nginx + CSP-заголовок из E2).
 - `worker` — export-worker + saga executors.
