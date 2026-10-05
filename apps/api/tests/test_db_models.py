@@ -1,7 +1,8 @@
 """Миграции ⇔ модели ⇔ живая схема. Нужен DATABASE_URL.
 
 - после upgrade head таблицы = apps/api/tests/expected_tables.txt (тот же список, что в CI);
-- цикл: head → 0003 (без consent_events) → 0002 (без text_registry и consent_events)
+- цикл: head → 0004 (без participant_events и participant_state_checkpoints)
+  → 0003 (ещё и без consent_events) → 0002 (ещё и без text_registry)
   → 0001 (ровно таблицы 0001) → base (пусто) → head;
 - модели SQLAlchemy совпадают с живой схемой (alembic compare_metadata).
 """
@@ -22,6 +23,8 @@ from tests.conftest import _alembic_config
 API_DIR = Path(__file__).resolve().parents[1]
 MIGRATION_0001 = next((API_DIR / "migrations" / "versions").glob("*0001_init*.py"))
 EXPECTED_TABLES_FILE = API_DIR / "tests" / "expected_tables.txt"
+
+TABLES_0005 = {"participant_events", "participant_state_checkpoints"}
 
 _COUNT_SQL = text(
     "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'alembic_version'"
@@ -59,20 +62,27 @@ def test_expected_tables_file_includes_0001():
     assert _tables_0001() <= _expected_tables()
 
 
-def test_expected_tables_count_after_0004():
-    assert len(_expected_tables()) == 11
+def test_expected_tables_count_after_0005():
+    assert len(_expected_tables()) == 13
     assert "consent_events" in _expected_tables()
+    assert TABLES_0005 <= _expected_tables()
 
 
 def test_upgrade_downgrade_upgrade_cycle(migrated_db):
     cfg = _alembic_config()
     assert _tables(migrated_db) == _expected_tables()
 
+    command.downgrade(cfg, "0004_consent_events")
+    assert _tables(migrated_db) == _expected_tables() - TABLES_0005  # 0005 не ломает 0004
+
     command.downgrade(cfg, "0003_text_registry")
-    assert _tables(migrated_db) == _expected_tables() - {"consent_events"}  # 0004 не ломает 0003
+    assert _tables(migrated_db) == _expected_tables() - TABLES_0005 - {"consent_events"}
 
     command.downgrade(cfg, "0002_tg_user_registry")
-    assert _tables(migrated_db) == _expected_tables() - {"text_registry", "consent_events"}
+    assert _tables(migrated_db) == _expected_tables() - TABLES_0005 - {
+        "text_registry",
+        "consent_events",
+    }
 
     command.downgrade(cfg, "0001_init")
     assert _tables(migrated_db) == _tables_0001()  # 0002 не ломает 0001

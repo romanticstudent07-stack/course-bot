@@ -17,3 +17,6 @@ tg_user_registry
 text_registry
 # 0004_consent_events
 consent_events
+# 0005_participant_events
+participant_events
+participant_state_checkpoints

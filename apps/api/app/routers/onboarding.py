@@ -1,4 +1,4 @@
-"""/miniapp/v1/onboarding/* — онбординг SEAM-1 (Итерации 1b+1c, 1e-1a).
+"""/miniapp/v1/onboarding/* — онбординг SEAM-1 (Итерации 1b+1c, 1e-1a, projector-1).
 
 Контракт: build/miniapp-api-contract.yaml → POST /miniapp/v1/onboarding/first-launch
   request:  {birth_date: date, consents: ["C0", "C1", ...]}
@@ -20,7 +20,13 @@
   1) initData (роутер) → 2) тело (Pydantic) → 3) возраст БЕЗ БД → 403
   → 4) обязательные согласия → 422 → 5) ОДНА транзакция: тексты согласий из text_registry
   (нет текста → откат, 503) → участник (get_or_create) → consent_events: give для каждого
-  присланного kind, у которого у pid ещё нет give → commit.
+  присланного kind, у которого у pid ещё нет give → participant_events (projector-1) → commit.
+
+Событие (docs/tasks/projector-1.md, раздел 7; D-16): только если pid СОЗДАН этим вызовом —
+  INSERT participant_events kind mini_app_first_consent, payload {"schema_version": 1},
+  actor / actor_role system — в той же транзакции, после consent_events, до commit.
+  Повтор (pid уже есть) события не пишет. Ошибка INSERT события — тот же путь, что ошибка
+  INSERT consent_events (commit не выполняется, pid не создан); новых кодов ответа нет.
 
 Нормы:
   - SEAM-PATCH-1: first-launch Mini App — единственная точка создания участника;
@@ -33,7 +39,8 @@
   - «сегодня» — дата в SERVER_TIMEZONE (Europe/Moscow), явно, а не по TZ процесса;
   - дата рождения не хранится и не логируется (решение Автора);
   - ip и ua в consent_events не заполняются (NULL): за туннелем IP недостоверен;
-  - participant_state не пишется (единственный писатель — проектор, E1/INV-1).
+  - participant_state не пишется (единственный писатель — проектор, E1/INV-1);
+    API пишет только событие в participant_events, состояние строит проектор (projector-2).
 
 Лог: только tg_user_id, исход (created / existing) и число новых согласий; для отказов
 по возрасту и согласиям — только reason, без tg_user_id. Имя, username, initData,
@@ -56,9 +63,12 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db.models import (
+    ACTOR_SYSTEM,
     CONSENT_ACTION_GIVE,
     CREATED_VIA_MINI_APP_FIRST_LAUNCH,
+    EVENT_KIND_MINI_APP_FIRST_CONSENT,
     ConsentEvent,
+    ParticipantEvent,
     TextRegistry,
 )
 from app.db.session import get_db_session
@@ -82,6 +92,9 @@ CONSENT_TEXT_KEYS: dict[str, str] = {
     "C0": "legal.consent_c0_age_18_plus",
     "C1": "legal.consent_c1_pdn",
 }
+
+# payload события first-launch (projector-1, раздел 7). Бэкфилл 0005 добавляет "backfill".
+FIRST_CONSENT_PAYLOAD: dict[str, Any] = {"schema_version": 1}
 
 
 class FirstLaunchRequest(BaseModel):
@@ -154,7 +167,7 @@ def today_in_server_timezone(settings: Settings) -> date:
 def register_with_consents(
     session: Session, tg_user_id: int, kinds: Sequence[str]
 ) -> Registration:
-    """Шаг 5 — ОДНА транзакция: тексты → участник → consent_events → commit.
+    """Шаг 5 — ОДНА транзакция: тексты → участник → consent_events → событие → commit.
 
     kinds — только из CONSENT_TEXT_KEYS (обработчик проверяет до вызова).
     Ошибка на любом шаге → commit не выполняется; откат делает вызывающий
@@ -194,6 +207,17 @@ def register_with_consents(
                 text_key=source.key,
                 text_snapshot=source.body,
                 created_via=CREATED_VIA_MINI_APP_FIRST_LAUNCH,
+            )
+        )
+    if participant.created:
+        # projector-1 (D-16): I2 pre_registered → onboarding, trigger mini_app_first_consent.
+        session.execute(
+            ParticipantEvent.__table__.insert().values(
+                pid=participant.pid,
+                kind=EVENT_KIND_MINI_APP_FIRST_CONSENT,
+                payload=dict(FIRST_CONSENT_PAYLOAD),
+                actor=ACTOR_SYSTEM,
+                actor_role=ACTOR_SYSTEM,
             )
         )
     session.commit()
@@ -255,7 +279,7 @@ def first_launch(
             details={"unsupported": unsupported},
         )
 
-    # --- 5. Одна транзакция: тексты → участник → согласия ---
+    # --- 5. Одна транзакция: тексты → участник → согласия → событие ---
     tg_user_id = init_data.tg_user_id  # только из проверенной initData
     try:
         registration = register_with_consents(session, tg_user_id, body.consents)

@@ -109,14 +109,23 @@ def migrated_db(database_url):
 
 @pytest.fixture
 def db_engine(migrated_db):
-    """Чистые участники и согласия + seed текстов (first-launch читает тексты согласий, 1e-1a)."""
+    """Чистые участники, согласия, события и состояние + seed текстов (1e-1a, projector-1).
+
+    participant_state_checkpoints и participant_state FK на tg_user_registry не имеют —
+    CASCADE их не очистит, поэтому они перечислены явно.
+    """
     from sqlalchemy import create_engine, text
 
     from app.texts import load_seed, write_entries
 
     engine = create_engine(migrated_db)
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE consent_events, tg_user_registry RESTART IDENTITY CASCADE"))
+        conn.execute(
+            text(
+                "TRUNCATE participant_events, participant_state_checkpoints, participant_state, "
+                "consent_events, tg_user_registry RESTART IDENTITY CASCADE"
+            )
+        )
     write_entries(engine, load_seed())  # upsert всех config/texts/*.json (B4 + legal)
     try:
         yield engine
