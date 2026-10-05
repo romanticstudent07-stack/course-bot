@@ -4,8 +4,8 @@
 
 ## 1. Паспорт
 - id: B-3a · PR: «B-3a: роли app_api / app_projector и минимальные GRANT (миграция 0006)» · ветка: feat/b3a-db-roles
-- Режим: Р0+ (одна ошибка дважды → Р1-П по стоп-правилу) · зависит от: projector.
-- Миграция: revision 0006_app_roles, down_revision 0005_participant_events. Начинать после мержа projector.
+- Режим: Р0+ (одна ошибка дважды → Р1-П по стоп-правилу) · зависит от: projector-1, projector-2, projector-3.
+- Миграция: revision 0006_app_roles, down_revision 0005_participant_events. Начинать после мержа projector-3.
   Таблиц не добавляет → expected_tables.txt не меняется.
 - Первый файл пакета — docs/STATE.md (строки от ШТАБа).
 
@@ -33,8 +33,8 @@
 ## 5. ЧТО ПРОЧИТАТЬ (размеры по 18cf0ac)
 docs/process/CODER.md 11,1 КБ; AGENT-BRIEF.md 11,2; docs/STATE.md 16,3; эта карточка ≈ 6;
 apps/api/migrations/env.py 3,2; migrations/versions/…0001_init_init.py 9,6 (образец DO-блока ролей);
-миграция 0005 (появится после projector — размер впишет ШТАБ); apps/api/app/config.py 3,5;
-apps/api/app/projector.py (после projector); apps/api/app/texts.py 10,2; apps/api/app/db/session.py 1,5;
+миграция 0005 (появится после projector-1 — размер впишет ШТАБ); apps/api/app/config.py 3,5;
+apps/api/app/projector.py (после projector-2); apps/api/app/texts.py 10,2; apps/api/app/db/session.py 1,5;
 .env.example 8,4; infra/docker-compose.dev.yml 7,5 (передача переменных в контейнеры);
 infra/SERVER-IRONCLAD.md 8,1; apps/api/tests/conftest.py 5,7.
 **Чтение КОДЕРА ≈ 102 КБ + 0005 + projector.py.**
