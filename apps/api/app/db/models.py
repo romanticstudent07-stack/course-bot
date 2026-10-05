@@ -24,13 +24,26 @@ consent_events — журнал согласий C0–C6 (миграция 0004,
   - append-only: пишет только first-launch (INSERT give); UPDATE/DELETE запретит B-3;
   - ip / ua в И1 не заполняются (NULL).
 
+participant_events — журнал событий участника (миграция 0005, projector-1, D-16):
+  - колонки I2 participant_state_contract.storage.event_log
+    [id, pid, kind, payload, publish_epoch, at, actor, actor_role];
+    индексы (pid, at), (kind, at); партиций pid_bucket в И1 нет (D-16);
+  - append-only: first-launch пишет mini_app_first_consent только при создании pid,
+    в той же транзакции, что pid и consent_events; бэкфилл 0005 — участникам с C1;
+  - читает проектор (projector-2); UPDATE/DELETE запретит B-3a.
+
+participant_state_checkpoints — чекпоинт проектора (миграция 0005, I2 checkpoint_table):
+  - (pid, last_event_id, at); FK нет; пишет только проектор.
+
 participant_state (0001) здесь НЕ моделируется: единственный писатель — проектор
-(E1/INV-1), модель появится вместе с ним (решение Автора, PR 1b+1c).
+(E1/INV-1), колонка last_seen_publish_epoch — xid8 (SQLAlchemy его не знает).
+CHECK lifecycle_phase (FSM I2, D-11 «6А») добавлен миграцией 0005.
 """
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -55,6 +68,11 @@ CREATED_VIA_MINI_APP_FIRST_LAUNCH = "mini_app_first_launch"
 CONSENT_KINDS: tuple[str, ...] = ("C0", "C1", "C2", "C3", "C4", "C5", "C6")
 CONSENT_ACTION_GIVE = "give"
 CONSENT_ACTION_REVOKE = "revoke"
+
+# participant_events (0005): I2 fsm_participant — pre_registered → onboarding,
+# trigger mini_app_first_consent, actor system. Импортирует проектор (projector-2).
+EVENT_KIND_MINI_APP_FIRST_CONSENT = "mini_app_first_consent"
+ACTOR_SYSTEM = "system"
 
 
 def _in_list(column: str, values: tuple[str, ...]) -> str:
@@ -142,4 +160,38 @@ class ConsentEvent(Base):
             name="consent_events_created_via_check",
         ),
         Index("consent_events_pid_kind_at_idx", "pid", "kind", "at"),
+    )
+
+
+class ParticipantEvent(Base):
+    __tablename__ = "participant_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    pid: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tg_user_registry.pid", name="participant_events_pid_fkey"),
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    publish_epoch: Mapped[int | None] = mapped_column(BigInteger)
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_role: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        Index("participant_events_pid_at_idx", "pid", "at"),
+        Index("participant_events_kind_at_idx", "kind", "at"),
+    )
+
+
+class ParticipantStateCheckpoint(Base):
+    __tablename__ = "participant_state_checkpoints"
+
+    pid: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    last_event_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
