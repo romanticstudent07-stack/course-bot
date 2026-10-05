@@ -29,10 +29,10 @@
 - session.py: get_engine(settings) — engine по DSN настроек (кэш по DSN); config.get_settings().
 
 ## 5. ЧТО ПРОЧИТАТЬ (размеры: a4c5e29; после projector-1 — уточнит ШТАБ)
-docs/process/CODER.md 11,1 КБ; AGENT-BRIEF.md 11,2; docs/STATE.md ≈ 10; эта карточка ≈ 8;
+docs/process/CODER.md 11,1 КБ; AGENT-BRIEF.md 11,2; docs/STATE.md ≈ 10; эта карточка ≈ 9;
 apps/api/app/db/models.py ≈ 8; миграция 0005 (…0005_participant_events_participant_events.py) ≈ 5;
 apps/api/app/db/session.py 1,5; apps/api/app/config.py 3,5; apps/api/tests/conftest.py ≈ 6 (фикстуры и очистка).
-**Чтение КОДЕРА ≈ 64 КБ.**
+**Чтение КОДЕРА ≈ 65 КБ.**
 Не читать: onboarding.py, test_first_launch.py, миграции 0001–0004, compose, docs/DEFECTS-*.md.
 
 ## 6. Файлы (3 + STATE)
@@ -42,7 +42,11 @@ apps/api/tests/test_projector_static.py (без БД).
 ## 7. Контракт
 - `python -m app.projector run`: цикл раз в 1 с, пачка до 500 событий; `once` — один проход (для тестов).
   pg_advisory_lock(hashtext('participant_state_projector')) — второй экземпляр ждёт.
-  Курсор = max(last_event_id) из checkpoints. На пачку — одна транзакция:
+- Курсор — по pid: брать события e с e.id > coalesce(c.last_event_id, 0) через LEFT JOIN participant_state_checkpoints c
+  USING (pid), ORDER BY e.id, LIMIT 500. Глобальный max(last_event_id) не использовать: коммиты разных pid идут не по порядку id.
+- Запись в комментарий модуля (app/projector.py, дословно): «Порядок внутри одного pid держится, пока у pid один писатель
+  событий (сейчас — first-launch); новые писатели событий — пересмотреть курсор (заметка для будущих карточек).»
+- На пачку — одна транзакция:
   mini_app_first_consent → upsert participant_state (lifecycle_phase 'onboarding', status_flags '{}', updated_at now(),
   projector_version 1); переход разрешён только из «нет строки» или pre_registered.
   Неизвестный kind или запрещённый переход → WARNING (kind и id события, без payload), событие пропустить,
@@ -73,12 +77,16 @@ test_projector.py (с БД — CI). Участник: INSERT tg_user_registry (p
 5. Сквозной: first-launch через db_api_client → run_once → у pid onboarding.
 6. Бэкфилл (перенесено из projector-1): A — событие как от бэкфилла (actor 'migration_0005', payload с "backfill"),
    B — участник без события → once → у A onboarding, у B строки participant_state нет.
-7. Пачка: 501 событие (501 участник) → run_once → processed 501; max(last_event_id) = max(id).
+7. Пачка: 501 событие (501 участник) → run_once → processed 501; у каждого pid checkpoint = id его события.
+10. Пропуск по порядку: событие pid B (бо́льший id) обработано и записано в checkpoint раньше, затем вставлено
+   событие pid A с меньшим id (явный id через INSERT … (id, …) или setval) → run_once → у A onboarding
+   (событие не потеряно). Явные id брать большими (например 1000000002 для B и 1000000001 для A), чтобы
+   не столкнуться с id из sequence.
 test_projector_static.py (без БД):
 8. E1: в apps/api/app/** нет INSERT INTO participant_state / UPDATE participant_state (регистр не важен; после имени
    граница слова — participant_state_checkpoints не совпадает) вне app/projector.py.
 9. main(["bad"]) → 2; БД не трогали (DSN недоступной БД из conftest — без 503 и без ожидания).
-Цель check.sh: api. Только CI: 1–7.
+Цель check.sh: api. Только CI: 1–7 и 10.
 
 ## 10. Живые проверки (после мержа; СЕРВЕРНЫЙ; только числа)
 1. pull → пересборка api (projector.py в образе) → 6/6 Up, 4 healthy.
