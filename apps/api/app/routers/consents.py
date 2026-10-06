@@ -7,7 +7,8 @@
 
 Правила:
   - pid — ТОЛЬКО по tg_user_id из проверенной initData, активная строка tg_user_registry
-    (tombstoned_at IS NULL). Параметров запроса нет: чужие согласия запросить нельзя
+    (tombstoned_at IS NULL; app.participants.find_active_participant, returning-1).
+    Параметров запроса нет: чужие согласия запросить нельзя
     (изоляция между пользователями, карточка 1e-2 §14);
   - нет участника → 200 [];
   - по каждому kind решает ПОСЛЕДНЕЕ событие (D-15 а): последнее give → revoked_at = null;
@@ -36,9 +37,9 @@ from app.db.models import (
     CONSENT_ACTION_REVOKE,
     ConsentEvent,
     TextRegistry,
-    TgUserRegistry,
 )
 from app.db.session import get_db_session
+from app.participants import find_active_participant
 from app.telegram_init_data import InitDataContext, require_init_data
 
 logger = logging.getLogger(__name__)
@@ -95,12 +96,10 @@ def fold_events(events: Sequence[EventRow]) -> list[FoldedConsent]:
 
 
 def _active_pid(session: Session, tg_user_id: int) -> uuid.UUID | None:
-    return session.execute(
-        select(TgUserRegistry.pid).where(
-            TgUserRegistry.tg_user_id == tg_user_id,
-            TgUserRegistry.tombstoned_at.is_(None),
-        )
-    ).scalar_one_or_none()
+    found = find_active_participant(session, tg_user_id)
+    if found is None:
+        return None
+    return found[0]
 
 
 def read_consents(session: Session, tg_user_id: int) -> list[ConsentOut]:

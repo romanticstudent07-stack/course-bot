@@ -1,4 +1,4 @@
-"""Создание / поиск участника в tg_user_registry (SEAM-PATCH-1, first-launch).
+"""Создание / поиск участника в tg_user_registry (SEAM-PATCH-1, first-launch, returning-1).
 
 Идемпотентность — на уровне БД: частичный уникальный индекс
 tg_user_registry_active_tg_user_uidx (tg_user_id) WHERE tombstoned_at IS NULL.
@@ -10,11 +10,14 @@ COMMIT здесь НЕТ (1e-1a): транзакцией владеет вызы
 участника и согласия (consent_events) одной транзакцией (B-2, D-10). Строка участника
 заблокирована до конца транзакции вызывающего: новая — своим INSERT, существующая —
 SELECT ... FOR UPDATE. Параллельный first-launch того же пользователя ждёт и затем
-видит уже записанные согласия (без дублей).
+видит уже записанные согласия (без дублей; при reconsent — тоже, returning-1).
 
-Вызывать ТОЛЬКО из обработчика first-launch Mini App и ТОЛЬКО после hard-check
-возраста и проверки обязательных согласий (ADD3 INV-AGE-GATE-BEFORE-PID,
+get_or_create_participant вызывать ТОЛЬКО из обработчика first-launch Mini App и ТОЛЬКО
+после hard-check возраста и проверки обязательных согласий (ADD3 INV-AGE-GATE-BEFORE-PID,
 SEAM-1 pid_creation_only_via_mini_app_first_launch).
+
+find_active_participant (returning-1) — только чтение, без блокировки и без создания:
+GET /onboarding/status и GET /consents. Строка tombstoned (erased) — как «нет участника».
 """
 from __future__ import annotations
 
@@ -42,6 +45,21 @@ def format_short_no(short_no: int) -> str:
 
 # Сколько раз повторить INSERT, если активную строку tombstone-нули между INSERT и SELECT.
 _MAX_ATTEMPTS = 3
+
+
+def find_active_participant(
+    session: Session, tg_user_id: int
+) -> tuple[uuid.UUID, int] | None:
+    """Активный участник (pid, short_no) или None. Только чтение, без блокировки."""
+    table = TgUserRegistry.__table__
+    row = session.execute(
+        select(table.c.pid, table.c.short_no).where(
+            table.c.tg_user_id == tg_user_id, table.c.tombstoned_at.is_(None)
+        )
+    ).first()
+    if row is None:
+        return None
+    return row.pid, row.short_no
 
 
 def get_or_create_participant(session: Session, tg_user_id: int) -> Participant:

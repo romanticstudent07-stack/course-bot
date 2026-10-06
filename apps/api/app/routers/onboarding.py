@@ -1,4 +1,4 @@
-"""/miniapp/v1/onboarding/* — онбординг SEAM-1 (Итерации 1b+1c, 1e-1a, projector-1).
+"""/miniapp/v1/onboarding/* — онбординг SEAM-1 (Итерации 1b+1c, 1e-1a, projector-1, returning-1).
 
 Контракт: build/miniapp-api-contract.yaml → POST /miniapp/v1/onboarding/first-launch
   request:  {birth_date: date, consents: ["C0", "C1", ...]}
@@ -19,14 +19,31 @@
 Порядок (docs/tasks/1e-1.md, раздел 7 — НЕ МЕНЯТЬ):
   1) initData (роутер) → 2) тело (Pydantic) → 3) возраст БЕЗ БД → 403
   → 4) обязательные согласия → 422 → 5) ОДНА транзакция: тексты согласий из text_registry
-  (нет текста → откат, 503) → участник (get_or_create) → consent_events: give для каждого
-  присланного kind, у которого у pid ещё нет give → participant_events (projector-1) → commit.
+  (нет текста → откат, 503) → участник (get_or_create, строка заблокирована) → события
+  согласий pid → consent_events: give для каждого присланного kind, согласие по которому
+  НЕ действует (отозвано, сменился текст или give не было; returning-1, D-22) →
+  participant_events (projector-1) → commit.
+
+Повторное согласие (returning-1, D-22): раньше «уже данные согласия повторно не
+  записываются»; теперь give пишется, если consent_status.consent_problem(...) is not None.
+  Действующее согласие → 0 новых строк. revoke не пишется и не меняется.
 
 Событие (docs/tasks/projector-1.md, раздел 7; D-16): только если pid СОЗДАН этим вызовом —
   INSERT participant_events kind mini_app_first_consent, payload {"schema_version": 1},
   actor / actor_role system — в той же транзакции, после consent_events, до commit.
-  Повтор (pid уже есть) события не пишет. Ошибка INSERT события — тот же путь, что ошибка
-  INSERT consent_events (commit не выполняется, pid не создан); новых кодов ответа нет.
+  Повтор (pid уже есть, в т.ч. повторное согласие) события не пишет. Ошибка INSERT события —
+  тот же путь, что ошибка INSERT consent_events (commit не выполняется, pid не создан).
+
+GET /miniapp/v1/onboarding/status (returning-1, D-22; вне контракта до правки DOCS):
+  параметров и тела нет; tg_user_id — только из InitDataContext; только чтение, без commit.
+  200, ровно одна форма:
+    {"status": "returning", "short_no": "#000123"} — активная строка есть, C0 и C1 действуют;
+    {"status": "reconsent", "reasons": [...]} — строка есть, хоть одно не действует
+        (перечень — consent_status.REASONS); short_no не отдаётся;
+    {"status": "new"} — строки нет ИЛИ она tombstoned (erased): тело одинаковое.
+  pid не отдаётся никогда. 401 / 429 — роутер miniapp_v1 (main.py). 403 не отдаётся.
+  503 SERVICE_UNAVAILABLE — БД недоступна; 503 SERVICE_MISCONFIGURED — нет текста C0/C1.
+  participant_state и проектор для решения НЕ используются (INV-1).
 
 Нормы:
   - SEAM-PATCH-1: first-launch Mini App — единственная точка создания участника;
@@ -42,9 +59,10 @@
   - participant_state не пишется (единственный писатель — проектор, E1/INV-1);
     API пишет только событие в participant_events, состояние строит проектор (projector-2).
 
-Лог: только tg_user_id, исход (created / existing) и число новых согласий; для отказов
-по возрасту и согласиям — только reason, без tg_user_id. Имя, username, initData,
-дата рождения, текст согласия — никогда.
+Лог first-launch: только tg_user_id, исход (created / existing) и число новых согласий;
+для отказов по возрасту и согласиям — только reason, без tg_user_id.
+Лог status: «status: tg_user_id=<id> status=<returning|reconsent|new>».
+Имя, username, initData, дата рождения, текст согласия, pid, short_no, reasons — никогда.
 """
 from __future__ import annotations
 
@@ -62,6 +80,16 @@ from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
+from app.consent_status import (
+    CONSENT_TEXT_KEYS,
+    STATUS_KINDS,
+    ConsentTextMissingError,
+    consent_problem,
+    current_texts,
+    load_events,
+    reasons,
+    snapshot_of,
+)
 from app.db.models import (
     ACTOR_SYSTEM,
     CONSENT_ACTION_GIVE,
@@ -72,7 +100,12 @@ from app.db.models import (
     TextRegistry,
 )
 from app.db.session import get_db_session
-from app.participants import Participant, format_short_no, get_or_create_participant
+from app.participants import (
+    Participant,
+    find_active_participant,
+    format_short_no,
+    get_or_create_participant,
+)
 from app.telegram_init_data import InitDataContext, require_init_data
 
 logger = logging.getLogger(__name__)
@@ -87,11 +120,8 @@ ConsentId = Literal["C0", "C1", "C2", "C3", "C4", "C5", "C6"]
 
 # Решение Автора «В1 А»: до pid — C0 (18+) и C1 (ПДн).
 REQUIRED_AT_FIRST_LAUNCH: frozenset[str] = frozenset({"C0", "C1"})
-# Какой текст из text_registry принят вместе с согласием (выбирает сервер).
-CONSENT_TEXT_KEYS: dict[str, str] = {
-    "C0": "legal.consent_c0_age_18_plus",
-    "C1": "legal.consent_c1_pdn",
-}
+# CONSENT_TEXT_KEYS и ConsentTextMissingError живут в app.consent_status (returning-1)
+# и импортированы сюда под теми же именами.
 
 # payload события first-launch (projector-1, раздел 7). Бэкфилл 0005 добавляет "backfill".
 FIRST_CONSENT_PAYLOAD: dict[str, Any] = {"schema_version": 1}
@@ -115,12 +145,12 @@ class PidCreated(BaseModel):
     short_no: str
 
 
-class ConsentTextMissingError(Exception):
-    """В text_registry нет текста согласия — pid не создаётся (fail closed)."""
+class OnboardingStatus(BaseModel):
+    """Ответ GET /onboarding/status; пустые поля не отдаются (response_model_exclude_none)."""
 
-    def __init__(self, keys: list[str]) -> None:
-        super().__init__(", ".join(keys))
-        self.keys = keys
+    status: Literal["returning", "reconsent", "new"]
+    short_no: str | None = None
+    reasons: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -167,9 +197,11 @@ def today_in_server_timezone(settings: Settings) -> date:
 def register_with_consents(
     session: Session, tg_user_id: int, kinds: Sequence[str]
 ) -> Registration:
-    """Шаг 5 — ОДНА транзакция: тексты → участник → consent_events → событие → commit.
+    """Шаг 5 — ОДНА транзакция: тексты → участник → события → consent_events → событие → commit.
 
     kinds — только из CONSENT_TEXT_KEYS (обработчик проверяет до вызова).
+    give пишется только по kind, согласие по которому не действует (consent_problem).
+    Гонка при reconsent: FOR UPDATE в get_or_create держит строку до commit, второй вызов читает события после commit первого и новых give не пишет.
     Ошибка на любом шаге → commit не выполняется; откат делает вызывающий
     (или закрытие сессии).
     """
@@ -186,15 +218,14 @@ def register_with_consents(
         raise ConsentTextMissingError(missing)
 
     participant = get_or_create_participant(session, tg_user_id)
-    given = set(
-        session.execute(
-            select(ConsentEvent.kind).where(
-                ConsentEvent.pid == participant.pid,
-                ConsentEvent.action == CONSENT_ACTION_GIVE,
-            )
-        ).scalars()
-    )
-    new_kinds = sorted(set(kinds) - given)
+    # События читаются ПОСЛЕ получения (и блокировки) строки участника.
+    events = load_events(session, participant.pid)
+    new_kinds = [
+        kind
+        for kind in sorted(set(kinds))
+        if consent_problem(events, kind, text_keys[kind], texts[text_keys[kind]].body)
+        is not None
+    ]
     table = ConsentEvent.__table__
     for kind in new_kinds:
         source = texts[text_keys[kind]]
@@ -205,7 +236,7 @@ def register_with_consents(
                 action=CONSENT_ACTION_GIVE,
                 ver_of_text=source.registry_version,
                 text_key=source.key,
-                text_snapshot=source.body,
+                text_snapshot=snapshot_of(source.body),
                 created_via=CREATED_VIA_MINI_APP_FIRST_LAUNCH,
             )
         )
@@ -222,6 +253,63 @@ def register_with_consents(
         )
     session.commit()
     return Registration(participant=participant, consents_recorded=len(new_kinds))
+
+
+def read_onboarding_status(session: Session, tg_user_id: int) -> OnboardingStatus:
+    """Кто открыл Mini App: returning / reconsent / new. Только чтение, без commit.
+
+    Тексты C0/C1 проверяются всегда (fail closed): нет текста → ConsentTextMissingError.
+    """
+    texts = current_texts(session, STATUS_KINDS)
+    found = find_active_participant(session, tg_user_id)
+    if found is None:
+        # Нет строки или она tombstoned (erased) — одно и то же тело.
+        return OnboardingStatus(status="new")
+    pid, short_no = found
+    problems = reasons(load_events(session, pid), texts, STATUS_KINDS)
+    if problems:
+        return OnboardingStatus(status="reconsent", reasons=problems)
+    return OnboardingStatus(status="returning", short_no=format_short_no(short_no))
+
+
+@router.get(
+    "/status",
+    response_model=OnboardingStatus,
+    response_model_exclude_none=True,
+    responses={
+        401: {"description": "initData невалидна / истекла (TG_INIT_MISSING / TG_INIT_INVALID)"},
+        429: {"description": "rate-limit (B-1)"},
+        503: {"description": "SERVICE_UNAVAILABLE (БД) / SERVICE_MISCONFIGURED (нет текста)"},
+    },
+)
+def onboarding_status(
+    init_data: InitDataContext = Depends(require_init_data),
+    session: Session = Depends(get_db_session),
+) -> OnboardingStatus:
+    tg_user_id = init_data.tg_user_id  # только из проверенной initData
+    try:
+        result = read_onboarding_status(session, tg_user_id)
+    except ConsentTextMissingError as exc:
+        logger.error(
+            "status: нет текста согласия в text_registry keys=%s (503)", ",".join(exc.keys)
+        )
+        raise _error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "SERVICE_MISCONFIGURED",
+            "Сервис временно недоступен",
+        ) from None
+    except (OperationalError, InterfaceError) as exc:
+        # Текст исключения не логируем: в нём может быть адрес БД.
+        logger.error(
+            "status: БД недоступна tg_user_id=%s error=%s", tg_user_id, type(exc).__name__
+        )
+        raise _error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "SERVICE_UNAVAILABLE",
+            "Сервис временно недоступен. Попробуйте позже.",
+        ) from None
+    logger.info("status: tg_user_id=%s status=%s", tg_user_id, result.status)
+    return result
 
 
 @router.post(
