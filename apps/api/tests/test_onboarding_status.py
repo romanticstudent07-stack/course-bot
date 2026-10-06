@@ -3,7 +3,15 @@
 Без БД: consent_problem / reasons (тест 1), 401 (6), 401 раньше rate-limit и 429 (7), 503 (13).
 С БД (DATABASE_URL, в CI обязательно): returning (2), reconsent по revoke (3) и по смене
 текста (4), new и erased одним телом (5), лог (8), first-launch после revoke (9) и смены
-текста (10), повтор без новых строк (11), reconsent не пишет participant_events (12).
+текста (10), повтор без новых строк (11), reconsent не пишет participant_events (12),
+нет текста согласия → 503 SERVICE_MISCONFIGURED без данных участника (14).
+Ревью PR #62:
+  - тест 5: порядок «A есть → B новый»: тело B — ровно {"status":"new"}, без short_no A,
+    строка B не создана; после tombstone A тело A побайтно равно телу B;
+  - тест 8: два сценария — returning и reconsent (после revoke C1); в логе есть status и
+    tg_user_id, нет reasons («C1_revoked», «C1_»), pid, short_no, initData;
+  - тест 14: подменяется current_texts в app.routers.onboarding (имя, под которым его
+    вызывает onboarding_status); тексты в БД не меняются.
 Тексты text_registry фикстура не откатывает → тесты 4 и 10 возвращают текст в finally.
 """
 from __future__ import annotations
@@ -13,7 +21,13 @@ import uuid
 
 from sqlalchemy import text
 
-from app.consent_status import REASONS, consent_problem, reasons, snapshot_of
+from app.consent_status import (
+    REASONS,
+    ConsentTextMissingError,
+    consent_problem,
+    reasons,
+    snapshot_of,
+)
 from app.telegram_init_data import INIT_DATA_HEADER
 from tests.conftest import count_consent_rows, count_registry_rows, valid_init_data
 
@@ -23,6 +37,7 @@ BODY = {"birth_date": "1990-01-01", "consents": ["C0", "C1"]}
 C0_KEY = "legal.consent_c0_age_18_plus"
 C1_KEY = "legal.consent_c1_pdn"
 TEXTS = {C0_KEY: "текст C0", C1_KEY: "текст C1"}
+LOGGER = "app.routers.onboarding"
 
 
 def _headers(user_id: int) -> dict[str, str]:
@@ -88,6 +103,10 @@ def _participant_events(engine, pid: str) -> int:
             text("SELECT count(*) FROM participant_events WHERE pid = :p"),
             {"p": uuid.UUID(pid)},
         ).scalar_one()
+
+
+def _log_lines(caplog) -> list[str]:
+    return [rec.getMessage() for rec in caplog.records if rec.name == LOGGER]
 
 
 # ============================ без БД ============================
@@ -203,30 +222,54 @@ def test_status_reconsent_after_text_change(db_api_client, db_engine):  # тес
 
 
 def test_status_new_and_erased_same_body(db_api_client, db_engine):  # тест 5
-    unknown = _status(db_api_client, 2401)
+    # A есть → B новый: чужой участник не просачивается в ответ B.
+    created_a = _first_launch(db_api_client, 2402)
+    body_b = _status(db_api_client, 2401).content
+    assert body_b == b'{"status":"new"}'
+    assert created_a["short_no"].encode() not in body_b
     assert count_registry_rows(db_engine, 2401) == 0  # GET ничего не создаёт
-    _first_launch(db_api_client, 2402)
+    # tombstone A (erased) → тело A побайтно как у B.
     with db_engine.begin() as conn:
         conn.execute(
             text("UPDATE tg_user_registry SET tombstoned_at = now() WHERE tg_user_id = 2402")
         )
-    erased = _status(db_api_client, 2402)
-    assert unknown.content == erased.content == b'{"status":"new"}'
+    body_a = _status(db_api_client, 2402).content
+    assert body_a == body_b
 
 
-def test_status_log_has_no_secrets(db_api_client, caplog):  # тест 8
+def test_status_log_has_no_secrets(db_api_client, db_engine, caplog):  # тест 8
+    # Сценарий 1: returning.
     created = _first_launch(db_api_client, 2501)
     headers = _headers(2501)
-    with caplog.at_level(logging.INFO, logger="app.routers.onboarding"):
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger=LOGGER):
         r = db_api_client.get(STATUS, headers=headers)
     assert r.json()["status"] == "returning"
-    lines = [rec.getMessage() for rec in caplog.records if rec.name == "app.routers.onboarding"]
+    lines = _log_lines(caplog)
     assert any("status=returning" in line and "tg_user_id=2501" in line for line in lines)
     joined = "\n".join(lines)
     assert created["short_no"] not in joined
     assert created["pid"] not in joined
     assert "C1_" not in joined
     assert headers[INIT_DATA_HEADER] not in joined
+    assert "hash=" not in joined
+
+    # Сценарий 2: reconsent после revoke C1 — reasons в лог не попадают.
+    created2 = _first_launch(db_api_client, 2502)
+    _revoke(db_engine, created2["pid"], "C1")
+    headers2 = _headers(2502)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        r = db_api_client.get(STATUS, headers=headers2)
+    assert r.json() == {"status": "reconsent", "reasons": ["C1_revoked"]}
+    lines = _log_lines(caplog)
+    assert any("status=reconsent" in line and "tg_user_id=2502" in line for line in lines)
+    joined = "\n".join(lines)
+    assert "C1_revoked" not in joined
+    assert "C1_" not in joined
+    assert created2["pid"] not in joined
+    assert created2["short_no"] not in joined
+    assert headers2[INIT_DATA_HEADER] not in joined
     assert "hash=" not in joined
 
 
@@ -272,3 +315,20 @@ def test_reconsent_does_not_write_participant_events(db_api_client, db_engine): 
     _revoke(db_engine, pid, "C1")
     _first_launch(db_api_client, 2901)
     assert _participant_events(db_engine, pid) == 1
+
+
+def test_status_text_missing_is_503_misconfigured(db_api_client, monkeypatch):  # тест 14
+    created = _first_launch(db_api_client, 3001)
+
+    def _no_text(session, kinds):
+        raise ConsentTextMissingError([C0_KEY])
+
+    # Подмена там, где её вызывает onboarding_status; тексты в БД не меняются.
+    monkeypatch.setattr("app.routers.onboarding.current_texts", _no_text)
+    r = db_api_client.get(STATUS, headers=_headers(3001))
+    assert r.status_code == 503
+    assert r.json()["code"] == "SERVICE_MISCONFIGURED"
+    assert '"short_no"' not in r.text
+    assert "returning" not in r.text
+    assert created["pid"] not in r.text
+    assert created["short_no"] not in r.text
