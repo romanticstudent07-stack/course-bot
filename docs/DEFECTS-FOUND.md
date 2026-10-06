@@ -160,19 +160,7 @@
   Правка контракта сделана: DOCS PR #11 (first-launch: `consents`, 422, 503), sync PR #51.
 - **Ждём решения Автора:** нет для API и экранов; по оплате — да.
 
-## D-11. `participant_state.lifecycle_phase`: значения 0001 ≠ FSM И2
-
-- **Файлы архитектуры (зеркало):** `build/db-schema.sql` (комментарий к `lifecycle_phase`:
-  `pre_road, active, pending_erasure, erased`) vs `normative/I2-wave-b.md` →
-  `participant_state_contract.fsm_participant.states: [pre_registered, onboarding, active,
-  sleeping, muted, erased]`.
-- **Файл реализации:** `apps/api/migrations/versions/…0001_init…` (дословно из db-schema.sql).
-- **Суть расхождения:** два разных набора состояний; неясно, какая фаза у участника сразу
-  после first-launch.
-- **Сделано здесь:** ничего — в PR 1b+1c `participant_state` не пишется (решение Автора:
-  писатель — только проектор, E1/INV-1; отдельный PR вместе с проектором).
-- **Решение Автора:** «6А» — FSM из I2, после согласий — onboarding. Делают: миграция 0005 (CHECK `participant_state_lifecycle_phase_check`, `docs/tasks/projector-1.md`) и проектор (`docs/tasks/projector-2.md`).
-- **Ждём решения Автора:** нет.
+- **D-11** (`lifecycle_phase` ≠ FSM И2) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 06.10).
 
 ## D-13. Роли и GRANT для `tg_user_registry` не определены; приложение ходит под владельцем БД
 
@@ -211,15 +199,7 @@
 
 - **D-15** (ревью #38: отложенное) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 04.10).
 
-## D-16. Журнал событий участника: `participant_events` (И2) ≠ `state_transition_log` (build-order)
-
-- **Файлы архитектуры (зеркало):** `build/build-order.md`, Уровень 2, п.1 («participant_state_projector (владелец Б10) — читает state_transition_log, пишет participant_state»); `normative/I2-wave-b.md` → `participant_state_contract.storage.event_log` («table: participant_events; append_only: true»).
-- **Файлы реализации:** `apps/api/migrations/versions/…0005_participant_events…`, `apps/api/app/routers/onboarding.py` (`docs/tasks/projector-1.md`); `apps/api/app/projector.py` (`docs/tasks/projector-2.md`).
-- **Суть расхождения:** журнал событий назван по-разному: build-order — `state_transition_log`, И2 — `participant_events`.
-- **Решение Автора:** «7 да (participant_events, D-15)»; номер D-16 — ШТАБ, 02.10 (D-15 занят ревью #38).
-- **Решено (карточка projector, раздел 8):** build-order — state_transition_log, I2 — participant_events (выбрано); партиции pid_bucket отложены; ранние участники с C1 получают событие бэкфиллом 0005 (actor 'migration_0005'), без C1 — нет.
-- **Предлагаемое решение:** в DOCS-course-bot (`build/build-order.md`) заменить `state_transition_log` на `participant_events` — вместе с D-21 после projector (карточку даёт ШТАБ).
-- **Ждём решения Автора:** нет; ждём правки зеркала: да.
+- **D-16** (`participant_events` ≠ `state_transition_log`) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 06.10).
 
 - **D-17** (`X-Client-Op-Id`) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 04.10).
 
@@ -227,32 +207,8 @@
 
 - **D-19** (хранилища на устройстве) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 04.10).
 
-## D-20. CSP: `font-src 'self' data:` шире E2, а комментарий называет его ужесточением
+- **D-20** (CSP `font-src` без `data:`) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 06.10).
 
-- **Файл архитектуры (зеркало):** `normative/errata-unified.md` → E2 `csp_final` (директивы
-  `font-src` нет — для шрифтов действует `default-src 'self'`).
-- **Файл реализации:** `apps/miniapp/nginx.conf` (заголовок `Content-Security-Policy`
-  и комментарий «font-src / base-uri / form-action / object-src — не ослабляют E2 (ужесточение)»).
-- **Суть расхождения:** `font-src 'self' data:` дополнительно разрешает шрифты из `data:` —
-  это шире E2, а не строже. `base-uri 'self'`, `form-action 'self'`, `object-src 'none'` —
-  действительно строже. В DOCS — ровно E2 (решение Автора 03.10, 5А).
-- **Сделано здесь:** ничего (код не трогали).
-- **Предлагаемое решение:** варианты для Автора: (А) убрать `data:` из `font-src` и поправить
-  комментарий; (Б) оставить `data:`, если сборка встраивает шрифты как data:-URI, и исправить
-  комментарий на «шире E2 — решение Автора». До выбора проверить, есть ли data:-шрифты в сборке.
-- **Решение Автора (04.10):** «А: убрать data: из font-src в apps/miniapp/nginx.conf и поправить комментарий; сервер 04.10 проверил сборку — шрифтов нет (ни data:, ни файлов); появятся шрифты — font-src правится в той же задаче». Делает `docs/tasks/miniapp-csp.md`.
-- **Ждём решения Автора:** нет.
-
-## D-21. Имя переменной URL Mini App: `MINIAPP_URL` в зеркале, `WEBAPP_URL` в коде
-
-- **Файл архитектуры (зеркало):** `build/build-order.md`, «Переменные окружения (минимум)»:
-  «`MINIAPP_URL` — URL Mini App (в РФ).»
-- **Файл реализации:** `apps/bot/bot/app.py` (Menu Button из `WEBAPP_URL`).
-- **Суть расхождения:** одна переменная названа по-разному. В DOCS PR #9 (D-8) текст пишет
-  «URL Mini App (`WEBAPP_URL` в course-bot)»; список переменных не менялся (решение Автора 9А).
-- **Предлагаемое решение:** варианты для Автора: (А) в DOCS переименовать `MINIAPP_URL` →
-  `WEBAPP_URL`; (Б) в коде перейти на `MINIAPP_URL`.
-- **Решение Автора (04.10):** «А: в DOCS переименовать MINIAPP_URL → WEBAPP_URL; код не меняется; правка DOCS — вместе с D-16 после projector». Карточку DOCS (D-16 + D-21) даёт ШТАБ.
-- **Ждём решения Автора:** нет.
+- **D-21** (`MINIAPP_URL` → `WEBAPP_URL`) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 06.10).
 
 <!-- следующие записи: новые — с D-22 -->
