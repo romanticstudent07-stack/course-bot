@@ -28,7 +28,7 @@ CREATE ROLE audit_reader;                  -- read-only privacy_audit_log
 
 CREATE TABLE participant_state (
     pid                 uuid PRIMARY KEY,
-    lifecycle_phase     text NOT NULL,          -- эксклюзивная ось: pre_road, active, pending_erasure, erased
+    lifecycle_phase     text NOT NULL,          -- эксклюзивная ось, FSM И2: pre_registered, onboarding, active, sleeping, muted, erased
     status_flags        text[] NOT NULL DEFAULT '{}',  -- модификаторы: pause_user, pause_shadow, author_pause, block_lives, ban_mod, freeze_unpaid
     author_pause_reason text,                   -- Р477: reason_class при sleeping+author_pause (block, red_flag, etc.)
     updated_at          timestamptz NOT NULL,

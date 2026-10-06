@@ -46,7 +46,7 @@ contains: [4 уровня сборки, 6 итераций Mini App-first, boot-
 
 ## Уровень 2 — проекторы и саги
 
-1. `participant_state_projector` (владелец Б10) — читает `state_transition_log`, пишет `participant_state`.
+1. `participant_state_projector` (владелец Б10) — читает журнал `participant_events` (И2, append-only), пишет `participant_state`.
 2. Refund Saga (Б16 + И3).
 3. Photo Ingest Saga (Б15 + И3).
 4. **Red Flags Protocol** (Б5 + И3, авто-эскалация за 60 сек в `sleeping` + `author_pause(reason_class=red_flag)`
@@ -141,7 +141,7 @@ contains: [4 уровня сборки, 6 итераций Mini App-first, boot-
 
 **Mini App:** `day.current` + отправка отчёта + счётчик жизней.
 **Bot:** утренний старт-пуш, напоминания-лестница.
-**Backend:** П-31, life-ops атомарность, `state_transition_log`.
+**Backend:** П-31, life-ops атомарность, события в `participant_events`.
 
 ### Итерация 3 — Чек-Ап и Карточка (2 недели)
 
@@ -189,7 +189,7 @@ hard-confirm (E3), whitelist admin-ID, дашборд владельца, palett
 - `S3_ENDPOINT` — `{s3-domain-ru}` (после решения Автора).
 - `S3_ACCESS_KEY`, `S3_SECRET_KEY` — секреты S3.
 - `REDIS_URL` — Redis (только буфер).
-- `MINIAPP_URL` — URL Mini App (в РФ).
+- `WEBAPP_URL` — URL Mini App (в РФ).
 - `WHITELIST_ADMIN_IDS` — список tg_user_id Автора и партнёров.
 - `FEATURE_FLAGS` — `miniapp_enabled`, `broadcast_enabled` и т.д.
 - `LEGAL_GATE_MODE` — `blocking` (прод) или `advisory` (синтетика).
