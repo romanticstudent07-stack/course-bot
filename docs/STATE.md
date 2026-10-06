@@ -4,11 +4,11 @@
 Подробности закрытых задач — docs/HISTORY.md. Правила ШТАБа — docs/process/SHTAB.md (часть 1) + docs/process/SHTAB-2.md (часть 2), читать ОБА.
 Процессные решения (роли, РЕВЬЮЕР, окна чатов, терминал, rulesets main, форки, LF, expected_tables.txt, миграции по одной) — в SHTAB.md, SHTAB-2.md, DESIGNER.md, README.md.
 ## Сейчас
-- main = мерж #59 (sync DOCS #12) поверх 4a5ae3c (#58 miniapp-csp). Сервер IRONCLAD работает только с main.
-- Сервер ✅ 4a5ae3c (06.10): 7/7 Up, 4 healthy; CSP font-src 'self', favicon 204, nosniff .js; projector run 53/128 МБ, state onboarding|1; alembic 0005, 13 таблиц.
+- main = 8def838 (мерж #61: карточки returning-1/2) поверх 47cf012 (#60 CB-docs-2). Сервер IRONCLAD работает только с main.
+- Сервер ✅ 47cf012 (06.10): 7/7 Up, 4 healthy; CB-docs-2 только docs (build/up не делались); projector state onboarding|1; alembic 0005, 13 таблиц.
 - Пачка 1e-2b ЗАКРЫТА: #46 1e-2b-2, #47 1e-2b-3, #48 1e-2b-1 (живые проверки пройдены, потерь 0).
 - Пачки DOCS ЗАКРЫТЫ: D-2/3/8/12 (DOCS PR #9/#10/#11, sync #51, CB-docs #52); D-11/16/21 (DOCS PR #12, sync #59, CB-docs-2).
-- Текущая: CB-docs-2 (только docs). Дальше — returning (ПРОЕКТИРОВЩИК).
+- Текущая: returning-1 (API: GET /onboarding/status, give при отзыве/смене текста; РЕВЬЮЕР да). Дальше — returning-2 → CB-docs-3 (D-22 + DOCS).
 - DEFECTS-FOUND.md < 25 000 байт (prep-projector: правило А — D-15, D-17, D-18, D-19 в архиве целиком); DEFECTS-ARCHIVE.md КОДЕРАМ кода не давать.
 - Бэкапы before-0004 ✅ (02.10), before-0005 ✅ (05.10). Downgrade ниже 0004 запрещён (стирает журнал согласий).
 - Процесс v3.7: SHTAB.md 3-Б «бюджет чтения» — одна карточка = одна область; задачу режем, чтение не урезаем.
