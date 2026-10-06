@@ -3,7 +3,7 @@
 ## 1. Паспорт
 - id: returning-1 · PR: «returning-1: GET /miniapp/v1/onboarding/status, give при отзыве/смене текста»
 - Ветка: feat/returning-1 · Режим: Р0+ · Зависит от: нет (main = #60). Миграции НЕТ.
-- Область: только API (apps/api) + запись D-22 в docs/DEFECTS-FOUND.md.
+- Область: только API (apps/api).
 
 ## 2. Цель
 Сервер по initData говорит Mini App, кто открыл приложение: «returning» (свой номер),
@@ -35,17 +35,17 @@
 - apps/api/app/routers/consents.py — 6 КБ (меняется: _active_pid)
 - apps/api/app/participants.py — 4 КБ (меняется)
 - apps/api/app/db/models.py — 9 КБ (поля ConsentEvent, TgUserRegistry; не меняется)
-- apps/api/tests/conftest.py — 6 КБ (фикстуры БД и initData)
+- apps/api/tests/conftest.py — 6 КБ (фикстуры БД и initData, UNREACHABLE_DSN)
 - apps/api/tests/test_consents.py — 9,5 КБ (образец: как в тесте вставить revoke)
-- docs/DEFECTS-FOUND.md — меньше 25 КБ (добавить D-22)
-Чтение КОДЕРА ≈ 75 КБ. test_first_launch.py (25 КБ) НЕ читать; если CI упадёт в нём —
+Код ≈ 50 КБ + CODER.md 11 + AGENT-BRIEF.md 11 + STATE.md 16 + карточка ≈ 13.
+Итог чтения КОДЕРА ≈ 100 КБ. test_first_launch.py (25 КБ) НЕ читать; если CI упадёт в нём —
 открыть только упавший тест (AGENT-BRIEF §1, исключение).
 
 ## 6. Файлы
 - создать: apps/api/app/consent_status.py
 - создать: apps/api/tests/test_onboarding_status.py
 - изменить: apps/api/app/routers/onboarding.py, apps/api/app/routers/consents.py,
-  apps/api/app/participants.py, docs/DEFECTS-FOUND.md
+  apps/api/app/participants.py
 - main.py НЕ меняется: status живёт в роутере onboarding, он уже подключён через miniapp_v1.
 
 ## 7. Контракт и логика
@@ -98,23 +98,30 @@
 Миграции нет. Таблицы не меняются (13 таблиц, alembic 0005). expected_tables.txt не трогать.
 
 ## 9. Тесты (apps/api/tests/test_onboarding_status.py; check.sh api; с БД — CI)
+Правило для тестов 4 и 10: UPDATE text_registry фикстура не откатывает (тексты сидит миграция /
+seed, а не транзакция теста) → исходный текст сохранить ДО UPDATE и вернуть в finally:
+try: UPDATE … ; проверки  finally: UPDATE text_registry SET text = <исходный> WHERE key = …
+(образец try/finally — test_backfill_0005 в tests/test_participant_events.py).
 1. consent_problem — чистые случаи: give → None; give, revoke → revoked; revoke, give → None;
    give со старым snapshot → text_changed; give с другим text_key → text_changed; пусто → missing;
    порядок решает (at, id).
 2. status returning: после first-launch тело == {"status":"returning","short_no":"#00000N"},
    ровно 2 ключа, ключа pid нет.
 3. status reconsent (revoke C1, вставка строки revoke в тесте) → reasons == ["C1_revoked"], нет short_no.
-4. status reconsent (UPDATE text_registry.text у legal.consent_c0_age_18_plus) → ["C0_text_changed"].
+4. status reconsent (UPDATE text_registry.text у legal.consent_c0_age_18_plus) → ["C0_text_changed"];
+   try/finally — исходный текст вернуть.
 5. status new: строки нет; строка tombstoned (UPDATE tombstoned_at=now()) → response.content
    обоих побайтно равны и == b'{"status":"new"}'.
 6. 401 без заголовка initData.
 7. у маршрута /miniapp/v1/onboarding/status среди зависимостей есть require_init_data и rate_limit.
 8. лог (caplog): есть «status=returning» и tg_user_id; нет short_no, pid, «C1_», initData.
 9. first-launch после revoke C1 → consents_recorded=1 (новый give только C1), потом status returning.
-10. first-launch после смены текста C0 → новый give C0, text_snapshot == новый текст; status returning.
+10. first-launch после смены текста C0 → новый give C0, text_snapshot == новый текст; status returning;
+    try/finally — исходный текст вернуть.
 11. повтор first-launch при действующих согласиях → 0 новых строк consent_events.
 12. first-launch при reconsent → число participant_events не изменилось (одно, от создания).
-13. 503 при недоступной БД — по образцу test_consents.py, если там такой есть.
+13. status при недоступной БД → 503, code == "SERVICE_UNAVAILABLE": фикстура api_client
+    (UNREACHABLE_DSN из conftest), как другие тесты 503.
 Старые тесты first-launch и /consents должны остаться зелёными без правок.
 
 ## 10. Живые проверки (СЕРВЕРНЫЙ; бэкап не нужен — миграции нет)
@@ -135,18 +142,19 @@
 - AGENT-BRIEF §3 целиком. participant_state, projector, participant_events НЕ читать для решения.
 - Не менять порядок проверок first-launch, коды ответов, revoke, main.py, миграции.
 - Не отдавать pid и чужие данные; не логировать short_no, тексты, initData, дату рождения.
-- Не сравнивать ver_of_text; без новых зависимостей.
+- Не сравнивать ver_of_text; без новых зависимостей. docs/DEFECTS-FOUND.md не менять.
 
 ## 12. Готово, когда
-CI 7/7 зелёный; тесты 1–12 есть; запись D-22 (ниже) в DEFECTS-FOUND.md; маркер в конце файла
-«<!-- следующие записи: новые — с D-23 -->»; живые проверки §10 пройдены.
+CI 7/7 зелёный; тесты 1–13 есть; живые проверки §10 пройдены.
 
 ## 13. Оценка
 Автор ~0,7 ч (КОДЕР 1 окно, CI 1–2 круга, РЕВЬЮЕР 1 окно); кредиты 0.
 
 ## 14. РЕВЬЮЕР: ДА (initData, согласия B-2: ветка решает, писать ли give; изоляция пользователей).
 
-## Приложение. Запись D-22 (КОДЕР вставляет перед маркером, дословно)
+## Приложение. Запись D-22 — НЕ задача КОДЕРА
+Записывает ШТАБ отдельной задачей CB-docs-3 после returning-2 (вместе с отметкой «е — исполнено»
+и правкой контракта DOCS). Текст для ШТАБа:
     ## D-22. Вернувшийся участник: GET /onboarding/status и повторное согласие
 
     - **Файл архитектуры (зеркало):** `docs/architecture/build/miniapp-api-contract.yaml`

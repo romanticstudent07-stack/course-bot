@@ -4,7 +4,7 @@
 - id: returning-2 · PR: «returning-2: старт по /onboarding/status, без метки finished»
 - Ветка: feat/returning-2 · Режим: Р0+ · Зависит от: returning-1.
 - Начинать ТОЛЬКО после мержа И живой выкатки returning-1 (status отвечает на сервере).
-- Область: только Mini App (apps/miniapp) + одна строка в D-22 (docs/DEFECTS-FOUND.md).
+- Область: только Mini App (apps/miniapp).
 
 ## 2. Цель
 При открытии Mini App сначала спрашивает сервер (GET /miniapp/v1/onboarding/status).
@@ -17,12 +17,33 @@
 - З1 вопрос 2 — Б: после номера незаконченный черновик моложе 24 ч → продолжить, иначе → в курс.
   Метку finished убрать.
 
-## 4. Контракт сервера (сделан в returning-1; DOCS ещё не правлен — D-22)
-GET /miniapp/v1/onboarding/status, заголовок X-Telegram-Init-Data (как все запросы client.ts).
+## 4. Контракт сервера и выдержки
+GET /miniapp/v1/onboarding/status (сделан в returning-1; DOCS ещё не правлен — D-22, ШТАБ),
+заголовок X-Telegram-Init-Data (как все запросы client.ts).
 200 — одна из форм: {"status":"returning","short_no":"#000001"} | {"status":"reconsent",
 "reasons":[...]} | {"status":"new"}. Ошибки: 401, 429, 503 (тело {code, message}).
 Решение принимает сервер; клиент версии и тексты согласий не сравнивает.
 first-launch по-прежнему 201 {pid, short_no}; при reconsent он сам допишет новые give.
+
+OnboardingFlow.tsx — импорт в vitest (environment node) безопасен (проверено ПРОЕКТИРОВЩИКОМ:
+OnboardingFlow.test.ts уже импортирует модуль в node). Импорты модуля — только:
+    import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+    import { ApiError, newClientOpId, postFirstLaunch, postTextsBulk, type ConsentId,
+      type FirstLaunchRequest, type TextsBulkResponse } from '../api/client.ts';
+CSS нет; на верхнем уровне — только объявления (обращения к SDK — внутри функций client.ts).
+Выдержка — errorMessage (экспорт OnboardingFlow.tsx, дословно):
+    /** Понятное сообщение для экрана ошибки (401 / 429 / 503 / сеть / прочее). */
+    export function errorMessage(err: unknown): string {
+      if (err instanceof ApiError) {
+        if (err.status === 401) {
+          return 'Не удалось подтвердить вход через Telegram. Нажмите «Повторить» или откройте приложение заново.';
+        }
+        if (err.status === 429) return 'Слишком много попыток подряд. Подождите минуту и нажмите «Повторить».';
+        if (err.status === 503) return 'Сервис временно недоступен. Попробуйте чуть позже.';
+        return 'Что-то пошло не так. Нажмите «Повторить».';
+      }
+      return 'Не удалось связаться с сервером. Проверьте интернет и нажмите «Повторить».';
+    }
 
 ## 5. ЧТО ПРОЧИТАТЬ (целиком)
 - apps/miniapp/src/api/client.ts — 5 КБ (меняется)
@@ -30,16 +51,13 @@ first-launch по-прежнему 201 {pid, short_no}; при reconsent он с
 - apps/miniapp/src/components/drafts.ts — 9 КБ (меняется)
 - apps/miniapp/src/components/drafts.test.ts — 9 КБ (меняется)
 - apps/miniapp/src/components/LaterSteps.tsx — 13 КБ (только комментарии про finished)
-- docs/DEFECTS-FOUND.md — меньше 25 КБ (одна строка в D-22)
-Чтение КОДЕРА ≈ 63 КБ. OnboardingFlow.tsx (17 КБ) НЕ читать и НЕ менять. Из него
-импортируются готовые экспорты: errorMessage(err): string (тексты для 401/429/503/сети),
-ApiError — из client.ts.
+Код ≈ 38 КБ + CODER.md 11 + AGENT-BRIEF.md 11 + STATE.md 16 + карточка ≈ 12.
+Итог чтения КОДЕРА ≈ 88 КБ. OnboardingFlow.tsx (17 КБ) НЕ читать и НЕ менять: нужное — в §4.
 
 ## 6. Файлы
 - создать: apps/miniapp/src/components/startup.ts — чистые функции решения (без React)
 - создать: apps/miniapp/src/components/startup.test.ts
-- изменить: client.ts, App.tsx, drafts.ts, drafts.test.ts, LaterSteps.tsx (комментарии),
-  docs/DEFECTS-FOUND.md
+- изменить: client.ts, App.tsx, drafts.ts, drafts.test.ts, LaterSteps.tsx (комментарии)
 
 ## 7. Логика
 ### 7.1 client.ts
@@ -52,7 +70,7 @@ ApiError — из client.ts.
   'onboarding' (безопасная сторона: экраны согласий, решение снова за сервером).
 - afterNumber(draft: Draft | null): 'later' | 'app'. 'later' — черновик есть и step !== 'finished';
   иначе 'app'. (openDraft уже чистит чужой, битый и старше 24 ч.)
-- startErrorMessage(err) = errorMessage(err) из OnboardingFlow.tsx: 401 → текст про вход
+- startErrorMessage(err) = errorMessage(err) из OnboardingFlow.tsx (§4): 401 → текст про вход
   через Telegram, 429, 503, сеть — те же формулировки, что сейчас.
 ### 7.3 App.tsx — фазы: checking → number | onboarding → later | app; плюс start-error
 - checking (первая фаза): «Загрузка…», ничего другого (block_all_ui_until_checked); один вызов
@@ -105,10 +123,10 @@ drafts.test.ts (тесты метки finished переписать):
 - AGENT-BRIEF §3. Не менять OnboardingFlow.tsx, порядок его шагов и first-launch.
 - Клиент не решает «пускать ли» сам: ни по initDataUnsafe, ни по черновику, ни по времени.
 - Не хранить на устройстве short_no, status, reasons, дату рождения. Новые зависимости — нет.
+- docs/DEFECTS-FOUND.md не менять (D-22 — задача ШТАБа CB-docs-3).
 
 ## 12. Готово, когда
-CI 7/7; тесты 1–8; в D-22 в конце пункта «е» дописано « — исполнено returning-2 (PR #N)»;
-живые проверки §10 пункты 1–3 пройдены.
+CI 7/7; тесты 1–8; живые проверки §10 пункты 1–3 пройдены.
 
 ## 13. Оценка: Автор ~0,6 ч (КОДЕР 1 окно, CI 1–2 круга, РЕВЬЮЕР 1 окно); кредиты 0.
 
