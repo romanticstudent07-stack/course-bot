@@ -137,6 +137,32 @@ services:
         limits:
           memory: ${MEM_LIMIT_API:-384M}
 
+  # Проектор (E1): единственный писатель participant_state.
+  # Тот же образ, что у api (apps/api), другая команда: python -m app.projector run
+  # (цикл 1 с; сбой БД → WARNING, пауза 5 с, повтор — контейнер не падает).
+  # HTTP нет → портов нет; HEALTHCHECK Dockerfile api стучится на /healthz — отключён.
+  projector:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    container_name: course-bot_projector
+    command: ["python", "-m", "app.projector", "run"]
+    env_file:
+      - ../.env
+    environment:
+      TZ: ${TZ}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    networks: [course-bot_net]
+    deploy:
+      resources:
+        limits:
+          memory: ${MEM_LIMIT_PROJECTOR:-128M}
+
   # Telegram bot (aiogram 3, скелет Итерации 0-А: /start + Menu Button; long polling, D-4).
   bot:
     build:
