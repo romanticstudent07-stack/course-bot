@@ -36,9 +36,10 @@
 - apps/api/app/participants.py — 4 КБ (меняется)
 - apps/api/app/db/models.py — 9 КБ (поля ConsentEvent, TgUserRegistry; не меняется)
 - apps/api/tests/conftest.py — 6 КБ (фикстуры БД и initData, UNREACHABLE_DSN)
-- apps/api/tests/test_consents.py — 9,5 КБ (образец: как в тесте вставить revoke)
+- apps/api/tests/test_consents.py — 9,5 КБ (образец вставки revoke; поле at — см. §9 тест 3)
+- apps/api/main.py — 3 КБ (не меняется; как miniapp_v1 вешает require_init_data и rate_limit — для теста 7)
 Код ≈ 50 КБ + CODER.md 11 + AGENT-BRIEF.md 11 + STATE.md 16 + карточка ≈ 13.
-Итог чтения КОДЕРА ≈ 100 КБ. test_first_launch.py (25 КБ) НЕ читать; если CI упадёт в нём —
+Итог чтения КОДЕРА ≈ 103 КБ (с main.py). test_first_launch.py (25 КБ) НЕ читать; если CI упадёт в нём —
 открыть только упавший тест (AGENT-BRIEF §1, исключение).
 
 ## 6. Файлы
@@ -107,7 +108,7 @@ try: UPDATE … ; проверки  finally: UPDATE text_registry SET text = <и
    порядок решает (at, id).
 2. status returning: после first-launch тело == {"status":"returning","short_no":"#00000N"},
    ровно 2 ключа, ключа pid нет.
-3. status reconsent (revoke C1, вставка строки revoke в тесте) → reasons == ["C1_revoked"], нет short_no.
+3. status reconsent (revoke C1: строку revoke вставить в тесте с at = now(), НЕ now() + interval '1 minute', как в test_consents, — иначе новый give из теста 9 получит at раньше revoke и status останется reconsent) → reasons == ["C1_revoked"], нет short_no.
 4. status reconsent (UPDATE text_registry.text у legal.consent_c0_age_18_plus) → ["C0_text_changed"];
    try/finally — исходный текст вернуть.
 5. status new: строки нет; строка tombstoned (UPDATE tombstoned_at=now()) → response.content
@@ -115,7 +116,7 @@ try: UPDATE … ; проверки  finally: UPDATE text_registry SET text = <и
 6. 401 без заголовка initData.
 7. у маршрута /miniapp/v1/onboarding/status среди зависимостей есть require_init_data и rate_limit.
 8. лог (caplog): есть «status=returning» и tg_user_id; нет short_no, pid, «C1_», initData.
-9. first-launch после revoke C1 → consents_recorded=1 (новый give только C1), потом status returning.
+9. first-launch после revoke C1 (revoke как в тесте 3, at = now()) → 201 и ровно 1 новая строка consent_events (C1, give), потом status returning.
 10. first-launch после смены текста C0 → новый give C0, text_snapshot == новый текст; status returning;
     try/finally — исходный текст вернуть.
 11. повтор first-launch при действующих согласиях → 0 новых строк consent_events.
