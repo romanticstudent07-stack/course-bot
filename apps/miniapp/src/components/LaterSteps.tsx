@@ -7,7 +7,9 @@
 // вернуться к согласиям нельзя).
 // Анкета на сервер НЕ уходит: эндпоинта нет — только черновик на устройстве (drafts.ts:
 // привязка к tg_user_id, TTL 24 ч, только step / email / city).
-// «Перейти к курсу» → в черновике только метка finished (finishDraft, 1e-2b-2).
+// finished — экран, а не хранимая метка (returning-2): на экране finished черновик очищается
+// (saveDraft), «Перейти к курсу» тоже очищает его (finishDraft). «Пройден ли онбординг»
+// решает сервер (GET /onboarding/status в App.tsx), не устройство.
 // Шаги с полями (email, city) — <form> с onSubmit (preventDefault) и основной кнопкой
 // type="submit"; Enter при невыполненных условиях ничего не делает.
 // Тексты — один POST /texts/bulk; ключ в missing → нейтральная заглушка.
@@ -278,7 +280,8 @@ export function LaterSteps({ tgUserId, store, onFinish }: LaterStepsProps) {
   const [textsAttempt, setTextsAttempt] = useState(0);
   const [consents, setConsents] = useState<ConsentsState>('loading');
 
-  // Открыть черновик: чужой tg_user_id / старше 24 ч / битый → очистка внутри openDraft.
+  // Открыть черновик: чужой tg_user_id / старше 24 ч / битый / старая метка finished →
+  // очистка внутри openDraft.
   useEffect(() => {
     let cancelled = false;
     openDraft(store, tgUserId, Date.now())
@@ -293,7 +296,8 @@ export function LaterSteps({ tgUserId, store, onFinish }: LaterStepsProps) {
     };
   }, [store, tgUserId]);
 
-  // Каждое изменение — в черновик. Ошибка записи не мешает пройти шаги.
+  // Каждое изменение — в черновик (шаг finished → очистка, см. saveDraft).
+  // Ошибка записи не мешает пройти шаги.
   useEffect(() => {
     if (!loaded) return;
     saveDraft(store, tgUserId, draft, Date.now()).catch(() => undefined);
