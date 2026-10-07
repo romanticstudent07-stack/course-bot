@@ -101,7 +101,8 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 }
 
 // ---- Онбординг (SEAM-1) — контракт build/miniapp-api-contract.yaml ----
-// UI: apps/miniapp/src/components/OnboardingFlow.tsx (до pid) и LaterSteps.tsx (после pid).
+// UI: apps/miniapp/src/components/OnboardingFlow.tsx (до pid) и LaterSteps.tsx (после pid);
+// старт Mini App — App.tsx + startup.ts (getOnboardingStatus, returning-2).
 
 /** Единый реестр согласий C0–C6 (Consent.id в контракте). До pid обязательны C0 и C1. */
 export type ConsentId = 'C0' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'C6';
@@ -121,6 +122,18 @@ export interface PidCreated {
 /** clientOpId — один на весь онбординг; повтор после ошибки уходит с тем же id (D-17). */
 export const postFirstLaunch = (body: FirstLaunchRequest, clientOpId: string) =>
   apiRequest<PidCreated>('/miniapp/v1/onboarding/first-launch', { method: 'POST', body, clientOpId });
+
+/**
+ * Статус онбординга (returning-1). Решение «показывать ли экраны 18+ и согласий» принимает
+ * сервер; клиент версии и тексты согласий не сравнивает и ответ на устройстве не хранит.
+ */
+export type OnboardingStatus =
+  | { status: 'returning'; short_no: string }
+  | { status: 'reconsent'; reasons: string[] }
+  | { status: 'new' };
+
+/** Только чтение: без X-Client-Op-Id (запрос ничего не меняет). Ошибки — 401, 429, 503. */
+export const getOnboardingStatus = () => apiRequest<OnboardingStatus>('/miniapp/v1/onboarding/status');
 
 // ---- Согласия (1e-2): только чтение своих ----
 

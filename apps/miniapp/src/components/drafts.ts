@@ -1,18 +1,20 @@
-// apps/miniapp/src/components/drafts.ts — черновик анкеты после pid (1e-2, 1e-2b-2).
+// apps/miniapp/src/components/drafts.ts — черновик анкеты после pid (1e-2, 1e-2b-2, returning-2).
 //
 // Нативный IndexedDB без библиотек, за интерфейсом DraftStore (в тестах — хранилище в памяти).
 // Это ЕДИНСТВЕННЫЙ файл Mini App, который пишет на устройство.
 //
-// Правила (I4 §7 R380_cleanup, карточка 1e-2 §7, карточка 1e-2b-2 §7):
+// Правила (I4 §7 R380_cleanup, карточки 1e-2 §7, 1e-2b-2 §7, returning-2 §7.4):
 //   - в черновике только step, email, city + служебные v, tgUserId, savedAt;
 //     дату рождения сюда не класть НИКОГДА (её и нет в типе Draft; sanitizeDraft
-//     отбрасывает любые лишние поля);
+//     отбрасывает любые лишние поля). short_no, status и reasons сервера — тоже нет;
 //   - черновик привязан к tg_user_id: другой tg_user_id или неизвестный → полная
 //     очистка сразу при открытии;
 //   - черновик старше 24 ч (от последнего сохранения) → удалить при открытии;
 //   - битая запись → удалить;
-//   - «Перейти к курсу» → в черновике только {step: 'finished'} (finishDraft): email и город
-//     стираются; пользователь неизвестен → черновик удаляется; ошибка хранилища переход
+//   - метки finished на устройстве НЕТ (returning-2): «пройден ли онбординг» решает сервер
+//     (GET /onboarding/status). Шаг 'finished' — это экран, а не хранимая метка:
+//     saveDraft со step 'finished' → очистка; openDraft нашёл старую запись 'finished' →
+//     очистка и null; «Перейти к курсу» (finishDraft) → очистка. Ошибка хранилища переход
 //     не блокирует и в лог не пишется.
 // На сервер черновик не уходит: эндпоинта анкеты нет.
 
@@ -29,9 +31,6 @@ export interface Draft {
 }
 
 export const EMPTY_DRAFT: Draft = { step: 'offer', email: '', city: '' };
-
-/** Черновик после «Перейти к курсу»: только метка шага, без email и города. */
-export const FINISHED_DRAFT: Draft = { step: 'finished', email: '', city: '' };
 
 export const DRAFT_VERSION = 1;
 export const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -89,7 +88,10 @@ export function parseStoredDraft(raw: unknown): StoredDraft | null {
   };
 }
 
-/** Открыть черновик: чужой / неизвестный пользователь, старше 24 ч, битый → очистка и null. */
+/**
+ * Открыть черновик: чужой / неизвестный пользователь, старше 24 ч, битый,
+ * старая метка finished → очистка и null.
+ */
 export async function openDraft(store: DraftStore, tgUserId: number | null, now: number): Promise<Draft | null> {
   const raw = await store.get();
   if (raw === undefined || raw === null) return null;
@@ -98,6 +100,7 @@ export async function openDraft(store: DraftStore, tgUserId: number | null, now:
     stored === null ||
     tgUserId === null ||
     stored.tgUserId !== tgUserId ||
+    stored.step === 'finished' ||
     now - stored.savedAt > DRAFT_TTL_MS ||
     stored.savedAt > now + DRAFT_FUTURE_SKEW_MS
   ) {
@@ -107,30 +110,35 @@ export async function openDraft(store: DraftStore, tgUserId: number | null, now:
   return sanitizeDraft(stored);
 }
 
-/** Сохранить черновик. Пользователь неизвестен → ничего не пишем. */
+/**
+ * Сохранить черновик. Шаг finished → очистка вместо записи (email и город не остаются
+ * на устройстве). Пользователь неизвестен → ничего не пишем.
+ */
 export async function saveDraft(store: DraftStore, tgUserId: number | null, draft: Draft, now: number): Promise<void> {
+  const clean = sanitizeDraft(draft);
+  if (clean.step === 'finished') {
+    await store.clear();
+    return;
+  }
   if (tgUserId === null) return;
-  await store.put({ v: DRAFT_VERSION, tgUserId, savedAt: now, ...sanitizeDraft(draft) });
+  await store.put({ v: DRAFT_VERSION, tgUserId, savedAt: now, ...clean });
 }
 
 /**
- * «Перейти к курсу»: в черновике остаётся только метка finished (email и город стёрты);
- * пользователь неизвестен → черновик удаляется. Ошибка хранилища (reject или синхронный
- * throw) глотается без лога; onFinish вызывается ровно 1 раз — после попытки записи.
+ * «Перейти к курсу»: черновик удаляется всегда (и при известном, и при неизвестном
+ * пользователе) — метки finished на устройстве нет. Ошибка хранилища (reject или синхронный
+ * throw) глотается без лога; onFinish вызывается ровно 1 раз — после попытки очистки.
  * Ошибка внутри самого onFinish не перехватывается.
+ * tgUserId и now не используются (подпись прежняя — вызов в LaterSteps.tsx не меняется).
  */
 export async function finishDraft(
   store: DraftStore,
-  tgUserId: number | null,
-  now: number,
+  _tgUserId: number | null,
+  _now: number,
   onFinish: () => void,
 ): Promise<void> {
   try {
-    if (tgUserId !== null) {
-      await saveDraft(store, tgUserId, FINISHED_DRAFT, now);
-    } else {
-      await store.clear();
-    }
+    await store.clear();
   } catch {
     // Хранилище недоступно — переход к курсу не блокируем, в лог ничего (ПДн).
   }

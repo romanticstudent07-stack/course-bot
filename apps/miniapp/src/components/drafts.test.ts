@@ -1,6 +1,7 @@
 // apps/miniapp/src/components/drafts.test.ts — vitest, environment node.
 // DraftStore: сохранение/чтение, очистка при смене tg_user_id, TTL 24 ч, только step/email/city;
-// finishDraft: после «Перейти к курсу» в черновике только метка finished, ошибка хранилища не блокирует.
+// метки finished на устройстве нет (returning-2): saveDraft / openDraft / finishDraft с finished
+// → хранилище пусто; ошибка хранилища переход к курсу не блокирует.
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -139,63 +140,106 @@ describe('битые записи', () => {
   });
 });
 
+describe('метки finished на устройстве нет', () => {
+  it('saveDraft со step finished → хранилище пусто (email и город стёрты)', async () => {
+    const store = createMemoryDraftStore();
+    await saveDraft(store, USER, DRAFT, NOW - 5000);
+    await saveDraft(store, USER, { ...DRAFT, step: 'finished' }, NOW);
+    expect(store.peek()).toBeUndefined();
+  });
+
+  it('saveDraft со step finished и неизвестным пользователем → put не вызван, хранилище пусто', async () => {
+    let putCalled = false;
+    let cleared = false;
+    const store: DraftStore = {
+      get: async () => undefined,
+      put: async () => {
+        putCalled = true;
+      },
+      clear: async () => {
+        cleared = true;
+      },
+    };
+    await saveDraft(store, null, { ...DRAFT, step: 'finished' }, NOW);
+    expect(putCalled).toBe(false);
+    expect(cleared).toBe(true);
+  });
+
+  it('openDraft со старой записью step finished → null и хранилище пусто', async () => {
+    const store = createMemoryDraftStore();
+    await store.put({ v: 1, tgUserId: USER, savedAt: NOW, step: 'finished', email: '', city: '' });
+    expect(await openDraft(store, USER, NOW + 1000)).toBeNull();
+    expect(store.peek()).toBeUndefined();
+  });
+});
+
 describe('finishDraft', () => {
-  it('сохранён черновик с email и городом → остаётся только метка finished; onFinish 1 раз после записи', async () => {
+  it('известный пользователь с email и городом → хранилище пусто; onFinish 1 раз после очистки', async () => {
     const store = createMemoryDraftStore();
     await saveDraft(store, USER, DRAFT, NOW - 5000);
     let calls = 0;
-    let seenAtFinish: unknown = undefined;
+    let seenAtFinish: unknown = 'not-called';
     const onFinish = () => {
       calls += 1;
       seenAtFinish = store.peek();
     };
     await finishDraft(store, USER, NOW, onFinish);
-    const expected = { v: 1, tgUserId: USER, savedAt: NOW, step: 'finished', email: '', city: '' };
-    expect(store.peek()).toEqual(expected);
-    expect(seenAtFinish).toEqual(expected);
+    expect(store.peek()).toBeUndefined();
+    expect(seenAtFinish).toBeUndefined();
     expect(calls).toBe(1);
-    expect(JSON.stringify(store.peek())).not.toContain('a@example.com');
   });
 
-  it('после finishDraft следующее открытие → экран finished без email и города', async () => {
+  it('после finishDraft следующее открытие → null (черновика нет)', async () => {
     const store = createMemoryDraftStore();
     await saveDraft(store, USER, DRAFT, NOW - 5000);
-    let calls = 0;
-    const onFinish = () => {
-      calls += 1;
-    };
-    await finishDraft(store, USER, NOW, onFinish);
-    expect(await openDraft(store, USER, NOW + 1000)).toEqual({ step: 'finished', email: '', city: '' });
-    expect(calls).toBe(1);
+    await finishDraft(store, USER, NOW, () => undefined);
+    expect(await openDraft(store, USER, NOW + 1000)).toBeNull();
   });
 
-  it('put возвращает reject → finishDraft резолвится, onFinish 1 раз', async () => {
+  it('известный пользователь → put не вызван, clear вызван', async () => {
+    let putCalled = false;
+    let cleared = false;
+    const store: DraftStore = {
+      get: async () => undefined,
+      put: async () => {
+        putCalled = true;
+      },
+      clear: async () => {
+        cleared = true;
+      },
+    };
+    await finishDraft(store, USER, NOW, () => undefined);
+    expect(putCalled).toBe(false);
+    expect(cleared).toBe(true);
+  });
+
+  it('clear возвращает reject → finishDraft резолвится, onFinish 1 раз', async () => {
     let calls = 0;
     const onFinish = () => {
       calls += 1;
     };
     const store: DraftStore = {
       get: async () => undefined,
-      put: async () => {
-        throw new Error('put failed');
+      put: async () => undefined,
+      clear: async () => {
+        throw new Error('clear failed');
       },
-      clear: async () => undefined,
     };
     await expect(finishDraft(store, USER, NOW, onFinish)).resolves.toBeUndefined();
     expect(calls).toBe(1);
   });
 
-  it('put бросает синхронно → finishDraft резолвится, onFinish 1 раз', async () => {
+  it('clear бросает синхронно → finishDraft резолвится, onFinish 1 раз', async () => {
     let calls = 0;
     const onFinish = () => {
       calls += 1;
     };
     const store: DraftStore = {
       get: async () => undefined,
-      put: () => {
-        throw new Error('put failed sync');
+      put: async () => undefined,
+      clear: () => {
+        throw new Error('clear failed sync');
       },
-      clear: async () => undefined,
     };
     await expect(finishDraft(store, USER, NOW, onFinish)).resolves.toBeUndefined();
     expect(calls).toBe(1);
