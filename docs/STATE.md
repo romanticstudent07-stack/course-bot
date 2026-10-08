@@ -29,7 +29,7 @@
 - #39 процесс v3.5: правила выдачи пакета, терминал, D-15. #41 процесс v3.6: SHTAB.md разделён на две части с метками конца (чтение рубится на ~10 000 токенов).
 - #40 1e-1b: экраны онбординга Mini App (OnboardingFlow.tsx + тест, App.tsx, client.ts с postTextsBulk). 5 файлов, CI 7/7, РЕВЬЮЕР: блокирующих 0 после проверки ШТАБа. Сервер ✅ 9edd478.
 - #43 1e-2 + живой проход 03.10 — этап 1e-2 ЗАКРЫТ. Процесс v3.7 + карточки 1e-2b. #46, #47, #48 — пачка 1e-2b (см. «Сейчас»).
-- #49 сжатие STATE; #50 карточки DOCS-a/b/c + CB-docs; #51 sync DOCS → docs/architecture; #52 CB-docs; #53 карточки пачки projector (projector.md разрезан по 3-Б); #54 prep-projector (архив по правилу А, FOUND 23 588 байт); #55 projector-1 (0005); #56 projector-2 (проектор); #57 projector-3 (7-й контейнер); #58 miniapp-csp; #59 sync DOCS #12; #60 CB-docs-2; #61 карточки returning; #62 returning-1 (status); #63 returning-2 (старт по status). DOCS PR #9/#10/#11/#12 — правки зеркала D-2/3/8/12 + D-32, D-11/16/21. #56 projector-2 (проектор); #57 projector-3 (7-й контейнер); #58 miniapp-csp; #59 sync DOCS #12. DOCS PR #9/#10/#11/#12 — правки зеркала D-2/3/8/12 + D-32, D-11/16/21.
+- #49 сжатие STATE; #50 карточки DOCS-a/b/c + CB-docs; #51 sync DOCS → docs/architecture; #52 CB-docs; #53 карточки пачки projector (projector.md разрезан по 3-Б); #54 prep-projector (архив по правилу А, FOUND 23 588 байт); #55 projector-1 (0005); #56 projector-2 (проектор); #57 projector-3 (7-й контейнер); #58 miniapp-csp; #59 sync DOCS #12; #60 CB-docs-2; #61 карточки returning; #62 returning-1 (status); #63 returning-2 (старт по status). DOCS PR #9/#10/#11/#12 — правки зеркала D-2/3/8/12 + D-32, D-11/16/21.
 ## Решения Автора (процессные — в правилах, см. шапку)
 - Бот — long polling. Cloudflare Tunnel — нет. Прод — российский VPS (фаворит Timeweb Cloud), туннель дом→VPS autossh/WireGuard.
 - Память: сумма лимитов ≤ 2 ГБ; сейчас 1792 МБ (api 384, db 384, bot 512, garage 192, miniapp 128, projector 128, redis 64), реально ~362 МБ (06.10, projector 53).
@@ -51,7 +51,7 @@
 ## Цель и сроки
 - Всё до итерации 6 + 0-Б. Сроков нет: сначала правильная настройка. AI Chat Opus без кредитов до 31.12.2026 → пересмотр плана 01.11.2026 (решение 29.09).
 ## Очередь
-0. [сейчас] CB-docs-3 → DOCS: контракт status (D-22) + sync → B-3a (роли/GRANT; projector — своя роль и environment только с БД, без env_file) → B-3b (D-18, 500, D-15 г/е) → перезагрузка сервера. только с БД, без env_file) → B-3b (D-18, 500, D-15 г/е) → перезагрузка сервера.
+0. [сейчас] CB-docs-3 → DOCS: контракт status (D-22) + sync → B-3a (роли/GRANT; projector — своя роль и environment только с БД, без env_file) → B-3b (D-18, 500, D-15 г/е) → перезагрузка сервера.
 1. Итерации 2–6 по build-order.md, затем 0-Б.
 ## Мелочи (собирать попутно в задачи без БД)
 - HomePage: текст «скелет Итерации 0-А… Онбординг появится в Итерации 1» устарел. /miniapp без слэша → 404. К проду: закрыть 127.0.0.1:8080, --proxy-headers.
