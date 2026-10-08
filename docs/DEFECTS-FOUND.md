@@ -236,8 +236,7 @@
 - **Остаётся (ревью #62):** условие для первой задачи, которая пишет revoke: revoke берёт ту же
   блокировку строки участника (FOR UPDATE), порядок событий — по id (bigint), не по at
   (at = время начала транзакции: give может встать «после» более позднего revoke).
-- **Правка DOCS:** miniapp-api-contract.yaml — путь status, схема OnboardingStatus, reasons,
-  повторный give в first-launch (очередь ШТАБа).
+- **Правка DOCS сделана:** DOCS PR #13 (miniapp-api-contract.yaml: путь status, схема OnboardingStatus, reasons, повторный give в first-launch), sync PR #65.
 - **Ждём решения Автора:** нет.
 
 ## D-23. Черновик на устройстве: зависание IndexedDB, гонка записи, текст ErrorBoundary
@@ -253,4 +252,3 @@
 - **Ждём решения Автора:** нет.
 
 <!-- следующие записи: новые — с D-24 -->
-
