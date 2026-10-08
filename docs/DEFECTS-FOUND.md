@@ -211,4 +211,46 @@
 
 - **D-21** (`MINIAPP_URL` → `WEBAPP_URL`) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 06.10).
 
-<!-- следующие записи: новые — с D-22 -->
+## D-22. Вернувшийся участник: GET /onboarding/status и повторное согласие
+
+- **Файл архитектуры (зеркало):** `build/miniapp-api-contract.yaml` (first-launch; пути status нет).
+- **Файлы реализации:** `apps/api/app/routers/onboarding.py`, `apps/api/app/consent_status.py` (PR #62);
+  `apps/miniapp/src/components/App.tsx`, `startup.ts`, `drafts.ts` (PR #63).
+- **Суть расхождения:** 1) в контракте нет способа узнать «кто я» без экранов 18+ и C1;
+  2) «уже данные согласия повторно не записываются» — после отзыва или смены текста
+  повторное согласие не записалось бы (круг); 3) что видит фаза sleeping — не определено.
+- **Решение Автора (06.10, вариант А; returning: 1 Б, 2 Б, 3 да):**
+  а) GET /miniapp/v1/onboarding/status → 200: {status: returning, short_no} / {status: reconsent,
+     reasons} / {status: new}; «нет участника» и erased — одно тело; pid не отдаётся;
+     401/429/503 как у /miniapp/v1/**; 403 нет;
+  б) reasons — закрытый перечень: C0_missing, C0_revoked, C0_text_changed, C1_missing,
+     C1_revoked, C1_text_changed;
+  в) согласие действует = последнее событие по kind — give, и text_snapshot = текущий текст
+     ключа (snapshot_of при записи и проверке); ver_of_text не критерий; participant_state не используется;
+  г) first-launch пишет give по присланному kind, только если согласие не действует;
+     revoke не трогает; participant_events — только при создании pid;
+  д) sleeping — позже (задача, которая введёт /block);
+  е) метка finished на устройстве убрана, «пускать ли» решает сервер — исполнено PR #63 (D-19).
+- **Сделано:** PR #62 (живая 06.10: status без initData 401, у Автора returning);
+  PR #63 (живая 08.10: номер сразу, без экранов; first-launch не вызывался).
+- **Остаётся (ревью #62):** условие для первой задачи, которая пишет revoke: revoke берёт ту же
+  блокировку строки участника (FOR UPDATE), порядок событий — по id (bigint), не по at
+  (at = время начала транзакции: give может встать «после» более позднего revoke).
+- **Правка DOCS:** miniapp-api-contract.yaml — путь status, схема OnboardingStatus, reasons,
+  повторный give в first-launch (очередь ШТАБа).
+- **Ждём решения Автора:** нет.
+
+## D-23. Черновик на устройстве: зависание IndexedDB, гонка записи, текст ErrorBoundary
+
+- **Файлы реализации:** `apps/miniapp/src/components/App.tsx`, `LaterSteps.tsx`, `drafts.ts`, `Root.tsx`.
+- **Суть (ревью #63, неблокирующее; обхода согласий нет):**
+  1) openDraft без таймаута: IndexedDB.open завис → «Продолжить» неактивна навсегда;
+  2) saveDraft без очереди: put прошлого шага может завершиться после clear (finishDraft) →
+     email и город снова на устройстве (до 24 ч), номер ведёт в анкету;
+  3) Root.tsx (шаблон): ErrorBoundary показывает пользователю error.message.
+- **Предлагаемое решение:** таймаут openDraft (→ курс); одна очередь записей черновика;
+  ErrorBoundary — нейтральный текст без message. Задача без БД, вместе с мелочами Mini App.
+- **Ждём решения Автора:** нет.
+
+<!-- следующие записи: новые — с D-24 -->
+
