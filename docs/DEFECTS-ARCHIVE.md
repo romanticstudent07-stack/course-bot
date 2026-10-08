@@ -215,6 +215,7 @@
   - SDK пишет launch params с сырой initData в sessionStorage (ключ `tapps/launchParams`).
     Решение Автора 03.10 (6А): свойство SDK, ничего не менять, пересмотреть на 0-Б (с CSP / XSS).
     Подробности — `docs/DEFECTS-ARCHIVE.md`, «D-19: sessionStorage в SDK».
+- **Закрыто (08.10, PR #63 returning-2):** метка `finished` на устройстве убрана — «пускать ли» решает сервер (`GET /onboarding/status`, D-22); старая метка стирается при открытии; живая 08.10 ✅. Остаются: TTL 24 ч для email и города; sessionStorage SDK (6А, пересмотр на 0-Б).
 - **Ждём решения Автора:** нет.
 
 ### Блокеры B-1, B-2 (закрытые части, 04.10)
