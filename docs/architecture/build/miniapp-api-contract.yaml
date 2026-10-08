@@ -64,6 +64,23 @@ components:
           example: "#000123"
           description: "Короткий номер участника (Б6 §6.3): # и не меньше 6 цифр (после 999999 — больше). Выдаётся при создании pid, только для показа; пропуски номеров возможны."
 
+    OnboardingStatus:
+      type: object
+      required: [status]
+      description: |
+        Ответ GET /miniapp/v1/onboarding/status — ровно одна из трёх форм:
+        {status: returning, short_no} — участник есть, C0 и C1 действуют;
+        {status: reconsent, reasons} — участник есть, хоть одно из C0, C1 не действует;
+        {status: new} — участника нет или он удалён (erased): тело одинаковое.
+        Пустые поля не отдаются. pid не отдаётся никогда.
+      properties:
+        status: { type: string, enum: [returning, reconsent, new] }
+        short_no: { type: string, example: "#000123", description: "Только при returning (формат — PidCreated.short_no)." }
+        reasons:
+          type: array
+          description: "Только при reconsent. Закрытый перечень; порядок вывода — как в enum."
+          items: { type: string, enum: [C0_missing, C0_revoked, C0_text_changed, C1_missing, C1_revoked, C1_text_changed] }
+
   responses:
     Unauthorized:
       description: "initData невалидна / истекла"
@@ -109,7 +126,10 @@ paths:
         Неизвестный tg_user_id не даёт 403: first-launch — единственная точка
         создания участника (SEAM-PATCH-1).
         Идемпотентность через tg_user_id: повторный вызов → 201 с тем же телом
-        (тот же pid и short_no); уже данные согласия повторно не записываются.
+        (тот же pid и short_no). Согласие из тела пишется (give), только если оно
+        не действует: give не было, последнее событие — revoke или сменился текст
+        согласия (правило — GET /miniapp/v1/onboarding/status; course-bot D-22).
+        Действующее согласие повторно не пишется; revoke first-launch не пишет.
         После tombstone тот же tg_user_id получает новый pid и новый short_no (И1, Р243).
         Уточнено реализацией course-bot (course-bot D-10, D-12; appendix/D-source-defects.md, D-32).
       requestBody:
@@ -144,6 +164,23 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /miniapp/v1/onboarding/status:
+    get:
+      summary: "Кто открыл Mini App: returning / reconsent / new (course-bot D-22)"
+      description: |
+        Параметров и тела нет; tg_user_id — только из проверенной initData. Только чтение.
+        Согласие действует, если последнее событие по нему — give и снимок текста
+        (text_snapshot) равен текущему тексту ключа в text_registry; ver_of_text — не критерий.
+        Решение — только по consent_events и text_registry; participant_state не используется (INV-1).
+        Неизвестный tg_user_id не даёт 403: ответ 200 {status: new} (SEAM-PATCH-1).
+        Фаза sleeping — позже (задача, которая введёт /block).
+        Уточнено реализацией course-bot (course-bot D-22).
+      responses:
+        "200": { description: "Одна из трёх форм OnboardingStatus", content: { application/json: { schema: { $ref: "#/components/schemas/OnboardingStatus" }}}}
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
