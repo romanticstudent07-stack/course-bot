@@ -9,6 +9,8 @@ Seed: apps/api/config/texts/<домен>.json — один файл на дом�
 
 Загрузчик (из /app в контейнере):
     python -m app.texts load
+  0. DSN — Settings.migrations_dsn(): MIGRATIONS_DATABASE_URL → DATABASE_URL → POSTGRES_*
+     (B-3a-2). DSN не печатается. Эндпоинты /texts — через get_db_session (DATABASE_URL).
   1. Читает все config/texts/*.json, проверяет каждый схемой (Draft 2020-12),
      ищет дубли ключей между файлами.
   2. Ошибка → exit 1, в БД ничего не пишется.
@@ -214,10 +216,13 @@ Writer = Callable[[Sequence[SeedEntry]], LoadResult]
 
 
 def _write_to_configured_db(entries: Sequence[SeedEntry]) -> LoadResult:
+    """Загрузчик пишет под Settings.migrations_dsn() (B-3a-2). DSN не печатается."""
     from app.config import get_settings
     from app.db.session import get_engine
 
-    return write_entries(get_engine(get_settings()), entries)
+    settings = get_settings()
+    engine = get_engine(settings.model_copy(update={"database_url": settings.migrations_dsn()}))
+    return write_entries(engine, entries)
 
 
 def run_load(

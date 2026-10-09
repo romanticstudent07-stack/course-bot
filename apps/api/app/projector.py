@@ -21,7 +21,8 @@ max(last_event_id) не используется: коммиты разных pi
 Пачка — одна транзакция. Неизвестный kind или запрещённый переход → WARNING (id и kind
 события, без payload и pid), событие пропускается, checkpoint сдвигается.
 participant_events только читается; author_pause_reason и last_seen_publish_epoch не трогаются.
-Роли и GRANT проектора (participant_state_projector) — B-3a; сейчас DSN общий, из настроек.
+DSN проектора — Settings.projector_dsn(): PROJECTOR_DATABASE_URL → DATABASE_URL → POSTGRES_*
+(B-3a-2; роль app_projector — миграция 0006). DSN не логируется.
 """
 from __future__ import annotations
 
@@ -230,7 +231,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         level=settings.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    engine = get_engine(settings)
+    # Свой DSN проектора (B-3a-2); сигнатура get_engine прежняя. DSN не логируем.
+    engine = get_engine(settings.model_copy(update={"database_url": settings.projector_dsn()}))
 
     if args[0] == "once":
         try:
