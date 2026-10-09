@@ -1,11 +1,11 @@
 # STATE — живое состояние course-bot
-Обновлено: 09.10.2026 (CB-process-1: бюджет окна ПРОЕКТИРОВЩИКА, процесс v3.8). До 90 строк. Секретов, реальных ID и IP здесь нет.
+Обновлено: 09.10.2026 (B-3a-1: роли app_api / app_projector и GRANT, миграция 0006). До 90 строк. Секретов, реальных ID и IP здесь нет.
 Кто обновляет: ШТАБ даёт строки → они идут первым файлом пакета следующей задачи.
 Подробности закрытых задач — docs/HISTORY.md. Правила ШТАБа — docs/process/SHTAB.md (часть 1) + docs/process/SHTAB-2.md (часть 2), читать ОБА.
 Процессные решения (роли, РЕВЬЮЕР, окна чатов, терминал, rulesets main, форки, LF, expected_tables.txt, миграции по одной) — в SHTAB.md, SHTAB-2.md, DESIGNER.md, README.md.
 ## Сейчас
-- main = 7ed71fb (мерж #67 карточки B-3a-1/2/3) поверх 90f7df2 (#66 CB-docs-4). Сервер IRONCLAD работает только с main.
-- Сервер ✅ 7ed71fb (09.10, только pull docs): 7/7 Up, 4 healthy; api и projector — 06.10, miniapp — 07.10; живые returning ✅ (status без initData → 401, у Автора → returning; номер сразу, first-launch 0); alembic 0005, 13 таблиц.
+- main = 741861f (мерж #68 CB-process-1, процесс v3.8) поверх 7ed71fb (#67 карточки B-3a-1/2/3). Сервер IRONCLAD работает только с main.
+- Сервер ✅ 741861f (09.10, только pull docs): 7/7 Up, 4 healthy; api и projector — 06.10, miniapp — 07.10; живые returning ✅ (status без initData → 401, у Автора → returning; номер сразу, first-launch 0); alembic 0005, 13 таблиц.
 - Пачка 1e-2b ЗАКРЫТА: #46 1e-2b-2, #47 1e-2b-3, #48 1e-2b-1 (живые проверки пройдены, потерь 0).
 - Пачки DOCS ЗАКРЫТЫ: D-2/3/8/12 (DOCS PR #9/#10/#11, sync #51, CB-docs #52); D-11/16/21 (DOCS PR #12, sync #59, CB-docs-2); D-22 контракт status (DOCS PR #13, sync #65, CB-docs-4).
 - Текущая: B-3a-1 (миграция 0006 роли/GRANT + test_db_roles + env.py; КОДЕР, РЕВЬЮЕР да). Карточки B-3 обновлены по 90f7df2 (PR #67): B-3a разрезан на B-3a-1/2/3; права: app_api + UPDATE (created_via) ради FOR UPDATE, + SELECT (id) participant_events (RETURNING); app_projector + reader.
@@ -29,7 +29,7 @@
 - #39 процесс v3.5: правила выдачи пакета, терминал, D-15. #41 процесс v3.6: SHTAB.md разделён на две части с метками конца (чтение рубится на ~10 000 токенов).
 - #40 1e-1b: экраны онбординга Mini App (OnboardingFlow.tsx + тест, App.tsx, client.ts с postTextsBulk). 5 файлов, CI 7/7, РЕВЬЮЕР: блокирующих 0 после проверки ШТАБа. Сервер ✅ 9edd478.
 - #43 1e-2 + живой проход 03.10 — этап 1e-2 ЗАКРЫТ. Процесс v3.7 + карточки 1e-2b. #46, #47, #48 — пачка 1e-2b (см. «Сейчас»).
-- #49 сжатие STATE; #50 карточки DOCS-a/b/c + CB-docs; #51 sync DOCS → docs/architecture; #52 CB-docs; #53 карточки пачки projector (projector.md разрезан по 3-Б); #54 prep-projector (архив по правилу А, FOUND 23 588 байт); #55 projector-1 (0005); #56 projector-2 (проектор); #57 projector-3 (7-й контейнер); #58 miniapp-csp; #59 sync DOCS #12; #60 CB-docs-2; #61 карточки returning; #62 returning-1 (status); #63 returning-2 (старт по status); #67 карточки B-3a-1/2/3 (B-3a разрезан). DOCS PR #9/#10/#11/#12 — правки зеркала D-2/3/8/12 + D-32, D-11/16/21.
+- #49 сжатие STATE; #50 карточки DOCS-a/b/c + CB-docs; #51 sync DOCS → docs/architecture; #52 CB-docs; #53 карточки пачки projector (projector.md разрезан по 3-Б); #54 prep-projector (архив по правилу А, FOUND 23 588 байт); #55 projector-1 (0005); #56 projector-2 (проектор); #57 projector-3 (7-й контейнер); #58 miniapp-csp; #59 sync DOCS #12; #60 CB-docs-2; #61 карточки returning; #62 returning-1 (status); #63 returning-2 (старт по status); #67 карточки B-3a-1/2/3 (B-3a разрезан); #68 CB-process-1 (процесс v3.8, SHTAB-CONTEXT-CHAT.txt); DOCS PR #9/#10/#11/#12 — правки зеркала D-2/3/8/12 + D-32, D-11/16/21.
 ## Решения Автора (процессные — в правилах, см. шапку)
 - Бот — long polling. Cloudflare Tunnel — нет. Прод — российский VPS (фаворит Timeweb Cloud), туннель дом→VPS autossh/WireGuard.
 - Память: сумма лимитов ≤ 2 ГБ; сейчас 1792 МБ (api 384, db 384, bot 512, garage 192, miniapp 128, projector 128, redis 64), реально ~362 МБ (06.10, projector 53).
