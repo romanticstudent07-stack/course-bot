@@ -1,7 +1,16 @@
 """apps/api/app/config.py — настройки из переменных окружения.
 
-Все URL, порты, хосты и секреты — только из .env (compose: env_file ../.env).
+Все URL, порты, хосты и секреты — только из переменных окружения: у api — env_file ../.env
+(compose); у проектора после B-3a-3 env_file нет — только переменные из environment compose.
 В коде нет ни одного реального значения секрета или адреса окружения.
+
+DSN по процессам (B-3, D-13). Пустая переменная = не задана:
+  - API: DATABASE_URL → POSTGRES_* — sqlalchemy_dsn();
+  - проектор: PROJECTOR_DATABASE_URL → DATABASE_URL → POSTGRES_* — projector_dsn();
+  - загрузчик текстов (python -m app.texts load):
+    MIGRATIONS_DATABASE_URL → DATABASE_URL → POSTGRES_* — migrations_dsn();
+  - alembic (migrations/env.py): та же цепочка, что у migrations_dsn(), своя реализация.
+DSN, пароль и имя пользователя БД не пишутся в лог и не печатаются.
 """
 from __future__ import annotations
 
@@ -26,6 +35,10 @@ class Settings(BaseSettings):
 
     # --- PostgreSQL (внутри compose: host=db) ---
     database_url: str | None = None
+    # Проектор (роль app_projector, миграция 0006). Не задан → DATABASE_URL → POSTGRES_*.
+    projector_database_url: str | None = None
+    # Загрузчик текстов и alembic (владелец). Не задан → DATABASE_URL → POSTGRES_*.
+    migrations_database_url: str | None = None
     postgres_host_internal: str = "db"
     postgres_port_internal: int = 5432
     postgres_db: str = ""
@@ -63,7 +76,7 @@ class Settings(BaseSettings):
     server_timezone: str = "Europe/Moscow"
 
     def sqlalchemy_dsn(self) -> str:
-        """DSN для SQLAlchemy/psycopg. Та же логика, что в migrations/env.py."""
+        """DSN API: DATABASE_URL → POSTGRES_*. Та же логика, что в migrations/env.py."""
         if self.database_url:
             return self.database_url
         password = self.postgres_password.get_secret_value()
@@ -71,6 +84,14 @@ class Settings(BaseSettings):
             f"postgresql+psycopg://{self.postgres_user}:{password}"
             f"@{self.postgres_host_internal}:{self.postgres_port_internal}/{self.postgres_db}"
         )
+
+    def projector_dsn(self) -> str:
+        """DSN проектора: PROJECTOR_DATABASE_URL → DATABASE_URL → POSTGRES_*."""
+        return self.projector_database_url or self.sqlalchemy_dsn()
+
+    def migrations_dsn(self) -> str:
+        """DSN загрузчика текстов: MIGRATIONS_DATABASE_URL → DATABASE_URL → POSTGRES_*."""
+        return self.migrations_database_url or self.sqlalchemy_dsn()
 
 
 @lru_cache
