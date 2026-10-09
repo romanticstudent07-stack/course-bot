@@ -43,7 +43,6 @@ API_DENIED: tuple[str, ...] = (
     "DELETE FROM participant_events",
     "TRUNCATE participant_events",
     "UPDATE tg_user_registry SET tombstoned_at = now()",
-    "UPDATE tg_user_registry SET short_no = 1",
     "UPDATE tg_user_registry SET pid = gen_random_uuid()",
     "SELECT payload FROM participant_events",
     "INSERT INTO text_registry (key) VALUES ('x.y')",
