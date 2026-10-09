@@ -2,6 +2,7 @@
 
 Не хардкодит DSN. Берёт значения из ENV, чтобы одна и та же миграция
 работала и в compose-сети (host=db), и с локальной машины (host=127.0.0.1).
+DSN нигде не печатается (в нём пароль).
 """
 from __future__ import annotations
 
@@ -25,9 +26,17 @@ def _build_dsn() -> str:
     """Собирает DSN из переменных окружения.
 
     Приоритет:
-    1. DATABASE_URL (полный DSN, если задан).
-    2. Компоненты POSTGRES_HOST_INTERNAL/POSTGRES_USER/POSTGRES_PASSWORD/... .
+    1. MIGRATIONS_DATABASE_URL (непустая) — DSN владельца схемы для миграций (B-3a-1):
+       приложение ходит под ролями с минимальными GRANT, а миграции — под владельцем.
+    2. DATABASE_URL (полный DSN, если задан).
+    3. Компоненты POSTGRES_HOST_INTERNAL/POSTGRES_USER/POSTGRES_PASSWORD/... .
+    Пустая MIGRATIONS_DATABASE_URL равносильна незаданной.
+    % экранируется как %% (configparser Alembic).
     """
+    dsn = os.environ.get("MIGRATIONS_DATABASE_URL")
+    if dsn:
+        return dsn
+
     dsn = os.environ.get("DATABASE_URL")
     if dsn:
         return dsn
@@ -40,7 +49,7 @@ def _build_dsn() -> str:
     return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{db}"
 
 
-config.set_main_option("sqlalchemy.url", _build_dsn())
+config.set_main_option("sqlalchemy.url", _build_dsn().replace("%", "%%"))
 
 # apps/api в sys.path: alembic запускается и из apps/api (CI), и из /app (контейнер).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
