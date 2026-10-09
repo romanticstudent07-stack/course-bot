@@ -50,7 +50,7 @@ depends_on: str | Sequence[str] | None = None
 ROLES: tuple[str, ...] = ("app_api", "app_projector")
 
 # (право, объект, роль) — GRANT в upgrade, REVOKE в обратном порядке в downgrade.
-# Колоночные права отзываются отдельно: табличный REVOKE их не снимает.
+# Колоночные права отзываются отдельно: табличный REVOKE других прав (SELECT, INSERT) их не снимает.
 PRIVILEGES: tuple[tuple[str, str, str], ...] = (
     ("SELECT, INSERT", "TABLE tg_user_registry", "app_api"),
     ("UPDATE (created_via)", "TABLE tg_user_registry", "app_api"),

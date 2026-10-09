@@ -38,9 +38,13 @@ API_DENIED: tuple[str, ...] = (
     "UPDATE participant_state SET updated_at = now()",
     "UPDATE consent_events SET ua = 'x'",
     "DELETE FROM consent_events",
+    "TRUNCATE consent_events",
     "UPDATE participant_events SET actor = 'x'",
     "DELETE FROM participant_events",
+    "TRUNCATE participant_events",
     "UPDATE tg_user_registry SET tombstoned_at = now()",
+    "UPDATE tg_user_registry SET short_no = 1",
+    "UPDATE tg_user_registry SET pid = gen_random_uuid()",
     "SELECT payload FROM participant_events",
     "INSERT INTO text_registry (key) VALUES ('x.y')",
 )
@@ -49,6 +53,9 @@ PROJECTOR_DENIED: tuple[str, ...] = (
     "INSERT INTO tg_user_registry (tg_user_id) VALUES (1)",
     "SELECT pid FROM consent_events",
     "INSERT INTO participant_events (pid) VALUES (gen_random_uuid())",
+    "UPDATE participant_events SET actor = 'x'",
+    "DELETE FROM participant_events",
+    "DELETE FROM participant_state",
 )
 
 
@@ -206,12 +213,19 @@ def test_app_projector_denied(projector_engine, sql):
     _assert_denied(projector_engine, sql)
 
 
-# 6. env.py: непустая MIGRATIONS_DATABASE_URL важнее DATABASE_URL; пустая — как не задана.
+# 6. env.py: непустая MIGRATIONS_DATABASE_URL важнее DATABASE_URL; пустая — как не задана;
+#    «%» в DSN (URL-кодирование) не ломает configparser Alembic.
 def test_env_prefers_migrations_database_url(migrated_db, monkeypatch):
     from alembic import command
 
     monkeypatch.setenv("MIGRATIONS_DATABASE_URL", migrated_db)
     monkeypatch.setenv("DATABASE_URL", UNREACHABLE_DSN)
+    command.current(_alembic_config())
+
+    separator = "&" if "?" in migrated_db else "?"
+    monkeypatch.setenv(
+        "MIGRATIONS_DATABASE_URL", migrated_db + separator + "application_name=b3a1%20test"
+    )
     command.current(_alembic_config())
 
     monkeypatch.setenv("MIGRATIONS_DATABASE_URL", "")
@@ -228,14 +242,18 @@ def test_downgrade_revokes_privileges(migrated_db):
     checks = text(
         "SELECT has_table_privilege('app_api', 'tg_user_registry', 'INSERT'), "
         "has_column_privilege('app_api', 'tg_user_registry', 'created_via', 'UPDATE'), "
-        "pg_has_role('app_projector', 'participant_state_projector', 'MEMBER')"
+        "pg_has_role('app_projector', 'participant_state_projector', 'MEMBER'), "
+        "has_sequence_privilege('app_api', 'participant_events_id_seq', 'USAGE'), "
+        "has_column_privilege('app_api', 'participant_events', 'id', 'SELECT'), "
+        "pg_has_role('app_api', 'participant_state_reader', 'MEMBER'), "
+        "has_column_privilege('app_projector', 'participant_state_checkpoints', 'at', 'UPDATE')"
     )
     try:
         with engine.connect() as conn:
-            assert tuple(conn.execute(checks).one()) == (True, True, True)
+            assert tuple(conn.execute(checks).one()) == (True,) * 7
         command.downgrade(cfg, "0005_participant_events")
         with engine.connect() as conn:
-            assert tuple(conn.execute(checks).one()) == (False, False, False)
+            assert tuple(conn.execute(checks).one()) == (False,) * 7
     finally:
         command.upgrade(cfg, "head")
         engine.dispose()

@@ -31,6 +31,7 @@ def _build_dsn() -> str:
     2. DATABASE_URL (полный DSN, если задан).
     3. Компоненты POSTGRES_HOST_INTERNAL/POSTGRES_USER/POSTGRES_PASSWORD/... .
     Пустая MIGRATIONS_DATABASE_URL равносильна незаданной.
+    % экранируется как %% (configparser Alembic).
     """
     dsn = os.environ.get("MIGRATIONS_DATABASE_URL")
     if dsn:
@@ -48,7 +49,7 @@ def _build_dsn() -> str:
     return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{db}"
 
 
-config.set_main_option("sqlalchemy.url", _build_dsn())
+config.set_main_option("sqlalchemy.url", _build_dsn().replace("%", "%%"))
 
 # apps/api в sys.path: alembic запускается и из apps/api (CI), и из /app (контейнер).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
