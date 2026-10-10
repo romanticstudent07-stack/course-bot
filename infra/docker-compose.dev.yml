@@ -8,6 +8,17 @@
 #   - shared_buffers Postgres ≤ 256 MB (правило хоста).
 # НЕ для прода: в проде PostgreSQL с PITR и S3 у РФ-провайдера (Yandex Object Storage).
 #
+# Переменные окружения сервисов (B-3):
+#   - У projector и bot НЕТ env_file: в их контейнеры попадают только переменные,
+#     перечисленные в environment (пароля владельца БД, BOT_TOKEN у проектора,
+#     POSTGRES_* и прочих секретов там нет). Новая переменная этим сервисам —
+#     только явной строкой в их environment.
+#   - projector ходит в БД только по PROJECTOR_DATABASE_URL (роль app_projector),
+#     запасного пути к владельцу нет: пусто в .env → проектор без БД.
+#   - api оставляет env_file: ему нужны BOT_TOKEN, REDIS_URL и др.; пароль владельца
+#     у api пока остаётся (alembic и загрузчик текстов) — D-24.
+#   - Подробности ролей БД — infra/SERVER-IRONCLAD.md, раздел «Роли БД (B-3)».
+#
 # S3-совместимое хранилище — Garage (dxflrs/garage:v2.3.0), заменил MinIO
 # (MinIO удалил официальные Docker-образы в сентябре 2026).
 # Переезд на Yandex Object Storage — просто смена S3_ENDPOINT, код не меняется.
@@ -141,15 +152,16 @@ services:
   # Тот же образ, что у api (apps/api), другая команда: python -m app.projector run
   # (цикл 1 с; сбой БД → WARNING, пауза 5 с, повтор — контейнер не падает).
   # HTTP нет → портов нет; HEALTHCHECK Dockerfile api стучится на /healthz — отключён.
+  # env_file нет (B-3): из настроек проектору нужны только DSN и уровень лога.
   projector:
     build:
       context: ../apps/api
       dockerfile: Dockerfile
     container_name: course-bot_projector
     command: ["python", "-m", "app.projector", "run"]
-    env_file:
-      - ../.env
     environment:
+      PROJECTOR_DATABASE_URL: ${PROJECTOR_DATABASE_URL}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TZ: ${TZ}
     depends_on:
       db:
@@ -164,14 +176,17 @@ services:
           memory: ${MEM_LIMIT_PROJECTOR:-128M}
 
   # Telegram bot (aiogram 3, скелет Итерации 0-А: /start + Menu Button; long polling, D-4).
+  # env_file нет (B-3): бот читает только BOT_TOKEN, WEBAPP_URL, LOG_LEVEL (bot/config.py);
+  # БД и Redis бот не использует.
   bot:
     build:
       context: ../apps/bot
       dockerfile: Dockerfile
     container_name: course-bot_bot
-    env_file:
-      - ../.env
     environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      WEBAPP_URL: ${WEBAPP_URL}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TZ: ${TZ}
     depends_on:
       api:
