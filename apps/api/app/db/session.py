@@ -2,6 +2,7 @@
 
 DSN — только из настроек (.env), см. Settings.sqlalchemy_dsn(). Engine создаётся
 лениво и кэшируется по DSN: импорт модуля к БД не подключается.
+hide_parameters=True: параметры SQL не попадают в текст исключений и логи (D-18).
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ def _engine_for(dsn: str) -> Engine:
         pool_size=5,
         max_overflow=5,
         connect_args={"connect_timeout": _CONNECT_TIMEOUT_SECONDS},
+        hide_parameters=True,
     )
 
 
@@ -34,10 +36,16 @@ def get_engine(settings: Settings) -> Engine:
 
 
 def get_db_session(settings: Settings = Depends(get_settings)) -> Iterator[Session]:
-    """FastAPI-зависимость. Соединение берётся из пула только при первом запросе к БД."""
+    """FastAPI-зависимость. Соединение берётся из пула только при первом запросе к БД.
+
+    Любое исключение в обработчике — явный rollback, затем исключение идёт дальше (D-15 г).
+    """
     factory = sessionmaker(bind=get_engine(settings), expire_on_commit=False)
     session = factory()
     try:
         yield session
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()

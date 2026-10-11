@@ -143,7 +143,7 @@ def test_duplicate_consent_id_is_422(unreachable_db_client):
         FIRST_LAUNCH, json=_body(consents=["C0", "C1", "C1"]), headers=_headers()
     )
     assert r.status_code == 422
-    assert "detail" in r.json()  # ошибка валидации тела (Pydantic), до обработчика
+    assert r.json()["code"] == "VALIDATION_ERROR"
 
 
 def test_unknown_consent_id_is_422(unreachable_db_client):
@@ -151,7 +151,7 @@ def test_unknown_consent_id_is_422(unreachable_db_client):
         FIRST_LAUNCH, json=_body(consents=["C0", "C1", "C9"]), headers=_headers()
     )
     assert r.status_code == 422
-    assert "detail" in r.json()
+    assert r.json()["code"] == "VALIDATION_ERROR"
 
 
 def test_old_body_without_consents_is_422(unreachable_db_client):
