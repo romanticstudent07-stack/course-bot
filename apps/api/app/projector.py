@@ -23,6 +23,7 @@ max(last_event_id) не используется: коммиты разных pi
 participant_events только читается; author_pause_reason и last_seen_publish_epoch не трогаются.
 DSN проектора — Settings.projector_dsn(): PROJECTOR_DATABASE_URL → DATABASE_URL → POSTGRES_*
 (B-3a-2; роль app_projector — миграция 0006). DSN не логируется.
+Битый DSN (B-3c): WARNING только с именем класса ошибки, код выхода 1, цикл не стартует.
 """
 from __future__ import annotations
 
@@ -232,7 +233,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     # Свой DSN проектора (B-3a-2); сигнатура get_engine прежняя. DSN не логируем.
-    engine = get_engine(settings.model_copy(update={"database_url": settings.projector_dsn()}))
+    # Битый DSN (B-3c): в тексте ArgumentError — вся строка DSN с паролем, поэтому
+    # в лог только имя класса — без str(exc) и без traceback. Для once и для run.
+    try:
+        engine = get_engine(
+            settings.model_copy(update={"database_url": settings.projector_dsn()})
+        )
+    except (SQLAlchemyError, ValueError) as exc:
+        logger.warning("projector: bad database url (%s)", type(exc).__name__)
+        return 1
 
     if args[0] == "once":
         try:

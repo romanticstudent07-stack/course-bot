@@ -6,25 +6,18 @@
 в живых сценариях на право вне раздела 8 — права не расширять, ошибку отдать ШТАБу.
 Тест downgrade — последним в файле; в finally схема возвращается на head.
 
-conftest.py как модуль не импортируется (pytest подгружает его сам) — нужные константы
-и подпись initData продублированы ниже; FAKE_BOT_TOKEN обязан совпадать с conftest.py.
+Константы и подпись initData — из tests.conftest (B-3c).
 """
 from __future__ import annotations
 
-import json
-import time
 from pathlib import Path
-from urllib.parse import urlencode
 
 import pytest
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from app.telegram_init_data import compute_hash
+from tests.conftest import UNREACHABLE_DSN, valid_init_data
 
-# Те же значения, что в conftest.py.
-FAKE_BOT_TOKEN = "123456:TEST-fake-token-for-pytest-only"
-UNREACHABLE_DSN = "postgresql+psycopg://nobody:nopass@127.0.0.1:1/none"
 API_DIR = Path(__file__).resolve().parents[1]
 
 APP_ROLES = ("app_api", "app_projector")
@@ -67,18 +60,8 @@ def _alembic_config():
 
 
 def _init_data(tg_user_id: int) -> str:
-    """initData, подписанная так же, как в conftest.sign_init_data."""
-    pairs = {
-        "auth_date": str(int(time.time())),
-        "query_id": "AAHdF6IQAAAAAN0XohDhrOrc",
-        "user": json.dumps(
-            {"id": tg_user_id, "first_name": "Test"},
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ),
-    }
-    pairs["hash"] = compute_hash(pairs, FAKE_BOT_TOKEN)
-    return urlencode(pairs)
+    """initData, подписанная conftest.valid_init_data (FAKE_BOT_TOKEN)."""
+    return valid_init_data(user={"id": tg_user_id, "first_name": "Test"})
 
 
 def role_engine(dsn: str, role: str):

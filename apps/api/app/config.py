@@ -11,6 +11,7 @@ DSN по процессам (B-3, D-13). Пустая переменная = н�
     MIGRATIONS_DATABASE_URL → DATABASE_URL → POSTGRES_* — migrations_dsn();
   - alembic (migrations/env.py): та же цепочка, что у migrations_dsn(), своя реализация.
 DSN, пароль и имя пользователя БД не пишутся в лог и не печатаются.
+Три DSN-поля скрыты из repr() и str() настроек (repr=False, B-3c); тип — str | None, не SecretStr.
 """
 from __future__ import annotations
 
@@ -34,11 +35,11 @@ class Settings(BaseSettings):
     webapp_url: str = ""
 
     # --- PostgreSQL (внутри compose: host=db) ---
-    database_url: str | None = None
+    database_url: str | None = Field(default=None, repr=False)
     # Проектор (роль app_projector, миграция 0006). Не задан → DATABASE_URL → POSTGRES_*.
-    projector_database_url: str | None = None
+    projector_database_url: str | None = Field(default=None, repr=False)
     # Загрузчик текстов и alembic (владелец). Не задан → DATABASE_URL → POSTGRES_*.
-    migrations_database_url: str | None = None
+    migrations_database_url: str | None = Field(default=None, repr=False)
     postgres_host_internal: str = "db"
     postgres_port_internal: int = 5432
     postgres_db: str = ""
