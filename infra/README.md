@@ -393,9 +393,9 @@ cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.ym
 cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml up -d --build miniapp
 ```
 
-Если менялись миграции БД:
+Если менялись миграции БД (сначала бэкап и порядок — infra/SERVER-IRONCLAD.md, «Миграции и тексты (B-3d)»):
 ```bash
-cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml exec api alembic upgrade head
+cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml build migrate && docker compose --env-file .env -f infra/docker-compose.dev.yml run --rm migrate
 ```
 
 ---
