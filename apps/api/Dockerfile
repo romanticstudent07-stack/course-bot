@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     # `alembic upgrade head` работает из любого каталога контейнера
-    # (infra/README.md: `docker compose ... exec api alembic upgrade head`).
+    # (сервис migrate: docker compose run --rm migrate, полная команда — infra/SERVER-IRONCLAD.md).
     ALEMBIC_CONFIG=/app/migrations/alembic.ini
 
 WORKDIR /app

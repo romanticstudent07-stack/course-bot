@@ -55,8 +55,9 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
 ## Ресурсы (жёсткие лимиты)
 
 - RAM свободно ≈ 4.6 GiB. Сумма лимитов всех контейнеров course-bot **≤ 2 GB**
-  (решение Автора, 25.09.2026; было ≤ 1.5 GB). Сейчас сумма лимитов — 1792 МБ
-  (api 384 + db 384 + bot 512 + garage 192 + miniapp 128 + projector 128 + redis 64).
+  (решение Автора, 25.09.2026; было ≤ 1.5 GB). Сейчас сумма лимитов — 1920 МБ
+  (api 384 + db 384 + bot 512 + garage 192 + miniapp 128 + projector 128 + migrate 128 + redis 64).
+  migrate — одноразовый: память занимает только во время ручного запуска.
   Реальное потребление стека ~362 МБ (замер 06.10.2026; проектор 53 МБ).
   Бот ~155 МБ — базовый объём, утечки нет (наблюдение 24–25.09.2026).
 - Перед добавлением контейнера или повышением лимита — проверить, что сумма остаётся ≤ 2 GB.
@@ -91,29 +92,51 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
 |---|---|---|
 | `DATABASE_URL` | api (FastAPI) | `coursebot_api` (роль `app_api`) |
 | `PROJECTOR_DATABASE_URL` | projector | `coursebot_projector` (роль `app_projector`) |
-| `MIGRATIONS_DATABASE_URL` | `alembic` и `python -m app.texts load` | владелец (`POSTGRES_USER`) |
+| `MIGRATIONS_DATABASE_URL` | сервис `migrate`: `alembic` и `python -m app.texts load` | владелец (`POSTGRES_USER`) |
 | — | bot | БД не использует |
 
 - У projector `PROJECTOR_DATABASE_URL` — единственный путь к БД: запасного пути к владельцу нет,
   пусто в `.env` → проектор остаётся без БД.
-- alembic и загрузчик текстов запускаются в контейнере api (у него env_file) и берут
-  `MIGRATIONS_DATABASE_URL`. У api в окружении пока есть пароль владельца — известный долг D-24
-  (решение — при закрытии B-3).
-
-**Порядок выката миграции:**
-1. Ручной бэкап `pg_dump -Fc` (см. раздел «Автобэкап»).
-2. alembic — ДО пересоздания api: `DC run --rm api alembic upgrade head`.
-3. Затем пересоздать сервисы: `DC up -d --force-recreate <сервисы>`.
+- У api `DATABASE_URL` — единственный путь к БД (B-3d): `POSTGRES_*` и пароля владельца
+  в контейнере api нет; пусто в `.env` → api без БД (503).
+- alembic и загрузчик текстов запускаются только в одноразовом сервисе `migrate`
+  (D-24 = А, B-3d): только у него есть `MIGRATIONS_DATABASE_URL`. Порядок — раздел
+  «Миграции и тексты (B-3d)».
 
 **Правило GRANT.** Каждая миграция, которая добавляет таблицу, выдаёт права ролям
 `app_api` / `app_projector` в той же миграции. Без этого API и проектор не увидят новую таблицу.
 
-**env_file.** У projector и bot его нет: в их контейнерах только переменные из `environment`
-в `docker-compose.dev.yml`. Новая переменная им добавляется туда явной строкой
-(в `.env` одной её мало).
+**env_file.** У api, projector и bot его нет (B-3d): в их контейнерах только переменные
+из `environment` в `docker-compose.dev.yml`. Новая переменная добавляется туда явной строкой
+(в `.env` одной её мало). У числовых настроек api — дефолт как в `app/config.py`
+(`${VAR:-дефолт}`): пустая строка иначе перекроет дефолт кода.
 
 **Не выводить в чат целиком** (там пароли): `docker compose config` и `env` контейнера.
-Список имён без значений можно: `DC exec projector env | cut -d= -f1 | sort`.
+Список имён без значений можно: `DC exec projector env | cut -d= -f1 | sort`
+(так же для api: `DC exec api env | cut -d= -f1 | sort`).
+
+## Миграции и тексты (B-3d)
+
+`DC` — как в разделе «Роли БД (B-3)». Сервис `migrate` — тот же образ, что у api, но с одним
+паролем владельца (`MIGRATIONS_DATABASE_URL`) и без env_file, restart и портов.
+Команда по умолчанию — `alembic upgrade head`. Лимит памяти — `MEM_LIMIT_MIGRATE` (128M).
+
+**Порядок выката миграции:**
+1. Ручной бэкап `pg_dump -Fc` (см. раздел «Автобэкап»).
+2. Пересобрать образ: `DC build migrate` — без пересборки образ не видит новые миграции и тексты.
+3. Миграции — ДО пересоздания api: `DC run --rm migrate` (выполнит `alembic upgrade head`).
+4. Если менялись тексты: `DC run --rm migrate python -m app.texts load`.
+5. Затем пересоздать сервисы: `DC up -d --force-recreate <сервисы>`
+   (если менялся код — `DC up -d --build <сервисы>`).
+
+**Что важно знать:**
+- `DC run --rm api alembic upgrade head` и `DC exec api alembic upgrade head` после B-3d падают
+  с ошибкой доступа (у api роль `coursebot_api`, не владелец) — это ожидаемо, не чинить;
+  миграции — только через `migrate`.
+- `migrate` не стартует при `DC up -d` и после перезагрузки сервера (`profiles: ["tools"]`);
+  в `DC ps` его нет — это норма. Контейнер удаляется сам после работы (`--rm`).
+- Пустой `MIGRATIONS_DATABASE_URL` в `.env` → `migrate` падает с ошибкой (KeyError), пароля
+  в тексте ошибки нет.
 
 ## Автобэкап
 
@@ -173,6 +196,7 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
   `cd ~/course-bot && git pull && docker compose --env-file .env -f infra/docker-compose.dev.yml up -d`.
   `--build` — только если менялся код (и точечно: `up -d --build <сервис>`),
   на HDD пересборка `miniapp` идёт долго. Если менялись только документы — хватит `git pull`.
+  Если менялись миграции или тексты — сначала раздел «Миграции и тексты (B-3d)».
 
 ## Стоп-факторы (не трогать без согласия Автора)
 

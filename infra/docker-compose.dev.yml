@@ -8,16 +8,20 @@
 #   - shared_buffers Postgres ≤ 256 MB (правило хоста).
 # НЕ для прода: в проде PostgreSQL с PITR и S3 у РФ-провайдера (Yandex Object Storage).
 #
-# Переменные окружения сервисов (B-3):
-#   - У projector и bot НЕТ env_file: в их контейнеры попадают только переменные,
-#     перечисленные в environment (пароля владельца БД, BOT_TOKEN у проектора,
-#     POSTGRES_* и прочих секретов там нет). Новая переменная этим сервисам —
-#     только явной строкой в их environment.
+# Переменные окружения сервисов (B-3; D-24 = А, B-3d):
+#   - У api, projector и bot НЕТ env_file: в их контейнеры попадают только переменные,
+#     перечисленные в environment. Новая переменная этим сервисам — только явной
+#     строкой в их environment (в .env одной её мало).
+#   - api ходит в БД только по DATABASE_URL (роль app_api). POSTGRES_*, пароля владельца,
+#     MIGRATIONS_DATABASE_URL, PROJECTOR_DATABASE_URL, WEBHOOK_SECRET, ключей S3 и GARAGE_*
+#     у api нет. У числовых настроек — дефолты как в app/config.py (${VAR:-дефолт}):
+#     пустая строка из ${VAR} перекрыла бы дефолт кода, а в int-поле сломала бы старт.
 #   - projector ходит в БД только по PROJECTOR_DATABASE_URL (роль app_projector),
 #     запасного пути к владельцу нет: пусто в .env → проектор без БД.
-#   - api оставляет env_file: ему нужны BOT_TOKEN, REDIS_URL и др.; пароль владельца
-#     у api пока остаётся (alembic и загрузчик текстов) — D-24.
-#   - Подробности ролей БД — infra/SERVER-IRONCLAD.md, раздел «Роли БД (B-3)».
+#   - Пароль владельца БД (MIGRATIONS_DATABASE_URL) есть только у одноразового сервиса
+#     migrate (profiles: tools): alembic и python -m app.texts load, запуск только вручную.
+#   - Подробности — infra/SERVER-IRONCLAD.md, разделы «Роли БД (B-3)»
+#     и «Миграции и тексты (B-3d)».
 #
 # S3-совместимое хранилище — Garage (dxflrs/garage:v2.3.0), заменил MinIO
 # (MinIO удалил официальные Docker-образы в сентябре 2026).
@@ -123,16 +127,31 @@ services:
 
   # FastAPI backend (скелет Итерации 0-А: /healthz, mock first-launch, csp-report).
   # Развязан от S3: api стартует без garage — S3 нужен только с Итерации 5.
+  # env_file нет (B-3d, D-24 = А): только переменные ниже. Пароля владельца БД нет;
+  # без DATABASE_URL api к БД не подключится (безопасный отказ, 503).
+  # Поля config.py, которых нет в .env.example (RATE_LIMIT_REDIS_TIMEOUT_SECONDS,
+  # INIT_DATA_SENSITIVE_MAX_AGE_SECONDS, INIT_DATA_FUTURE_SKEW_SECONDS,
+  # POSTGRES_PORT_INTERNAL), не передаются — действует дефолт кода.
   api:
     build:
       context: ../apps/api
       dockerfile: Dockerfile
     container_name: course-bot_api
-    env_file:
-      - ../.env
     environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      WEBAPP_URL: ${WEBAPP_URL}
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_REGION: ${S3_REGION}
+      S3_BUCKET_PHOTOS: ${S3_BUCKET_PHOTOS}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       APP_HOST: ${APP_HOST:-0.0.0.0}
       APP_PORT: ${APP_PORT:-8080}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-60}
+      INIT_DATA_MAX_AGE_SECONDS: ${INIT_DATA_MAX_AGE_SECONDS:-86400}
+      SERVER_TIMEZONE: ${SERVER_TIMEZONE:-Europe/Moscow}
+      POSTGRES_HOST_INTERNAL: ${POSTGRES_HOST_INTERNAL:-db}
       TZ: ${TZ}
     depends_on:
       db:
@@ -147,6 +166,34 @@ services:
       resources:
         limits:
           memory: ${MEM_LIMIT_API:-384M}
+
+  # Одноразовый сервис миграций (B-3d, D-24 = А). Тот же образ, что у api (apps/api).
+  # Единственный контейнер с паролем владельца БД (MIGRATIONS_DATABASE_URL).
+  # profiles: tools → не стартует при up -d и после перезагрузки сервера; только вручную
+  # (DC = docker compose --env-file .env -f infra/docker-compose.dev.yml):
+  #   DC build migrate && DC run --rm migrate          — alembic upgrade head
+  #   DC run --rm migrate python -m app.texts load     — загрузка текстов
+  # env_file, restart, портов и container_name нет. HTTP нет → healthcheck образа отключён.
+  # ALEMBIC_CONFIG берётся из ENV образа (apps/api/Dockerfile).
+  migrate:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    profiles: ["tools"]
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      MIGRATIONS_DATABASE_URL: ${MIGRATIONS_DATABASE_URL}
+      TZ: ${TZ}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    networks: [course-bot_net]
+    deploy:
+      resources:
+        limits:
+          memory: ${MEM_LIMIT_MIGRATE:-128M}
 
   # Проектор (E1): единственный писатель participant_state.
   # Тот же образ, что у api (apps/api), другая команда: python -m app.projector run
