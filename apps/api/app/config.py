@@ -1,15 +1,18 @@
 """apps/api/app/config.py — настройки из переменных окружения.
 
-Все URL, порты, хосты и секреты — только из переменных окружения: у api — env_file ../.env
-(compose); у проектора после B-3a-3 env_file нет — только переменные из environment compose.
+Все URL, порты, хосты и секреты — только из переменных окружения. env_file в compose нет:
+у api (B-3d-1) и у проектора (B-3a-3) — только переменные из environment compose.
+Загрузчик текстов (python -m app.texts load) и alembic запускаются через одноразовый
+сервис migrate (profiles tools, B-3d-1): DC run --rm migrate <команда>.
 В коде нет ни одного реального значения секрета или адреса окружения.
 
 DSN по процессам (B-3, D-13). Пустая переменная = не задана:
   - API: DATABASE_URL → POSTGRES_* — sqlalchemy_dsn();
   - проектор: PROJECTOR_DATABASE_URL → DATABASE_URL → POSTGRES_* — projector_dsn();
-  - загрузчик текстов (python -m app.texts load):
+  - загрузчик текстов (python -m app.texts load, сервис migrate):
     MIGRATIONS_DATABASE_URL → DATABASE_URL → POSTGRES_* — migrations_dsn();
-  - alembic (migrations/env.py): та же цепочка, что у migrations_dsn(), своя реализация.
+  - alembic (migrations/env.py, сервис migrate): та же цепочка, что у migrations_dsn(),
+    своя реализация.
 DSN, пароль и имя пользователя БД не пишутся в лог и не печатаются.
 Три DSN-поля скрыты из repr() и str() настроек (repr=False, B-3c); тип — str | None, не SecretStr.
 """
