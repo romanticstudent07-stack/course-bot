@@ -11,10 +11,14 @@
 - Compose — только так:
       cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml <команда>
 - Применить .env — up -d (не restart). Пересобрать один сервис — up -d --build --no-deps <сервис>.
-- Норма: 6/6 Up, 4 healthy (у bot и redis healthcheck нет). WARN «Bake / buildx» — не ошибка.
+- Норма: 7/7 Up, 4 healthy (healthcheck нет у bot, redis и projector); одноразового migrate
+  в ps нет — это норма. WARN «Bake / buildx» — не ошибка.
 - Чужие контейнеры maxmover и tg_vk — не трогать. cloudflared на сервере — чужой.
+  Funnel 8443 в tailscale serve status — maxmover.
 - Запрещено: docker system prune, удаление volumes, правка чужого, вывод .env и секретов.
 - Перед миграцией БД — бэкап pg_dump -Fc в ~/backups-coursebot/ (автобэкап — 03:30 MSK).
+- Миграции и загрузка текстов — только одноразовый сервис migrate: build migrate → run --rm migrate
+  (infra/SERVER-IRONCLAD.md, «Миграции и тексты (B-3d)»). У api пароля владельца БД нет (B-3d).
 - Сравнивать с прошлым hash main (git diff --stat <старый hash> HEAD), а не с HEAD~1.
 
 ## Задание от ШТАБа (Автор вставляет в серверный чат целиком)
