@@ -135,14 +135,26 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
   миграции — только через `migrate`.
 - `migrate` не стартует при `DC up -d` и после перезагрузки сервера (`profiles: ["tools"]`);
   в `DC ps` его нет — это норма. Контейнер удаляется сам после работы (`--rm`).
-- Пустой `MIGRATIONS_DATABASE_URL` в `.env` → `migrate` падает с ошибкой (KeyError), пароля
+- Пустой `MIGRATIONS_DATABASE_URL` в `.env` → `alembic` в `migrate` падает с KeyError, а `python -m app.texts load` — с «ОШИБКА БД: OperationalError» и кодом 1; пароля
   в тексте ошибки нет.
+
+**Откат B-3d-1** (api после выката не работает): на сайте GitHub revert-PR только #76 → мерж →
+`git pull` → `DC up -d --build --no-deps --force-recreate api`. `.env` не меняется: после revert
+у api снова env_file. B-3d-2 (#77) можно оставить.
+
+**Проектор вручную (`once`).** `DC exec api python -m app.projector once` после B-3d не работает:
+у api нет `PROJECTOR_DATABASE_URL`. Запускать `once` не нужно: `projector` в режиме `run`
+обрабатывает события раз в 1 с и всё время держит advisory lock, поэтому `once` рядом с ним
+будет ждать lock (зависнет). Проверка — `DC logs projector` («lock acquired», «обработано N»);
+перезапуск — `DC restart projector`.
+
+**Funnel 8443** в `tailscale serve status` — это maxmover (порт 8443 в таблице занятых), не трогать.
 
 ## Автобэкап
 
 - Скрипт `~/bin/coursebot-db-backup.sh`, cron в 03:30 MSK, хранятся 14 дней.
 - Перед каждой миграцией — ручной `pg_dump -Fc`. Сделаны: before-0004 (02.10.2026),
-  before-0005 (05.10.2026), before-0006 (09.10.2026).
+  before-0005 (05.10.2026), before-0006 (09.10.2026), before-b3d (14.10.2026).
 - Downgrade ниже 0004 запрещён: стирает журнал согласий.
 - Копия бэкапов вне сервера — к проду.
 
