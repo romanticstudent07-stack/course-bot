@@ -9,6 +9,8 @@ Seed: apps/api/config/texts/<домен>.json — один файл на дом�
 
 Загрузчик (из /app в контейнере):
     python -m app.texts load
+  На сервере — через одноразовый сервис migrate (B-3d-1; у api нет пароля владельца):
+    DC run --rm migrate python -m app.texts load
   0. DSN — Settings.migrations_dsn(): MIGRATIONS_DATABASE_URL → DATABASE_URL → POSTGRES_*
      (B-3a-2). DSN не печатается. Эндпоинты /texts — через get_db_session (DATABASE_URL).
   1. Читает все config/texts/*.json, проверяет каждый схемой (Draft 2020-12),
@@ -16,6 +18,8 @@ Seed: apps/api/config/texts/<домен>.json — один файл на дом�
   2. Ошибка → exit 1, в БД ничего не пишется.
   3. Успех → одна транзакция INSERT … ON CONFLICT (key) DO UPDATE,
      registry_version = version файла. Лишние ключи в БД не удаляются — только список.
+  4. Ошибка БД (SQLAlchemyError) или кривой DSN (ValueError, например нечисловой порт)
+     → exit 1, печатается только имя класса, без traceback и без DSN (B-3d-2).
   Вывод: «загружено N, обновлено M, лишних в БД K».
 
 Чтение: get_texts_for_participant — аудитория «участник» (И4: без общего render();
@@ -240,8 +244,10 @@ def run_load(
         return 1
     try:
         result = writer(entries)
-    except SQLAlchemyError as exc:
+    except (SQLAlchemyError, ValueError) as exc:
         # Текст исключения не печатаем: в нём может быть адрес БД.
+        # ValueError — кривой DSN при создании engine (нечисловой порт, B-3d-2).
+        # Ошибки seed-файлов сюда не попадают: они пойманы выше как SeedError.
         print(
             f"ОШИБКА БД: {type(exc).__name__}. Транзакция откатилась, в БД ничего не записано.",
             file=sys.stderr,
