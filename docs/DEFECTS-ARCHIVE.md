@@ -269,6 +269,7 @@
 - **Предлагаемое решение:** (а) — в карточку первой задачи с revoke; (б) — в 1e-1b
   и в критерии B-3; (в) — в план 0-Б; (г) и (е) — в карточку B-3; (д) — в задания серверу.
 - **Ждём решения Автора:** нет (решения 1А/2А приняты 02.10).
+- **Закрыто (B-3b, #73; сервер ✅ 590936b):** (г) — тесты отката после get_or_create, гонки участника до 0004 (ровно 2 give), явный rollback в get_db_session; (е) — тест CHECK `consent_events` через `pg_constraint`. Открытыми остаются (а) — к первой задаче с revoke и (в) — к 0-Б.
 
 ## D-18. Ошибки 422 и 500 приходят не в формате `Error`
 
@@ -282,6 +283,7 @@
   без значений полей; общий перехват → 500 с кодом `INTERNAL_ERROR`, в лог только имя класса;
   `hide_parameters=True` у движка. Тесты с `"detail"` в 422 — поменять.
 - **Решение Автора (03.10):** «D-18 в B-3» → карточка `docs/tasks/B-3b.md`.
+- **Закрыто (B-3b, #73; сервер ✅ 590936b):** 422 `VALIDATION_ERROR` (в details только loc и type), 500 `INTERNAL_ERROR` через http-middleware (в лог только имя класса), `hide_parameters=True`, тесты 422 обновлены.
 - **Контракт:** формат 422 зафиксирован в контракте DOCS PR #11 — B-3b делает ровно его.
 - **Ждём решения Автора:** нет.
 
@@ -340,3 +342,37 @@
 - **Решение Автора (04.10):** «А: в DOCS переименовать MINIAPP_URL → WEBAPP_URL; код не меняется; правка DOCS — вместе с D-16 после projector». Карточку DOCS (D-16 + D-21) даёт ШТАБ.
 - **Ждём решения Автора:** нет.
 - **Закрыто (06.10):** решение А исполнено — в DOCS MINIAPP_URL → WEBAPP_URL (DOCS PR #12, sync PR #59); код не менялся.
+
+## D-13. Роли и GRANT для `tg_user_registry` не определены; приложение ходит под владельцем БД
+
+- **Файлы архитектуры (зеркало):** `build/db-schema.sql` (6 ролей, GRANT только на таблицы 0001),
+  `build/db-tables-index.md` (роли только для `participant_state`), `normative/I2-wave-b.md`
+  (`read_only_enforcement`), `normative/OVERRIDES.yaml` N-02.
+- **Файлы реализации:** `apps/api/migrations/versions/…0002_tg_user_registry…`,
+  `apps/api/app/db/session.py` (DSN из `.env` — сейчас пользователь-владелец БД).
+- **Суть расхождения:** для `tg_user_registry` ролей/GRANT в архитектуре нет. API подключается
+  под `POSTGRES_USER` (владелец БД) — это обходит INV-1/E1 на уровне прав (приложение
+  технически может писать и в `participant_state`).
+- **Сделано здесь:** ничего (решение Автора — отложить). В коде API запись в
+  `participant_state` отсутствует. Добавилась `consent_events` (0004): для неё в B-3 —
+  только SELECT, INSERT (append-only).
+- **⛔ БЛОКЕР к проду / до VPS (B-3):** отдельная роль приложения с минимальными GRANT
+  (`tg_user_registry`: SELECT, INSERT; `participant_state`: только через reader/projector).
+- **Ждём решения Автора:** да — набор ролей и кто их создаёт (миграция vs ручная операция).
+- **Решения приняты:** Автор «4А» — миграция создаёт роли NOLOGIN и GRANT, LOGIN-пользователей с паролями из `.env` создаёт серверный чат вручную; ШТАБ Ш1 (08.10) — UPDATE (created_via) ради FOR UPDATE (`docs/tasks/B-3a-1.md`, раздел 3); D-24 = А (10.10).
+- **Закрыто (14.10, этап B-3; блокер B-3 снят):**
+  - B-3a-1 (#69): миграция 0006_app_roles — роли NOLOGIN app_api и app_projector, минимальные GRANT по SQL, который реально выполняют API и проектор; `consent_events` — SELECT, INSERT (append-only);
+  - B-3a-2 (#70), B-3a-3 (#71): свои DSN — DATABASE_URL (api, coursebot_api), PROJECTOR_DATABASE_URL (проектор, coursebot_projector), MIGRATIONS_DATABASE_URL (alembic и загрузчик текстов — владелец); projector и bot без env_file;
+  - B-3b (#73), B-3c (#74): ошибки без значений SQL и DSN (D-18, D-15 г/е), DSN скрыты из repr;
+  - B-3d-1 (#76), B-3d-2 (#77): пароль владельца — только у одноразового сервиса migrate, у api нет env_file (D-24);
+  - сервер ✅ 113acb8 (14.10): api — coursebot_api, projector — coursebot_projector, перезагрузка пройдена.
+- **Правило дальше:** каждая миграция с новой таблицей выдаёт GRANT ролям app_api / app_projector в той же миграции; ALTER DEFAULT PRIVILEGES не используется.
+- **Ждём решения Автора:** нет.
+
+## D-24. Пароль владельца БД в контейнере api (env_file)
+
+- **Файлы реализации:** `infra/docker-compose.dev.yml` (у api было env_file ../.env), `apps/api/app/texts.py`, `apps/api/migrations/env.py`.
+- **Суть:** после B-3a у api оставался env_file: в контейнер api попадали POSTGRES_PASSWORD и MIGRATIONS_DATABASE_URL (пароль владельца), хотя API ходит в БД под coursebot_api; alembic и загрузчик текстов запускались в контейнере api.
+- **Решение Автора (10.10):** «D-24 = А: alembic и texts load — отдельный одноразовый сервис compose; у api нет пароля владельца».
+- **Закрыто (14.10):** B-3d-1 (#76) — сервис migrate (profiles tools, только MIGRATIONS_DATABASE_URL и TZ, 128M), у api явный environment без env_file; B-3d-2 (#77) — texts load при кривом DSN выходит с кодом 1 без traceback; #78 — SERVER-IRONCLAD (откат B-3d-1, ручной `projector once` не нужен). Сервер ✅ 113acb8: в env api нет POSTGRES_PASSWORD, MIGRATIONS_DATABASE_URL, PROJECTOR_DATABASE_URL; пользователь БД — coursebot_api.
+- **Ждём решения Автора:** нет.

@@ -26,7 +26,7 @@
 |---|---|---|---|
 | B-1 | Rate-limit на `/miniapp/v1/**` (Б14 R328) | D-7 | **закрыт** (PR #36, живой 429 02.10) — подробности: `docs/DEFECTS-ARCHIVE.md` |
 | B-2 | Согласия (`legal_consents`, C0 (18+) и C1 (ПДн); C2–C6 — позже) **до** создания `pid` (ADD3 ordering) | D-10 | **закрыт** (PR #38, #40, живой проход 02.10) — подробности: `docs/DEFECTS-ARCHIVE.md` |
-| B-3 | Роли и GRANT в БД: приложение ходит под владельцем БД; ролей/GRANT на `tg_user_registry` нет | D-13 | не реализовано |
+| B-3 | Роли и GRANT в БД: приложение ходит под владельцем БД; ролей/GRANT на `tg_user_registry` нет | D-13 | **закрыт** (PR #69–#71, #73, #74, #76, #77; сервер ✅ 14.10) — подробности: `docs/DEFECTS-ARCHIVE.md` |
 
 Закрытые записи и закрытые части записей — `docs/DEFECTS-ARCHIVE.md`.
 
@@ -162,22 +162,7 @@
 
 - **D-11** (`lifecycle_phase` ≠ FSM И2) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 06.10).
 
-## D-13. Роли и GRANT для `tg_user_registry` не определены; приложение ходит под владельцем БД
-
-- **Файлы архитектуры (зеркало):** `build/db-schema.sql` (6 ролей, GRANT только на таблицы 0001),
-  `build/db-tables-index.md` (роли только для `participant_state`), `normative/I2-wave-b.md`
-  (`read_only_enforcement`), `normative/OVERRIDES.yaml` N-02.
-- **Файлы реализации:** `apps/api/migrations/versions/…0002_tg_user_registry…`,
-  `apps/api/app/db/session.py` (DSN из `.env` — сейчас пользователь-владелец БД).
-- **Суть расхождения:** для `tg_user_registry` ролей/GRANT в архитектуре нет. API подключается
-  под `POSTGRES_USER` (владелец БД) — это обходит INV-1/E1 на уровне прав (приложение
-  технически может писать и в `participant_state`).
-- **Сделано здесь:** ничего (решение Автора — отложить). В коде API запись в
-  `participant_state` отсутствует. Добавилась `consent_events` (0004): для неё в B-3 —
-  только SELECT, INSERT (append-only).
-- **⛔ БЛОКЕР к проду / до VPS (B-3):** отдельная роль приложения с минимальными GRANT
-  (`tg_user_registry`: SELECT, INSERT; `participant_state`: только через reader/projector).
-- **Ждём решения Автора:** да — набор ролей и кто их создаёт (миграция vs ручная операция).
+- **D-13** (роли и GRANT БД, блокер B-3) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 14.10).
 
 ## D-14. text_registry: шаблон ключа, формат seed и тоны — источники расходятся
 
@@ -251,4 +236,6 @@
   ErrorBoundary — нейтральный текст без message. Задача без БД, вместе с мелочами Mini App.
 - **Ждём решения Автора:** нет.
 
-<!-- следующие записи: новые — с D-24 -->
+- **D-24** (пароль владельца БД в контейнере api, env_file) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 14.10).
+
+<!-- следующие записи: новые — с D-25 -->
