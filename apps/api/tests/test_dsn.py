@@ -5,10 +5,12 @@
 from tests.conftest import … (B-3c).
 B-3c: DSN скрыты в repr/str настроек; части DSN (user, пароль, host) — через make_url;
 битый DSN проектора — WARNING только с именем класса, код 1, пароля нет в выводе.
+api-melochi: битый DSN — точный класс на каждый DSN; нет драйвера → ModuleNotFoundError.
 """
 from __future__ import annotations
 
 import logging
+import sys
 
 import pytest
 from sqlalchemy.engine import make_url
@@ -184,15 +186,30 @@ def test_projector_main_uses_projector_dsn(clean_env, capsys, caplog):
     assert "projector once: обработано 0, пропущено 0" in printed
 
 
-# B-3c 4. Битый DSN проектора: код 1, цикл не стартует, пароля нет в выводе и логе.
+# B-3c 4 + api-melochi. Битый DSN или нет драйвера: точный класс в логе, код 1,
+# цикл не стартует; пароля и traceback нет в выводе и логе.
 @pytest.mark.parametrize("mode", ["once", "run"])
 @pytest.mark.parametrize(
-    "bad", ["postgresql+psycopg://u:pw-bad-1@db:abc/d", "not-a-dsn-pw-bad-2"]
+    "bad, cls, secret",
+    [
+        ("postgresql+psycopg://u:pw-bad-1@db:abc/d", "ValueError", "pw-bad-1"),
+        ("not-a-dsn-pw-bad-2", "ArgumentError", "pw-bad-2"),
+        (
+            "postgresql+asyncpg://u:pw-bad-3@db:5432/d",
+            "ModuleNotFoundError",
+            "pw-bad-3",
+        ),
+    ],
+    ids=["port-abc", "not-a-url", "no-driver"],
 )
-def test_projector_main_bad_dsn(clean_env, capsys, caplog, bad, mode):
+def test_projector_main_bad_dsn(clean_env, capsys, caplog, bad, cls, secret, mode):
     clean_env.setenv("DATABASE_URL", DSN_API)
     clean_env.setenv("PROJECTOR_DATABASE_URL", bad)
     caplog.set_level(logging.DEBUG)
+    if "+asyncpg" in bad:
+        # Нет драйвера: import asyncpg внутри create_engine → ModuleNotFoundError.
+        # clean_env — monkeypatch: после теста он сам вернёт sys.modules.
+        clean_env.setitem(sys.modules, "asyncpg", None)
 
     def must_not_start(*args, **kwargs):
         pytest.fail("projector loop must not start with a bad DSN")
@@ -203,10 +220,11 @@ def test_projector_main_bad_dsn(clean_env, capsys, caplog, bad, mode):
 
     assert projector.main([mode]) == 1
     out = capsys.readouterr()
-    for secret in ("pw-bad-1", "pw-bad-2"):
-        for captured in (out.out, out.err, caplog.text):
-            assert secret not in captured
-    assert "ArgumentError" in caplog.text or "ValueError" in caplog.text
+    for captured in (out.out, out.err, caplog.text):
+        assert secret not in captured
+    for captured in (out.err, caplog.text):
+        assert "Traceback" not in captured
+    assert f"projector: bad database url ({cls})" in caplog.text
 
 
 # 6. Загрузчик texts берёт MIGRATIONS_DATABASE_URL; пароль не в выводе.
