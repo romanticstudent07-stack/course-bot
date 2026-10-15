@@ -369,6 +369,19 @@
 - **Правило дальше:** каждая миграция с новой таблицей выдаёт GRANT ролям app_api / app_projector в той же миграции; ALTER DEFAULT PRIVILEGES не используется.
 - **Ждём решения Автора:** нет.
 
+## D-23. Черновик на устройстве: зависание IndexedDB, гонка записи, текст ErrorBoundary
+
+- **Файлы реализации:** `apps/miniapp/src/components/App.tsx`, `LaterSteps.tsx`, `drafts.ts`, `Root.tsx`.
+- **Суть (ревью #63, неблокирующее; обхода согласий нет):**
+  1) openDraft без таймаута: IndexedDB.open завис → «Продолжить» неактивна навсегда;
+  2) saveDraft без очереди: put прошлого шага может завершиться после clear (finishDraft) →
+     email и город снова на устройстве (до 24 ч), номер ведёт в анкету;
+  3) Root.tsx (шаблон): ErrorBoundary показывает пользователю error.message.
+- **Предлагаемое решение:** таймаут openDraft (→ курс); одна очередь записей черновика;
+  ErrorBoundary — нейтральный текст без message. Задача без БД, вместе с мелочами Mini App.
+- **Ждём решения Автора:** нет.
+- **Закрыто (15.10):** PR #82 miniapp-fix-1 — таймаут openDraft 3 с, одна очередь записей черновика с seal, ErrorBoundary — нейтральный текст без message (+ текст HomePage); сервер ✅ 50d44b0 (пересобран только miniapp); живые 3–7 ✅ на двух аккаунтах Telegram.
+
 ## D-24. Пароль владельца БД в контейнере api (env_file)
 
 - **Файлы реализации:** `infra/docker-compose.dev.yml` (у api было env_file ../.env), `apps/api/app/texts.py`, `apps/api/migrations/env.py`.
