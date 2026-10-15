@@ -12,7 +12,9 @@ IRONCLAD уже работает служба `cloudflared` чужого про�
 Бот работает на **long polling** — webhook не ставится (D-4 в `docs/DEFECTS-FOUND.md`).
 
 S3-совместимое хранилище в dev — **Garage** (`dxflrs/garage:v2.3.0`), заменил MinIO
-(MinIO удалил официальные Docker-образы в сентябре 2026). Переезд на
+(в октябре 2025 MinIO перестал выпускать бесплатные Docker-образы и бинарники
+community-версии — только исходники, issue minio/minio #21647; 25.04.2026 репозиторий
+minio/minio архивирован). Переезд на
 Yandex Object Storage — просто смена `S3_ENDPOINT` в `.env`, код не трогаем.
 
 Начиная с v2.3.0 Garage настраивает себя сам (флаги `--single-node --default-bucket`):
@@ -88,8 +90,9 @@ Tailscale могут быть заблокированы, см. «Прод / в�
 
 ```bash
 cd ~
-# Репозиторий ПРИВАТНЫЙ — клон по HTTPS не сработает.
 # Клонируем через deploy-ключ с SSH-алиасом (настройка алиаса — в ~/.ssh/config).
+# Пока репо публичный (до 0-Б), можно и HTTPS:
+#   git clone https://github.com/romanticstudent07-stack/course-bot.git
 git clone git@github-coursebot:romanticstudent07-stack/course-bot.git
 cd course-bot
 
@@ -99,7 +102,9 @@ git config core.hooksPath .githooks
 chmod +x .githooks/pre-commit
 ```
 
-Репозиторий приватный, поэтому клон возможен только по SSH с deploy-ключом.
+Основной способ — SSH с deploy-ключом: он работает и после 0-Б, когда репо станет приватным.
+Пока репо публичный (до 0-Б), можно клонировать и по HTTPS. Если сервер клонирован по HTTPS —
+на 0-Б сменить remote: `git remote set-url origin git@github-coursebot:romanticstudent07-stack/course-bot.git`.
 Алиас `github-coursebot` должен быть описан в `~/.ssh/config` и указывать на
 приватный ключ, публичная часть которого добавлена в Settings → Deploy keys
 репозитория. Если алиас у тебя называется иначе — подставь своё имя.
