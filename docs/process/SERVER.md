@@ -11,8 +11,8 @@
 - Compose — только так:
       cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml <команда>
 - Применить .env — up -d (не restart). Пересобрать один сервис — up -d --build --no-deps <сервис>.
-- Норма: 7/7 Up, 4 healthy (healthcheck нет у bot, redis и projector); одноразового migrate
-  в ps нет — это норма. WARN «Bake / buildx» — не ошибка.
+- Норма: 7/7 Up, 5 healthy (healthcheck нет у bot и projector; у redis — redis-cli ping с infra-melochi);
+  одноразового migrate в ps нет — это норма. WARN «Bake / buildx» — не ошибка.
 - Чужие контейнеры maxmover и tg_vk — не трогать. cloudflared на сервере — чужой.
   Funnel 8443 в tailscale serve status — maxmover.
 - Запрещено: docker system prune, удаление volumes, правка чужого, вывод .env и секретов.
