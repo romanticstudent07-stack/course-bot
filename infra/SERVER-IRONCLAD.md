@@ -43,8 +43,9 @@
 ## S3-совместимое хранилище
 
 **dev:** Garage (`dxflrs/garage:v2.3.0`) — S3-совместимое, Rust, ~30 MB RAM.
-Заменил MinIO (MinIO удалил официальные Docker-образы в сентябре 2026,
-проект в maintenance mode с декабря 2025).
+Заменил MinIO (в октябре 2025 MinIO перестал выпускать бесплатные Docker-образы
+и бинарники community-версии — только исходники, issue minio/minio #21647;
+25.04.2026 репозиторий minio/minio архивирован).
 
 **prod:** Yandex Object Storage (или Timeweb / VK Cloud — решение Автора).
 Object Lock (WORM) для бакета аудита — только в prod (Garage single-node
@@ -216,5 +217,5 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
 - Служба `cloudflared` — принадлежит maxmover (course-bot её не использует):
   не обновлять, не переустанавливать, не выполнять `cloudflared service install`.
 - Порт `/miniapp/` — уже занят мониторингом keep-alive от maxmover.
-- **MinIO deprecated** — не пробовать вернуть, репо архивирован Apr 2026,
-  Docker-образы удалены Sep 2026. Мы на Garage.
+- **MinIO deprecated** — не пробовать вернуть: бесплатных Docker-образов нет с октября 2025,
+  репозиторий архивирован 25.04.2026. Мы на Garage.
