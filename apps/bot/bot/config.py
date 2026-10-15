@@ -1,6 +1,7 @@
 """apps/bot/bot/config.py — настройки бота из переменных окружения (.env).
 
-Секреты и адреса — только из окружения (compose: env_file ../.env). Хардкодов нет.
+Секреты и адреса — только из окружения: compose передаёт боту переменные явно
+(environment в infra/docker-compose.dev.yml; env_file у бота нет с #71). Хардкодов нет.
 """
 from __future__ import annotations
 
