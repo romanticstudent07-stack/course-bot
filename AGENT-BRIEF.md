@@ -1,6 +1,6 @@
 # AGENT-BRIEF.md — шпаргалка для AI-агента (читать ПЕРВОЙ)
 
-Версия 2 · 27.09.2026. Актуальный hash main — в промпте или в `docs/STATE.md`.
+Версия 2.1 · 15.10.2026. Актуальный hash main — в промпте или в `docs/STATE.md`.
 Заменяет обязательное чтение 9 файлов. Если промпт задачи противоречит этому
 файлу — прав промпт. Если этот файл противоречит AGENTS.md / CONTEXT.md в части
 «что читать» и «как тестировать» — прав этот файл.
@@ -76,7 +76,8 @@ Telegram-курс личной трансформации: Mini App + бот + b
 - `apps/api/app/config.py` — настройки из переменных окружения.
 - `apps/api/app/db/` — подключение к БД; `apps/api/app/participants.py` — работа с `tg_user_registry`.
 - `apps/api/app/routers/onboarding.py` — `POST /miniapp/v1/onboarding/first-launch`.
-- Миграции: `0001_init`, `0002_tg_user_registry`. Таблиц в public (без alembic_version): 9.
+- Миграции: от `0001_init` до `0006_app_roles` (последняя — в `docs/STATE.md`).
+  Таблиц в public (без alembic_version): 13; полный список — `apps/api/tests/expected_tables.txt`.
   `tg_user_registry`: pid uuid PK, tg_user_id bigint (>0), short_no bigint identity UNIQUE,
   created_via text (= 'mini_app_first_launch'), created_at timestamptz, tombstoned_at timestamptz;
   UNIQUE (tg_user_id) WHERE tombstoned_at IS NULL.
@@ -108,7 +109,8 @@ Telegram-курс личной трансформации: Mini App + бот + b
 (противоречие: AGENTS.md — оплата вручную, build-order — YooKassa, экран `onb.payment`
 при правиле «оплата вне Mini App»); `full_backup_rotation_cycle`; три несовместимости Б17;
 роли `finance` и `moderator`.
-Блокеры до любого внешнего доступа: B-1 rate-limit, B-2 согласия до создания pid, B-3 роли/GRANT БД.
+Блокеры B-1 (rate-limit), B-2 (согласия до создания pid) и B-3 (роли/GRANT БД) закрыты
+(B-3 — 14.10.2026; подробности — `docs/STATE.md`).
 
 ## 10. Описание PR (стандарт)
 
@@ -127,6 +129,9 @@ Telegram-курс личной трансформации: Mini App + бот + b
   `python3 tools/unpack.py .tmp/bundle.txt` → `bash tools/check.sh <api|bot|miniapp>` →
   чинить ТОЛЬКО упавшее, минимальной правкой → коммит → push → PR.
 - Скрипт отклонил пакет → не обходить, описать ошибку Автору.
+- Миграция добавляет или удаляет таблицы → в том же PR `apps/api/tests/expected_tables.txt`
+  с полным новым списком таблиц (по нему CI сверяет БД; ci.yml не трогать).
+- Новый `*.sh` → `chmod +x <файл>` до коммита: `tools/check.sh` проверяет бит exec и окончания строк LF.
 - Код пакета не переписывать и не «улучшать». Каждое отличие от пакета — перечислить в описании PR.
 - Состояние проекта — `docs/STATE.md`; карточки задач — `docs/tasks/<id>.md`;
   правила чатов — `docs/process/`. Читать, только если промпт велит.
