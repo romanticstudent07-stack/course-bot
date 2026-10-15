@@ -1,6 +1,6 @@
 # AGENT-BRIEF.md — шпаргалка для AI-агента (читать ПЕРВОЙ)
 
-Версия 2.1 · 15.10.2026. Актуальный hash main — в промпте или в `docs/STATE.md`.
+Версия 2.2 · 15.10.2026. Актуальный hash main — в промпте или в `docs/STATE.md`.
 Заменяет обязательное чтение 9 файлов. Если промпт задачи противоречит этому
 файлу — прав промпт. Если этот файл противоречит AGENTS.md / CONTEXT.md в части
 «что читать» и «как тестировать» — прав этот файл.
@@ -71,11 +71,40 @@ Telegram-курс личной трансформации: Mini App + бот + b
 
 ## 6. Что уже есть в коде
 
-- `apps/api/app/telegram_init_data.py` — проверка initData (HMAC-SHA256 + TTL), только stdlib;
-  подключена ко всем `/miniapp/v1/**` через общий роутер.
-- `apps/api/app/config.py` — настройки из переменных окружения.
-- `apps/api/app/db/` — подключение к БД; `apps/api/app/participants.py` — работа с `tg_user_registry`.
-- `apps/api/app/routers/onboarding.py` — `POST /miniapp/v1/onboarding/first-launch`.
+Сводка по коду (main a494599). Подробности — docstring модулей: их читать, если файл в «ЧТО ПРОЧИТАТЬ».
+
+- `apps/api/main.py` — сборка приложения. Все `/miniapp/v1/**` идут ТОЛЬКО через общий роутер
+  `build_miniapp_v1_router`: сначала `require_init_data`, затем `rate_limit` (401 раньше 429).
+  Новые роутеры Mini App добавлять туда же. `/healthz` и `/security/csp-report` — без initData
+  и без rate-limit. `app/errors.py` — обработчики ошибок (подключены в main.py).
+- `app/telegram_init_data.py` — проверка initData (HMAC-SHA256 + TTL), только stdlib.
+- `app/rate_limit.py` — rate-limit (B-1): Redis, окно 1 мин на tg_user_id из проверенной initData,
+  превышение → 429 `RATE_LIMITED` + `Retry-After`; Redis недоступен → fail-open (WARNING с именем
+  класса ошибки). Самопроверка: `python -m app.rate_limit selftest`.
+- `app/config.py` — настройки из переменных окружения; DSN-поля скрыты в repr/str (B-3c).
+  `sqlalchemy_dsn()` — api (DATABASE_URL), `projector_dsn()`, `migrations_dsn()` — свои DSN.
+- `app/db/` — модели и сессия (`get_engine`, `get_db_session`).
+- `app/participants.py` — `tg_user_registry`: get_or_create (строка блокируется до commit),
+  `find_active_participant` (tombstoned_at IS NULL), `format_short_no`.
+- `app/consent_status.py` — действует ли согласие (только чтение): последнее событие по kind —
+  give, text_key и text_snapshot совпадают с текущим текстом. `CONSENT_TEXT_KEYS`, `REASONS`.
+- `app/routers/onboarding.py`:
+  - `POST /miniapp/v1/onboarding/first-launch` — единственная точка создания участника (SEAM-1).
+    Порядок не менять: initData → тело → 18+ без БД (403) → C0 и C1 (422) → ОДНА транзакция:
+    тексты → участник → give в `consent_events` (только недействующие согласия) →
+    `participant_events` `mini_app_first_consent` (только если pid создан этим вызовом) → commit.
+  - `GET /miniapp/v1/onboarding/status` — `returning` (+ short_no) / `reconsent` (+ reasons) /
+    `new`; только чтение; pid не отдаётся никогда.
+- `app/routers/consents.py` — `GET /miniapp/v1/consents`: свои согласия, только чтение,
+  по каждому kind решает последнее событие; нет участника → `[]`.
+- `app/routers/texts.py` — `GET /miniapp/v1/texts/{key}` и `POST /miniapp/v1/texts/bulk`
+  (до 100 ключей): тексты из `text_registry`, `notes` наружу не отдаются; 404 `TEXT_NOT_FOUND`.
+- `app/routers/security.py` — `POST /security/csp-report` → 204, тело в лог (до 16 КБ).
+- `app/texts.py` — seed `apps/api/config/texts/*.json` (только заглушки) и загрузчик
+  `python -m app.texts load`; на сервере — только через одноразовый сервис `migrate`.
+- `app/projector.py` — единственный писатель `participant_state` (E1 / INV-1):
+  `python -m app.projector run | once`; битый DSN или нет драйвера → WARNING с именем класса, код 1.
+  API в `participant_state` не пишет никогда.
 - Миграции: от `0001_init` до `0006_app_roles` (последняя — в `docs/STATE.md`).
   Таблиц в public (без alembic_version): 13; полный список — `apps/api/tests/expected_tables.txt`.
   `tg_user_registry`: pid uuid PK, tg_user_id bigint (>0), short_no bigint identity UNIQUE,
