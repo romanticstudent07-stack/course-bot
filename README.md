@@ -31,7 +31,10 @@
 ## Клонирование и первоначальная настройка
 
 ```bash
-git clone https://github.com/romanticstudent07-stack/course-bot.git
+# Основной способ — SSH с deploy-ключом (алиас в ~/.ssh/config, см. infra/README.md, шаг 4).
+git clone git@github-coursebot:romanticstudent07-stack/course-bot.git
+# Пока репо публичный (до 0-Б), можно и HTTPS:
+# git clone https://github.com/romanticstudent07-stack/course-bot.git
 cd course-bot
 
 # ОБЯЗАТЕЛЬНО: активировать локальные git-хуки
