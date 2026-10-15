@@ -24,7 +24,7 @@
 #     и «Миграции и тексты (B-3d)».
 #
 # S3-совместимое хранилище — Garage (dxflrs/garage:v2.3.0), заменил MinIO
-# (MinIO удалил официальные Docker-образы в сентябре 2026).
+# (с октября 2025 бесплатных Docker-образов MinIO нет, 25.04.2026 репо minio/minio архивирован).
 # Переезд на Yandex Object Storage — просто смена S3_ENDPOINT, код не меняется.
 #
 # ВАЖНО:
@@ -68,6 +68,9 @@ services:
         limits:
           memory: ${MEM_LIMIT_DB:-384M}
 
+  # Redis: счётчики rate-limit (B-1), данные на диск не пишутся (--save "", appendonly no).
+  # healthcheck — redis-cli ping (infra-melochi): в ps статус healthy, а не просто Up.
+  # api ждёт только старта redis (service_started): rate-limit fail-open, без Redis api работает.
   redis:
     image: redis:7-alpine
     container_name: course-bot_redis
@@ -76,6 +79,12 @@ services:
       - "127.0.0.1:6382:6379"
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped
     networks: [course-bot_net]
     deploy:
@@ -125,7 +134,8 @@ services:
         limits:
           memory: ${MEM_LIMIT_GARAGE:-192M}
 
-  # FastAPI backend (скелет Итерации 0-А: /healthz, mock first-launch, csp-report).
+  # FastAPI backend: /healthz, /miniapp/v1/** (проверка initData, rate-limit B-1,
+  # онбординг, тексты), /security/csp-report.
   # Развязан от S3: api стартует без garage — S3 нужен только с Итерации 5.
   # env_file нет (B-3d, D-24 = А): только переменные ниже. Пароля владельца БД нет;
   # без DATABASE_URL api к БД не подключится (безопасный отказ, 503).
@@ -222,7 +232,7 @@ services:
         limits:
           memory: ${MEM_LIMIT_PROJECTOR:-128M}
 
-  # Telegram bot (aiogram 3, скелет Итерации 0-А: /start + Menu Button; long polling, D-4).
+  # Telegram bot (aiogram 3: /start + Menu Button; long polling, D-4).
   # env_file нет (B-3): бот читает только BOT_TOKEN, WEBAPP_URL, LOG_LEVEL (bot/config.py);
   # БД и Redis бот не использует.
   bot:
@@ -245,7 +255,7 @@ services:
         limits:
           memory: ${MEM_LIMIT_BOT:-512M}
 
-  # Mini App (nginx с собранной статикой, скелет Итерации 0-А). Единый origin:
+  # Mini App (nginx с собранной статикой React + Vite). Единый origin:
   # nginx сам проксирует /miniapp/v1/** и /security/csp-report в api:8080.
   # Vite dev-режим (порт 5173) — только на dev-машине, не в этом compose.
   miniapp:
