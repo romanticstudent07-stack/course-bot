@@ -1,4 +1,4 @@
-// apps/miniapp/src/components/drafts.ts — черновик анкеты после pid (1e-2, 1e-2b-2, returning-2).
+// apps/miniapp/src/components/drafts.ts — черновик анкеты после pid (1e-2, 1e-2b-2, returning-2, miniapp-fix-1).
 //
 // Нативный IndexedDB без библиотек, за интерфейсом DraftStore (в тестах — хранилище в памяти).
 // Это ЕДИНСТВЕННЫЙ файл Mini App, который пишет на устройство.
@@ -16,6 +16,9 @@
 //     saveDraft со step 'finished' → очистка; openDraft нашёл старую запись 'finished' →
 //     очистка и null; «Перейти к курсу» (finishDraft) → очистка. Ошибка хранилища переход
 //     не блокирует и в лог не пишется.
+// D-23 (miniapp-fix-1): createDraftStore отдаёт хранилище с одной очередью get / put / clear
+//   (операция держит очередь до своего завершения или 3 с); finishDraft вызывает seal() —
+//   put после него не пишет; openDraft и finishDraft ждут хранилище не дольше 3 с (DRAFT_IO_TIMEOUT_MS).
 // На сервер черновик не уходит: эндпоинта анкеты нет.
 
 export const LATER_STEPS = ['offer', 'email', 'city', 'checkup', 'rules', 'finished'] as const;
@@ -37,6 +40,8 @@ export const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 /** savedAt дальше этого в будущем — запись считается битой. */
 export const DRAFT_FUTURE_SKEW_MS = 60 * 1000;
 export const EMAIL_MAX_LENGTH = 254;
+/** Сколько ждём хранилище в openDraft, finishDraft и в очереди (D-23). */
+export const DRAFT_IO_TIMEOUT_MS = 3000;
 
 export interface StoredDraft extends Draft {
   v: typeof DRAFT_VERSION;
@@ -49,6 +54,80 @@ export interface DraftStore {
   get(): Promise<unknown>;
   put(value: StoredDraft): Promise<void>;
   clear(): Promise<void>;
+  /** После seal() put не пишет (resolve без записи); get и clear работают. */
+  seal?(): void;
+}
+
+/**
+ * Что раньше: результат (или ошибка) p либо fallback через ms.
+ * Таймер снимается, когда p завершилось. Ошибка p после таймаута глотается.
+ */
+export function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      resolve(fallback);
+    }, ms);
+    p.then(
+      (value) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        if (done) return; // пришла после таймаута — глотаем
+        done = true;
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+/**
+ * Одна очередь для get / put / clear поверх inner. Операция держит очередь до своего
+ * завершения или timeoutMs от своего старта — что раньше. Вызывающий получает результат
+ * inner как есть. sealed проверяется в момент выполнения put, а не постановки.
+ */
+export function createSerialDraftStore(inner: DraftStore, timeoutMs = DRAFT_IO_TIMEOUT_MS): DraftStore {
+  let tail: Promise<void> = Promise.resolve();
+  let sealed = false;
+
+  function enqueue<T>(run: () => Promise<T>): Promise<T> {
+    let release!: () => void;
+    const turn = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const prev = tail;
+    tail = turn;
+    return prev.then(() => {
+      let op: Promise<T>;
+      try {
+        op = run();
+      } catch (err) {
+        op = Promise.reject(err);
+      }
+      const timer = setTimeout(release, timeoutMs);
+      const settle = () => {
+        clearTimeout(timer);
+        release();
+      };
+      op.then(settle, settle);
+      return op;
+    });
+  }
+
+  return {
+    get: () => enqueue(() => inner.get()),
+    put: (value) => enqueue(() => (sealed ? Promise.resolve() : inner.put(value))),
+    clear: () => enqueue(() => inner.clear()),
+    seal: () => {
+      sealed = true;
+    },
+  };
 }
 
 function isLaterStep(value: unknown): value is LaterStep {
@@ -88,11 +167,7 @@ export function parseStoredDraft(raw: unknown): StoredDraft | null {
   };
 }
 
-/**
- * Открыть черновик: чужой / неизвестный пользователь, старше 24 ч, битый,
- * старая метка finished → очистка и null.
- */
-export async function openDraft(store: DraftStore, tgUserId: number | null, now: number): Promise<Draft | null> {
+async function readDraft(store: DraftStore, tgUserId: number | null, now: number): Promise<Draft | null> {
   const raw = await store.get();
   if (raw === undefined || raw === null) return null;
   const stored = parseStoredDraft(raw);
@@ -111,8 +186,23 @@ export async function openDraft(store: DraftStore, tgUserId: number | null, now:
 }
 
 /**
+ * Открыть черновик: чужой / неизвестный пользователь, старше 24 ч, битый,
+ * старая метка finished → очистка и null. Хранилище не ответило за timeoutMs → null
+ * (D-23); ошибка до таймаута — reject, как раньше.
+ */
+export function openDraft(
+  store: DraftStore,
+  tgUserId: number | null,
+  now: number,
+  timeoutMs = DRAFT_IO_TIMEOUT_MS,
+): Promise<Draft | null> {
+  return withTimeout<Draft | null>(readDraft(store, tgUserId, now), timeoutMs, null);
+}
+
+/**
  * Сохранить черновик. Шаг finished → очистка вместо записи (email и город не остаются
- * на устройстве). Пользователь неизвестен → ничего не пишем.
+ * на устройстве). Пользователь неизвестен → ничего не пишем. Порядок записей даёт очередь
+ * хранилища (createSerialDraftStore).
  */
 export async function saveDraft(store: DraftStore, tgUserId: number | null, draft: Draft, now: number): Promise<void> {
   const clean = sanitizeDraft(draft);
@@ -125,9 +215,10 @@ export async function saveDraft(store: DraftStore, tgUserId: number | null, draf
 }
 
 /**
- * «Перейти к курсу»: черновик удаляется всегда (и при известном, и при неизвестном
- * пользователе) — метки finished на устройстве нет. Ошибка хранилища (reject или синхронный
- * throw) глотается без лога; onFinish вызывается ровно 1 раз — после попытки очистки.
+ * «Перейти к курсу»: seal (put после этого не пишет), затем черновик удаляется всегда
+ * (и при известном, и при неизвестном пользователе) — метки finished на устройстве нет.
+ * Ошибка хранилища (reject или синхронный throw) глотается без лога; onFinish вызывается
+ * ровно 1 раз — после очистки или по таймауту timeoutMs (D-23).
  * Ошибка внутри самого onFinish не перехватывается.
  * tgUserId и now не используются (подпись прежняя — вызов в LaterSteps.tsx не меняется).
  */
@@ -136,9 +227,18 @@ export async function finishDraft(
   _tgUserId: number | null,
   _now: number,
   onFinish: () => void,
+  timeoutMs = DRAFT_IO_TIMEOUT_MS,
 ): Promise<void> {
+  store.seal?.();
+  let clearing: Promise<void>;
   try {
-    await store.clear();
+    clearing = store.clear();
+  } catch {
+    // Хранилище недоступно — переход к курсу не блокируем, в лог ничего (ПДн).
+    clearing = Promise.resolve();
+  }
+  try {
+    await withTimeout<void>(clearing, timeoutMs, undefined);
   } catch {
     // Хранилище недоступно — переход к курсу не блокируем, в лог ничего (ПДн).
   }
@@ -227,8 +327,11 @@ export function createIndexedDbDraftStore(factory: IDBFactory): DraftStore {
   };
 }
 
-/** IndexedDB, если он есть; иначе — в памяти (черновик живёт до закрытия приложения). */
+/**
+ * IndexedDB, если он есть; иначе — в памяти (черновик живёт до закрытия приложения).
+ * Сверху — одна очередь с seal (D-23).
+ */
 export function createDraftStore(): DraftStore {
-  if (typeof indexedDB === 'undefined') return createMemoryDraftStore();
-  return createIndexedDbDraftStore(indexedDB);
+  const inner = typeof indexedDB === 'undefined' ? createMemoryDraftStore() : createIndexedDbDraftStore(indexedDB);
+  return createSerialDraftStore(inner);
 }

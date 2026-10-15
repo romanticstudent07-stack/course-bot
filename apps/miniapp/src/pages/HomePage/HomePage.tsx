@@ -1,6 +1,5 @@
-// apps/miniapp/src/pages/HomePage/HomePage.tsx — стартовый экран скелета (Итерация 0-А).
+// apps/miniapp/src/pages/HomePage/HomePage.tsx — экран курса (заглушка).
 // Имя берётся из initData ТОЛЬКО для отрисовки (AGENTS.md, запрет №7).
-// Экраны онбординга SEAM-1 (возрастной гейт → pid) — Итерация 1.
 import { initData, useSignal } from '@telegram-apps/sdk-react';
 
 export function HomePage() {
@@ -9,7 +8,7 @@ export function HomePage() {
   return (
     <div className="page">
       <h1>{user?.first_name ? `Привет, ${user.first_name}!` : 'Привет!'}</h1>
-      <p className="hint">Mini App — скелет Итерации 0-А. Онбординг появится в Итерации 1.</p>
+      <p className="hint">Здесь будет курс (экран-заглушка).</p>
     </div>
   );
 }
