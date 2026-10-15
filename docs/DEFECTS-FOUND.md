@@ -224,17 +224,7 @@
 - **Правка DOCS сделана:** DOCS PR #13 (miniapp-api-contract.yaml: путь status, схема OnboardingStatus, reasons, повторный give в first-launch), sync PR #65.
 - **Ждём решения Автора:** нет.
 
-## D-23. Черновик на устройстве: зависание IndexedDB, гонка записи, текст ErrorBoundary
-
-- **Файлы реализации:** `apps/miniapp/src/components/App.tsx`, `LaterSteps.tsx`, `drafts.ts`, `Root.tsx`.
-- **Суть (ревью #63, неблокирующее; обхода согласий нет):**
-  1) openDraft без таймаута: IndexedDB.open завис → «Продолжить» неактивна навсегда;
-  2) saveDraft без очереди: put прошлого шага может завершиться после clear (finishDraft) →
-     email и город снова на устройстве (до 24 ч), номер ведёт в анкету;
-  3) Root.tsx (шаблон): ErrorBoundary показывает пользователю error.message.
-- **Предлагаемое решение:** таймаут openDraft (→ курс); одна очередь записей черновика;
-  ErrorBoundary — нейтральный текст без message. Задача без БД, вместе с мелочами Mini App.
-- **Ждём решения Автора:** нет.
+- **D-23** (черновик на устройстве: IndexedDB, гонка записи, ErrorBoundary) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 15.10).
 
 - **D-24** (пароль владельца БД в контейнере api, env_file) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 14.10).
 
