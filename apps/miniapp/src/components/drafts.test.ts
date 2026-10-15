@@ -2,6 +2,7 @@
 // DraftStore: сохранение/чтение, очистка при смене tg_user_id, TTL 24 ч, только step/email/city;
 // метки finished на устройстве нет (returning-2): saveDraft / openDraft / finishDraft с finished
 // → хранилище пусто; ошибка хранилища переход к курсу не блокирует.
+// D-23 (miniapp-fix-1): withTimeout, очередь createSerialDraftStore, seal, таймауты openDraft / finishDraft.
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -10,14 +11,18 @@ import {
   DRAFT_TTL_MS,
   EMAIL_MAX_LENGTH,
   EMPTY_DRAFT,
+  createDraftStore,
   createMemoryDraftStore,
+  createSerialDraftStore,
   finishDraft,
   openDraft,
   parseStoredDraft,
   sanitizeDraft,
   saveDraft,
+  withTimeout,
   type Draft,
   type DraftStore,
+  type StoredDraft,
 } from './drafts.ts';
 
 const NOW = Date.UTC(2026, 9, 2, 12, 0, 0);
@@ -281,5 +286,204 @@ describe('finishDraft', () => {
     };
     await expect(finishDraft(store, null, NOW, onFinish)).resolves.toBeUndefined();
     expect(calls).toBe(1);
+  });
+});
+
+// ---- D-23 (miniapp-fix-1) ----
+
+const STORED: StoredDraft = { v: 1, tgUserId: USER, savedAt: NOW, ...DRAFT };
+
+/** Дать отработать микрозадачам и таймерам 0 мс. */
+function tick(): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+/** Память + журнал вызовов; put пишет только после release(). */
+function gatedStore() {
+  const mem = createMemoryDraftStore();
+  const calls: string[] = [];
+  let releasePut: (() => void) | null = null;
+  const inner: DraftStore = {
+    get: () => {
+      calls.push('get');
+      return mem.get();
+    },
+    put: (value) => {
+      calls.push('put');
+      return new Promise<void>((resolve) => {
+        releasePut = () => {
+          void mem.put(value).then(resolve);
+        };
+      });
+    },
+    clear: () => {
+      calls.push('clear');
+      return mem.clear();
+    },
+  };
+  return {
+    mem,
+    calls,
+    inner,
+    release: () => {
+      if (releasePut !== null) releasePut();
+    },
+  };
+}
+
+describe('withTimeout', () => {
+  it('быстрое p → значение', async () => {
+    await expect(withTimeout(Promise.resolve(5), 50, 0)).resolves.toBe(5);
+  });
+
+  it('медленное p → fallback', async () => {
+    const never = new Promise<number>(() => undefined);
+    await expect(withTimeout(never, 20, 0)).resolves.toBe(0);
+  });
+
+  it('reject до таймаута → reject', async () => {
+    await expect(withTimeout(Promise.reject(new Error('boom')), 50, 0)).rejects.toThrow('boom');
+  });
+
+  it('reject после таймаута → fallback, ошибка проглочена', async () => {
+    const late = new Promise<number>((_resolve, reject) => {
+      setTimeout(() => reject(new Error('late')), 40);
+    });
+    await expect(withTimeout(late, 20, 0)).resolves.toBe(0);
+    await sleep(50);
+  });
+});
+
+describe('очередь хранилища (createSerialDraftStore)', () => {
+  it('put (держим) → clear: clear ждёт put, хранилище пусто, порядок put, clear', async () => {
+    const g = gatedStore();
+    const store = createSerialDraftStore(g.inner, 1000);
+    const p1 = store.put(STORED);
+    const p2 = store.clear();
+    await tick();
+    expect(g.calls).toEqual(['put']);
+    g.release();
+    await Promise.all([p1, p2]);
+    expect(g.calls).toEqual(['put', 'clear']);
+    expect(g.mem.peek()).toBeUndefined();
+  });
+
+  it('зависший get → следующий put выполняется после timeoutMs', async () => {
+    const mem = createMemoryDraftStore();
+    const inner: DraftStore = {
+      get: () => new Promise<unknown>(() => undefined),
+      put: (value) => mem.put(value),
+      clear: () => mem.clear(),
+    };
+    const store = createSerialDraftStore(inner, 30);
+    const started = Date.now();
+    void store.get();
+    const put = store.put(STORED);
+    await tick();
+    expect(mem.peek()).toBeUndefined();
+    await put;
+    expect(mem.peek()).toEqual(STORED);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(20);
+  });
+
+  it('reject и синхронный throw inner очередь не ломают', async () => {
+    let clears = 0;
+    const inner: DraftStore = {
+      get: async () => {
+        throw new Error('get failed');
+      },
+      put: () => {
+        throw new Error('put failed sync');
+      },
+      clear: async () => {
+        clears += 1;
+      },
+    };
+    const store = createSerialDraftStore(inner, 50);
+    await expect(store.get()).rejects.toThrow('get failed');
+    await expect(store.put(STORED)).rejects.toThrow('put failed sync');
+    await expect(store.clear()).resolves.toBeUndefined();
+    expect(clears).toBe(1);
+  });
+});
+
+describe('seal', () => {
+  it('put после seal → inner.put не вызван; get и clear работают; повторный seal безвреден', async () => {
+    const g = gatedStore();
+    const store = createSerialDraftStore(g.inner, 50);
+    store.seal?.();
+    await expect(store.put(STORED)).resolves.toBeUndefined();
+    expect(g.calls).toEqual([]);
+    store.seal?.();
+    await expect(store.get()).resolves.toBeUndefined();
+    await expect(store.clear()).resolves.toBeUndefined();
+    expect(g.calls).toEqual(['get', 'clear']);
+    expect(g.mem.peek()).toBeUndefined();
+  });
+
+  it('put, поставленный до seal и ещё не начатый, тоже не пишет', async () => {
+    const g = gatedStore();
+    const store = createSerialDraftStore(g.inner, 1000);
+    const first = store.put(STORED);
+    await tick();
+    const second = store.put({ ...STORED, city: CITY_OPTIONS[1] });
+    store.seal?.();
+    g.release();
+    await Promise.all([first, second]);
+    expect(g.calls).toEqual(['put']);
+    expect(g.mem.peek()).toEqual(STORED);
+  });
+});
+
+describe('таймауты openDraft и finishDraft', () => {
+  it('openDraft: зависший get → null за timeoutMs', async () => {
+    const store: DraftStore = {
+      get: () => new Promise<unknown>(() => undefined),
+      put: async () => undefined,
+      clear: async () => undefined,
+    };
+    await expect(openDraft(store, USER, NOW, 30)).resolves.toBeNull();
+  });
+
+  it('finishDraft: зависший clear → резолвится, onFinish 1 раз', async () => {
+    let calls = 0;
+    const store: DraftStore = {
+      get: async () => undefined,
+      put: async () => undefined,
+      clear: () => new Promise<void>(() => undefined),
+    };
+    await expect(
+      finishDraft(store, USER, NOW, () => {
+        calls += 1;
+      }, 30),
+    ).resolves.toBeUndefined();
+    expect(calls).toBe(1);
+  });
+
+  it('после finishDraft saveDraft не пишет (очередь поверх памяти)', async () => {
+    const mem = createMemoryDraftStore();
+    const store = createSerialDraftStore(mem, 50);
+    await finishDraft(store, USER, NOW, () => undefined, 50);
+    await saveDraft(store, USER, DRAFT, NOW);
+    expect(mem.peek()).toBeUndefined();
+  });
+
+  it('saveDraft, поставленный прямо перед finishDraft, не возвращает email и город', async () => {
+    const mem = createMemoryDraftStore();
+    await mem.put(STORED);
+    const store = createSerialDraftStore(mem, 50);
+    const pending = saveDraft(store, USER, { ...DRAFT, city: CITY_OPTIONS[1] }, NOW);
+    await finishDraft(store, USER, NOW, () => undefined, 50);
+    await pending;
+    expect(mem.peek()).toBeUndefined();
+  });
+
+  it('createDraftStore() в node (indexedDB нет) → у хранилища есть seal', () => {
+    const store = createDraftStore();
+    expect(typeof store.seal).toBe('function');
   });
 });
