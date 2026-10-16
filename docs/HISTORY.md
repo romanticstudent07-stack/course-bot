@@ -60,6 +60,19 @@
   терминал — до ~10 строк, без heredoc; SHTAB 3.5 (сверка всех вызовов меняющегося API,
   кредиты — только у Агента); D-15; B-2 = C0 и C1. 0 кредитов.
 
+## Из STATE: Смержено #22–#43 (перенос 16.10, дословно)
+- #22–#25 основа: скелет api/bot/miniapp + 0001_init; nginx единый origin; Tailscale, Garage, D-5…D-7 (историю git не переписываем); CI 7 проверок, D-8.
+- #26 1a: проверка initData (HMAC + TTL), роутер /miniapp/v1. #27 1b+1c: 0002 tg_user_registry + first-launch; CI 9 таблиц, REQUIRE_DB_TESTS=1.
+- #28–#29 Р0: лимит бота 512M, сумма лимитов ≤ 2 ГБ; AGENT-BRIEF.md v1 + .genspark/rules.md.
+- #30–#32, #34 процесс v2…v3.4: unpack.py, check.sh (eol, exec), STATE, HISTORY, docs/process/*, LF, expected_tables.txt, РЕВЬЮЕР, rulesets main, DESIGNER (окно 3 запроса).
+- #33 карточки И1: docs/tasks/{1d,B-1,1e-1,1e-2,projector,B-3}.md + STATE (сервер ✅ 12e57b6). #37 мелочи до 1e-1: README, HISTORY #33–#36, D-7 (только docs).
+- #35 1d: text_registry — миграция 0003, seed B4 (заглушки), загрузчик с JSON-Schema, GET /texts/{key} и bulk; D-14.
+- #36 B-1: rate-limit /miniapp/v1 (Redis, 60/мин на tg_user_id, fail-open + лог). РЕВЬЮЕР: блокирующих нет. Сервер ✅ 17e8c94. Живой 429 ✅ 02.10.
+- #38 1e-1a: миграция 0004 consent_events, first-launch + consents (B-2 API). CI 7/7, РЕВЬЮЕР: блокирующих 0.
+- #39 процесс v3.5: правила выдачи пакета, терминал, D-15. #41 процесс v3.6: SHTAB.md разделён на две части с метками конца (чтение рубится на ~10 000 токенов).
+- #40 1e-1b: экраны онбординга Mini App (OnboardingFlow.tsx + тест, App.tsx, client.ts с postTextsBulk). 5 файлов, CI 7/7, РЕВЬЮЕР: блокирующих 0 после проверки ШТАБа. Сервер ✅ 9edd478.
+- #43 1e-2 + живой проход 03.10 — этап 1e-2 ЗАКРЫТ. Процесс v3.7 + карточки 1e-2b. #46, #47, #48 — пачка 1e-2b (см. «Сейчас»).
+
 ## Решения по процессу
 - 25.09: промпт КОНТРОЛЬ — план экономии, блок «ЭКОНОМИЯ» важнее .genspark/rules.md,
   формат «Шаг N. Кто, где: что».
