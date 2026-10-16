@@ -187,7 +187,7 @@ GitHub App Genspark НЕ имеет права workflows (и не получит
 cd ~/course-bot && docker compose --env-file .env -f infra/docker-compose.dev.yml …
 Применение .env — up -d (не restart). Пересборка одного сервиса:
 up -d --build --no-deps <сервис>. Сервер работает только с main.
-Норма: 6/6 Up, 4 healthy (у bot и redis healthcheck нет). WARN «Bake / buildx» — не ошибка.
+Норма: 7/7 Up, 5 healthy (db, redis, garage, api, miniapp; у bot и projector healthcheck нет; migrate — разовый, в ps его нет). WARN «Bake / buildx» — не ошибка.
 Чужие контейнеры maxmover и tg_vk и чужой cloudflared — не трогать.
 Dev-вход в Mini App — Tailscale serve (tailnet only, только Автор).
 После пересборки miniapp Telegram отдаёт старую версию из кэша: Mini App надо закрыть
@@ -229,6 +229,7 @@ Dev-вход в Mini App — Tailscale serve (tailnet only, только Авт�
   с PR — заголовок и описание PR готовыми код-блоками.
 - 08.10 (B-3 refresh): ПРОЕКТИРОВЩИК прочитал в З1 ≈ 50 файлов, окно чуть не сжалось →
   бюджет окна ПРОЕКТИРОВЩИКА (DESIGNER.md, «Бюджет окна»; CB-process-1).
+- 15.10 (#91): ШТАБ проверил diff, но не выдал комментарий для PR — добавлен после мержа. Комментарий ШТАБа — готовым блоком в КАЖДОМ PR, до кнопки Merge.
 
 ## 9. Первый ответ нового окна ШТАБа
 1. Прочитай ОБЕ части правил (SHTAB.md и SHTAB-2.md), затем docs/STATE.md и
