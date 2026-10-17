@@ -22,3 +22,5 @@ participant_events
 participant_state_checkpoints
 # 0007_day_state
 idempotency_keys
+# 0008_day_marks
+day_marks
