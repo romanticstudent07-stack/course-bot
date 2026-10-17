@@ -20,3 +20,5 @@ consent_events
 # 0005_participant_events
 participant_events
 participant_state_checkpoints
+# 0007_day_state
+idempotency_keys

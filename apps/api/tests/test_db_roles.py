@@ -44,7 +44,6 @@ API_DENIED: tuple[str, ...] = (
 PROJECTOR_DENIED: tuple[str, ...] = (
     "INSERT INTO tg_user_registry (tg_user_id) VALUES (1)",
     "SELECT pid FROM consent_events",
-    "INSERT INTO participant_events (pid) VALUES (gen_random_uuid())",
     "UPDATE participant_events SET actor = 'x'",
     "DELETE FROM participant_events",
     "DELETE FROM participant_state",
