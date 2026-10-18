@@ -20,6 +20,8 @@
     day_started_at = at события, missed_streak = 0; только если позиции ещё нет
     (WHERE day_no IS NULL). 0 строк (позиция уже есть или строки нет) → WARNING, пропуск.
     lifecycle_phase, status_flags и author_pause_reason не трогаются (В21).
+    Граница: каждое из stage_no, module_no, day_no — целое от 1 до MAX_POSITION_VALUE
+    (32767, предел smallint); вне границы, не целое или bool → «bad payload», пропуск.
 
 Курсор — по pid: события e с e.id > coalesce(c.last_event_id, 0) через LEFT JOIN
 participant_state_checkpoints c USING (pid), ORDER BY e.id, LIMIT 500. Глобальный
@@ -30,6 +32,11 @@ participant:pid (participant_lock.py) до INSERT и держат до commit; f
 
 Пачка — одна транзакция. Неизвестный kind, запрещённый переход или битый payload → WARNING
 (id и kind события, без payload и pid), событие пропускается, checkpoint сдвигается.
+Каждое событие применяется внутри SAVEPOINT (conn.begin_nested(), ревью #101):
+DataError или IntegrityError → откат только этого savepoint, WARNING «bad payload» с id,
+kind и именем класса ошибки (без payload и pid), пропуск, checkpoint pid сдвигается на id
+события — одно битое событие не останавливает проектор. Другие SQLAlchemyError — откат
+всей пачки, как раньше.
 participant_events только читается; at и payload читаются для day_entered, в лог не идут.
 author_pause_reason и last_seen_publish_epoch не трогаются.
 DSN проектора — Settings.projector_dsn(): PROJECTOR_DATABASE_URL → DATABASE_URL → POSTGRES_*
@@ -52,7 +59,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Connection, Engine, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
 
 from app.config import get_settings
 from app.db.models import EVENT_KIND_MINI_APP_FIRST_CONSENT
@@ -68,6 +75,8 @@ PHASE_PRE_REGISTERED = "pre_registered"
 PHASE_ONBOARDING = "onboarding"
 # Пишет POST /miniapp/v1/day/test-enter (app/routers/day.py) под замком participant:pid.
 EVENT_KIND_DAY_ENTERED = "day_entered"
+# Верхняя граница stage_no / module_no / day_no (smallint).
+MAX_POSITION_VALUE = 32767
 USAGE = "usage: python -m app.projector run | once"
 
 _LOCK = text("SELECT pg_advisory_lock(hashtext('participant_state_projector'))")
@@ -143,7 +152,10 @@ def _skip(event_id: int, kind: str, reason: str) -> None:
 
 
 def position_from_payload(payload: Any) -> tuple[int, int, int] | None:
-    """(stage_no, module_no, day_no) из payload day_entered или None (битый payload)."""
+    """(stage_no, module_no, day_no) из payload day_entered или None (битый payload).
+
+    Каждое значение — int (не bool) от 1 до MAX_POSITION_VALUE включительно.
+    """
     if isinstance(payload, str):
         try:
             payload = json.loads(payload)
@@ -154,7 +166,9 @@ def position_from_payload(payload: Any) -> tuple[int, int, int] | None:
     values: list[int] = []
     for field in _POSITION_FIELDS:
         value = payload.get(field)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        if value < 1 or value > MAX_POSITION_VALUE:
             return None
         values.append(value)
     return values[0], values[1], values[2]
@@ -223,6 +237,30 @@ def _apply_event(
     return False
 
 
+def _apply_in_savepoint(
+    conn: Connection,
+    event_id: int,
+    pid: uuid.UUID,
+    kind: str,
+    at: datetime | None,
+    payload: Any,
+) -> bool:
+    """Событие внутри SAVEPOINT. DataError / IntegrityError → откат savepoint, пропуск.
+
+    Другие SQLAlchemyError не ловятся: вызывающий откатывает всю пачку.
+    """
+    savepoint = conn.begin_nested()
+    try:
+        applied = _apply_event(conn, event_id, pid, kind, at, payload)
+    except (DataError, IntegrityError) as exc:
+        savepoint.rollback()
+        # Только id, kind и имя класса: текст исключения может содержать значения.
+        _skip(event_id, kind, f"bad payload, {type(exc).__name__}")
+        return False
+    savepoint.commit()
+    return applied
+
+
 def _process_batch(engine: Engine) -> tuple[ProjectorResult, int]:
     """Одна пачка — одна транзакция. Возвращает итог и число прочитанных событий."""
     processed = 0
@@ -231,7 +269,7 @@ def _process_batch(engine: Engine) -> tuple[ProjectorResult, int]:
         rows = conn.execute(_SELECT_BATCH, {"limit": BATCH_SIZE}).all()
         last_ids: dict[uuid.UUID, int] = {}
         for event_id, pid, kind, at, payload in rows:
-            if _apply_event(conn, event_id, pid, kind, at, payload):
+            if _apply_in_savepoint(conn, event_id, pid, kind, at, payload):
                 processed += 1
             else:
                 skipped += 1

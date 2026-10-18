@@ -1,4 +1,8 @@
-"""POST /day/test-enter (iter2-api-2a): флаг, замок, событие day_entered. С БД — только CI."""
+"""POST /day/test-enter (iter2-api-2a): флаг, замок, событие day_entered. С БД — только CI.
+
+Ревью #101: нет контента дня (1, 1, 1) → DayContentMissing (503), ничего не записано;
+возврат без записи снимает xact-замок сразу (rollback).
+"""
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import text
@@ -7,13 +11,25 @@ from sqlalchemy.orm import Session
 from app.config import Settings
 from app.day_content import get_day_content
 from app.projector import ProjectorResult, run_once
-from app.routers.day import enter_day_by_test_flag, read_day_current
+from app.routers.day import (
+    DayContentMissing,
+    _content_missing,
+    enter_day_by_test_flag,
+    read_day_current,
+)
 from app.routers.onboarding import register_with_consents
+
+TRY_SQL = text("SELECT pg_try_advisory_xact_lock(hashtext('participant:' || CAST(:pid AS text)))")
 
 
 class _NoDb:
     def __getattr__(self, name):
         raise AssertionError("при выключенном флаге БД трогать нельзя")
+
+
+class _EmptyContent:
+    def get(self, stage_no, module_no, day_no):
+        return None
 
 
 def _registered(engine, tg_user_id: int):
@@ -130,4 +146,31 @@ def test_tombstoned_404_nothing_written(db_engine):
         )
     err = _error_code(db_engine, 8005)
     assert (err.status_code, err.detail["code"]) == (404, "PARTICIPANT_NOT_FOUND")
+    assert (_entered(db_engine, pid), _keys(db_engine, pid)) == (0, 0)
+
+
+def test_no_write_return_releases_lock(db_engine):
+    pid = _registered(db_engine, 8006)
+    run_once(db_engine)
+    assert _enter(db_engine, 8006).status == "entering"
+    with Session(db_engine) as session:
+        # Повтор: возврат без записи; сессия ещё открыта, а замок уже снят.
+        assert enter_day_by_test_flag(session, 8006, True).status == "entering"
+        with db_engine.connect() as other:
+            assert other.execute(TRY_SQL, {"pid": str(pid)}).scalar_one() is True
+            other.rollback()
+
+
+def test_content_missing_nothing_written(db_engine):
+    pid = _registered(db_engine, 8007)
+    run_once(db_engine)
+    with Session(db_engine) as session:
+        with pytest.raises(DayContentMissing) as exc:
+            enter_day_by_test_flag(session, 8007, True, _EmptyContent())
+        with db_engine.connect() as other:
+            assert other.execute(TRY_SQL, {"pid": str(pid)}).scalar_one() is True
+            other.rollback()
+    assert (exc.value.stage_no, exc.value.module_no, exc.value.day_no) == (1, 1, 1)
+    err = _content_missing(exc.value, "day/test-enter")
+    assert (err.status_code, err.detail["code"]) == (503, "DAY_CONTENT_MISSING")
     assert (_entered(db_engine, pid), _keys(db_engine, pid)) == (0, 0)

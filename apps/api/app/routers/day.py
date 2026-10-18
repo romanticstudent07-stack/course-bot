@@ -6,7 +6,10 @@ initData и rate-limit — роутер miniapp_v1 в main.py.
     pid и day_started_at из тела запроса не берутся никогда (лишние поля игнорируются);
   - participant_state читается text-SQL SELECT (lives, stage_no, module_no, day_no,
     day_started_at). Это только чтение: писатель participant_state — проектор (E1/INV-1);
-  - БД недоступна → 503 SERVICE_UNAVAILABLE (как consents.py).
+  - любая ошибка БД (SQLAlchemyError) → 503 SERVICE_UNAVAILABLE, в лог только имя класса;
+  - транзакция закрывается сразу (ревью #101): GET — rollback перед ответом; test-enter и
+    marks — rollback перед каждым возвратом без записи и перед каждой ошибкой после замка,
+    чтобы xact-замок participant:pid снимался сразу.
 
 GET /day/current — только чтение, ничего не пишет:
   - нет активного pid (или tombstoned) → 404 PARTICIPANT_NOT_FOUND;
@@ -29,7 +32,8 @@ POST /day/test-enter (iter2-api-2a, В3 — А; тела нет). Писател
   4) нет строки state → 409 DAY_STATE_SYNCING + Retry-After: 1;
   5) позиция есть → 200 {status: already};
   6) есть ключ day_enter → 202 {status: entering}, без события;
-  7) INSERT idempotency_keys (day_enter) → INSERT participant_events kind day_entered,
+  7) нет контента дня (1, 1, 1) → 503 DAY_CONTENT_MISSING, ничего не записано;
+  8) INSERT idempotency_keys (day_enter) → INSERT participant_events kind day_entered,
      payload {stage_no 1, module_no 1, day_no 1, source test_flag}, actor system → commit → 202.
   Фаза участника не меняется (В21): позицию и day_started_at ставит проектор.
 
@@ -54,7 +58,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
@@ -207,6 +211,12 @@ def _rollback(session: Session) -> None:
         session.rollback()
 
 
+def _released(session: Session, exc: Exception) -> Exception:
+    """rollback (снимает xact-замок) и вернуть exc для raise."""
+    _rollback(session)
+    return exc
+
+
 def build_blocks(day: Day, marks: Mapping[str, bool]) -> list[BlockOut]:
     """Блоки дня + отметки. Отметки чужих block_id игнорируются. Чистая функция."""
     out: list[BlockOut] = []
@@ -306,34 +316,60 @@ def read_day_current(
     )
 
 
-def enter_day_by_test_flag(session: Session, tg_user_id: int, enabled: bool) -> TestEnterOut:
-    """Шаги 1–8 POST /day/test-enter. Ошибки — HTTPException; commit только на шаге 8."""
+def enter_day_by_test_flag(
+    session: Session,
+    tg_user_id: int,
+    enabled: bool,
+    content: DayContent | None = None,
+) -> TestEnterOut:
+    """Шаги 1–8 POST /day/test-enter. Ошибки — HTTPException / DayContentMissing.
+
+    commit только на шаге 8; во всех остальных выходах после замка — rollback.
+    content не передан → get_day_content().
+    """
     if not enabled:
         # До любых запросов к БД (В3 — А).
         raise _error(status.HTTP_404_NOT_FOUND, "NOT_FOUND", "Не найдено.")
     pid = active_pid_locked(session, tg_user_id)
     if pid is None:
-        raise _participant_not_found()
-    texts = current_texts(session, STATUS_KINDS)
+        raise _released(session, _participant_not_found())
+    try:
+        texts = current_texts(session, STATUS_KINDS)
+    except ConsentTextMissingError as exc:
+        raise _released(session, exc)
     if reasons(load_events(session, pid), texts, STATUS_KINDS):
-        raise _error(
-            status.HTTP_409_CONFLICT,
-            "RECONSENT_REQUIRED",
-            "Нужно заново подтвердить согласия.",
+        raise _released(
+            session,
+            _error(
+                status.HTTP_409_CONFLICT,
+                "RECONSENT_REQUIRED",
+                "Нужно заново подтвердить согласия.",
+            ),
         )
     row = session.execute(_STATE_SQL, {"pid": pid}).first()
     if row is None:
-        raise _error(
-            status.HTTP_409_CONFLICT,
-            "DAY_STATE_SYNCING",
-            "Данные обновляются. Повторите через секунду.",
-            headers={"Retry-After": "1"},
+        raise _released(
+            session,
+            _error(
+                status.HTTP_409_CONFLICT,
+                "DAY_STATE_SYNCING",
+                "Данные обновляются. Повторите через секунду.",
+                headers={"Retry-After": "1"},
+            ),
         )
     if _has_position(row):
+        _rollback(session)
         return TestEnterOut(status=ENTER_ALREADY)
     enter_key = key_day_enter(pid)
     if _has_key(session, enter_key):
+        _rollback(session)
         return TestEnterOut(status=STATUS_ENTERING)
+    stage_no = TEST_ENTRY_PAYLOAD["stage_no"]
+    module_no = TEST_ENTRY_PAYLOAD["module_no"]
+    day_no = TEST_ENTRY_PAYLOAD["day_no"]
+    day_content = content if content is not None else get_day_content()
+    if day_content.get(stage_no, module_no, day_no) is None:
+        raise _released(session, DayContentMissing(stage_no, module_no, day_no))
     insert_idempotency_key(session, enter_key, KIND_DAY_ENTER)
     session.execute(
         ParticipantEvent.__table__.insert().values(
@@ -351,28 +387,40 @@ def enter_day_by_test_flag(session: Session, tg_user_id: int, enabled: bool) -> 
 def put_day_mark(
     session: Session, tg_user_id: int, body: DayMarkIn, content: DayContent
 ) -> DayMarkOut:
-    """PUT /day/marks. pid и day_started_at — только с сервера. commit — в конце."""
+    """PUT /day/marks. pid и day_started_at — только с сервера.
+
+    commit — в конце; во всех выходах с ошибкой после замка — rollback.
+    """
     pid = active_pid_locked(session, tg_user_id)
     if pid is None:
-        raise _participant_not_found()
+        raise _released(session, _participant_not_found())
     row = session.execute(_STATE_SQL, {"pid": pid}).first()
     if row is None or not _has_position(row) or row.day_started_at is None:
-        raise _error(status.HTTP_409_CONFLICT, "DAY_NOT_STARTED", "День ещё не начат.")
+        raise _released(
+            session,
+            _error(status.HTTP_409_CONFLICT, "DAY_NOT_STARTED", "День ещё не начат."),
+        )
     day = content.get(row.stage_no, row.module_no, row.day_no)
     if day is None:
-        raise DayContentMissing(row.stage_no, row.module_no, row.day_no)
+        raise _released(session, DayContentMissing(row.stage_no, row.module_no, row.day_no))
     if body.block_id not in {block.block_id for block in day.blocks}:
-        raise _error(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "BLOCK_NOT_IN_DAY",
-            "Такого блока нет в текущем дне.",
+        raise _released(
+            session,
+            _error(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "BLOCK_NOT_IN_DAY",
+                "Такого блока нет в текущем дне.",
+            ),
         )
     started = row.day_started_at
     if _has_key(session, key_day_done(pid, started)):
-        raise _error(
-            status.HTTP_409_CONFLICT,
-            "DAY_ALREADY_SUBMITTED",
-            "Отчёт за день уже отправлен.",
+        raise _released(
+            session,
+            _error(
+                status.HTTP_409_CONFLICT,
+                "DAY_ALREADY_SUBMITTED",
+                "Отчёт за день уже отправлен.",
+            ),
         )
     stmt = pg_insert(DayMark.__table__).values(
         pid=pid,
@@ -398,7 +446,7 @@ def put_day_mark(
     responses={
         401: {"description": "initData невалидна / истекла (TG_INIT_MISSING / TG_INIT_INVALID)"},
         404: {"description": "PARTICIPANT_NOT_FOUND — нет активного участника"},
-        503: {"description": "SERVICE_UNAVAILABLE — БД недоступна; DAY_CONTENT_MISSING"},
+        503: {"description": "SERVICE_UNAVAILABLE — ошибка БД; DAY_CONTENT_MISSING"},
     },
 )
 def get_day_current(
@@ -413,9 +461,12 @@ def get_day_current(
         )
     except DayContentMissing as exc:
         raise _content_missing(exc, "day/current") from None
-    except (OperationalError, InterfaceError) as exc:
-        logger.error("day/current: БД недоступна (%s) — 503", type(exc).__name__)
+    except SQLAlchemyError as exc:
+        logger.error("day/current: ошибка БД (%s) — 503", type(exc).__name__)
         raise _service_unavailable() from None
+    finally:
+        # Только чтение: транзакцию закрываем до ответа.
+        _rollback(session)
     if result is None:
         logger.info("day/current: tg_user_id=%s status=participant_not_found", ctx.tg_user_id)
         raise _participant_not_found()
@@ -431,17 +482,20 @@ def get_day_current(
         200: {"description": "already — позиция уже есть"},
         404: {"description": "NOT_FOUND (флаг выключен) / PARTICIPANT_NOT_FOUND"},
         409: {"description": "RECONSENT_REQUIRED / DAY_STATE_SYNCING (Retry-After: 1)"},
-        503: {"description": "SERVICE_UNAVAILABLE / SERVICE_MISCONFIGURED"},
+        503: {"description": "SERVICE_UNAVAILABLE / SERVICE_MISCONFIGURED / DAY_CONTENT_MISSING"},
     },
 )
 def post_day_test_enter(
     response: Response,
     ctx: InitDataContext = Depends(require_init_data),
     session: Session = Depends(get_db_session),
+    content: DayContent = Depends(get_day_content),
     settings: Settings = Depends(get_settings),
 ) -> TestEnterOut:
     try:
-        result = enter_day_by_test_flag(session, ctx.tg_user_id, settings.day_test_entry_enabled)
+        result = enter_day_by_test_flag(
+            session, ctx.tg_user_id, settings.day_test_entry_enabled, content
+        )
     except HTTPException as exc:
         _rollback(session)
         logger.info("day/test-enter: tg_user_id=%s status=%s", ctx.tg_user_id, exc.status_code)
@@ -454,9 +508,12 @@ def post_day_test_enter(
             "SERVICE_MISCONFIGURED",
             "Сервис временно недоступен",
         ) from None
-    except (OperationalError, InterfaceError) as exc:
+    except DayContentMissing as exc:
         _rollback(session)
-        logger.error("day/test-enter: БД недоступна (%s) — 503", type(exc).__name__)
+        raise _content_missing(exc, "day/test-enter") from None
+    except SQLAlchemyError as exc:
+        _rollback(session)
+        logger.error("day/test-enter: ошибка БД (%s) — 503", type(exc).__name__)
         raise _service_unavailable() from None
     if result.status == ENTER_ALREADY:
         response.status_code = status.HTTP_200_OK
@@ -471,7 +528,7 @@ def post_day_test_enter(
         404: {"description": "PARTICIPANT_NOT_FOUND"},
         409: {"description": "DAY_NOT_STARTED / DAY_ALREADY_SUBMITTED"},
         422: {"description": "BLOCK_NOT_IN_DAY / невалидное тело"},
-        503: {"description": "SERVICE_UNAVAILABLE — БД недоступна; DAY_CONTENT_MISSING"},
+        503: {"description": "SERVICE_UNAVAILABLE — ошибка БД; DAY_CONTENT_MISSING"},
     },
 )
 def put_day_marks(
@@ -489,9 +546,9 @@ def put_day_marks(
     except DayContentMissing as exc:
         _rollback(session)
         raise _content_missing(exc, "day/marks") from None
-    except (OperationalError, InterfaceError) as exc:
+    except SQLAlchemyError as exc:
         _rollback(session)
-        logger.error("day/marks: БД недоступна (%s) — 503", type(exc).__name__)
+        logger.error("day/marks: ошибка БД (%s) — 503", type(exc).__name__)
         raise _service_unavailable() from None
     logger.info(
         "day/marks: tg_user_id=%s status=ok block_id=%s", ctx.tg_user_id, result.block_id
