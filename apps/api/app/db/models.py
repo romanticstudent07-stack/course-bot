@@ -36,7 +36,9 @@ participant_state_checkpoints — чекпоинт проектора (мигр�
   - (pid, last_event_id, at); FK нет; пишет только проектор.
 
 idempotency_keys — ключи идемпотентности (миграция 0007, iter2-db-1):
-  - key text PK, kind, created_at, ttl interval, result_ref NULL, params_hash NULL;
+  - key text PK, kind, created_at, ttl interval (DEFAULT 1 hour), result_ref NULL,
+    params_hash NULL; индекс idempotency_keys_created_at_idx (created_at);
+    CHECK key <> '' и ttl > 0 — в миграции 0007;
   - ключи и kind дня — app/day_keys.py; срок ttl в логике не проверяется
     (строка есть → ключ есть); iter2-api-1 только читает.
 
@@ -216,9 +218,17 @@ class IdempotencyKey(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    ttl: Mapped[timedelta] = mapped_column(INTERVAL, nullable=False)
+    ttl: Mapped[timedelta] = mapped_column(
+        INTERVAL, nullable=False, server_default=text("interval '1 hour'")
+    )
     result_ref: Mapped[str | None] = mapped_column(Text)
     params_hash: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("key <> ''", name="ck_idempotency_keys_key_not_empty"),
+        CheckConstraint("ttl > interval '0'", name="ck_idempotency_keys_ttl_positive"),
+        Index("idempotency_keys_created_at_idx", "created_at"),
+    )
 
 
 class DayMark(Base):
@@ -236,4 +246,8 @@ class DayMark(Base):
     value: Mapped[bool] = mapped_column(Boolean, nullable=False)
     at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("block_id <> ''", name="ck_day_marks_block_id_not_empty"),
     )

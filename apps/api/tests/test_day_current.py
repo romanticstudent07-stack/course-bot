@@ -6,6 +6,8 @@
 отметки другого day_started_at не видны, submitted (ключ day_done), 503 DAY_CONTENT_MISSING,
 GET ничего не пишет, Ш4 — ключ из day_started_at, прочитанного из БД.
 Строки participant_state, day_marks и idempotency_keys тест вставляет владельцем БД.
+participant_state: NOT NULL без DEFAULT (0001) — lifecycle_phase, updated_at,
+projector_version; lifecycle_phase из CHECK 0005; позиция — все 4 поля или ни одного (0007).
 """
 from __future__ import annotations
 
@@ -110,13 +112,21 @@ def _pid(client, user_id: int) -> uuid.UUID:
 def _state(engine, pid: uuid.UUID, day_no: int | None = 1, ts: datetime = T_MSK) -> None:
     with engine.begin() as conn:
         if day_no is None:
-            conn.execute(text("INSERT INTO participant_state (pid) VALUES (:pid)"), {"pid": pid})
+            conn.execute(
+                text(
+                    "INSERT INTO participant_state "
+                    "(pid, lifecycle_phase, updated_at, projector_version) "
+                    "VALUES (:pid, 'onboarding', now(), 1)"
+                ),
+                {"pid": pid},
+            )
             return
         conn.execute(
             text(
                 "INSERT INTO participant_state "
-                "(pid, stage_no, module_no, day_no, day_started_at) "
-                "VALUES (:pid, 1, 1, :d, :ts)"
+                "(pid, lifecycle_phase, updated_at, projector_version, "
+                "stage_no, module_no, day_no, day_started_at) "
+                "VALUES (:pid, 'onboarding', now(), 1, 1, 1, :d, :ts)"
             ),
             {"pid": pid, "d": day_no, "ts": ts},
         )
