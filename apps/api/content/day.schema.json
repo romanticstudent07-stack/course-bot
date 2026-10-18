@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "course-bot/apps/api/content/day.schema.json",
+  "title": "Контент одного дня курса (iter2-api-1)",
+  "description": "Файл apps/api/content/module_<M>/day_<NN>.json. Сверх схемы в коде (app/day_content.py): block_id уникальны; есть хотя бы один critical; min_optional не больше числа некритических; day_no совпадает с именем файла.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["stage_no", "module_no", "day_no", "min_optional", "blocks"],
+  "properties": {
+    "stage_no": {"type": "integer", "minimum": 1},
+    "module_no": {"type": "integer", "minimum": 1},
+    "day_no": {"type": "integer", "minimum": 1},
+    "min_optional": {"type": "integer", "minimum": 0},
+    "blocks": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["block_id", "critical", "title_key", "help_key"],
+        "properties": {
+          "block_id": {"type": "string", "pattern": "^[a-z0-9_]{1,32}$"},
+          "critical": {"type": "boolean"},
+          "title_key": {
+            "type": "string",
+            "pattern": "^(B2|B4|B5|B7|B9|B10|B14|B15|B16|legal)\\.[a-z][a-z0-9_]*$"
+          },
+          "help_key": {
+            "type": "string",
+            "pattern": "^(B2|B4|B5|B7|B9|B10|B14|B15|B16|legal)\\.[a-z][a-z0-9_]*$"
+          }
+        }
+      }
+    }
+  }
+}

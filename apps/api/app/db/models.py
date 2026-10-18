@@ -35,6 +35,18 @@ participant_events — журнал событий участника (мигр�
 participant_state_checkpoints — чекпоинт проектора (миграция 0005, I2 checkpoint_table):
   - (pid, last_event_id, at); FK нет; пишет только проектор.
 
+idempotency_keys — ключи идемпотентности (миграция 0007, iter2-db-1):
+  - key text PK, kind, created_at, ttl interval (DEFAULT 1 hour), result_ref NULL,
+    params_hash NULL; индекс idempotency_keys_created_at_idx (created_at);
+    CHECK key <> '' и ttl > 0 — в миграции 0007;
+  - ключи и kind дня — app/day_keys.py; срок ttl в логике не проверяется
+    (строка есть → ключ есть); iter2-api-1 только читает.
+
+day_marks — отметки блоков дня (миграция 0008, iter2-db-2):
+  - PK (pid, day_started_at, block_id); FK pid → tg_user_registry;
+  - отметки относятся к одному дню по day_started_at; iter2-api-1 только читает
+    (GET /miniapp/v1/day/current), пишет — iter2-api-2.
+
 participant_state (0001) здесь НЕ моделируется: единственный писатель — проектор
 (E1/INV-1), колонка last_seen_publish_epoch — xid8 (SQLAlchemy его не знает).
 CHECK lifecycle_phase (FSM I2, D-11 «6А») добавлен миграцией 0005.
@@ -42,11 +54,12 @@ CHECK lifecycle_phase (FSM I2, D-11 «6А») добавлен миграцией
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -57,7 +70,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
+from sqlalchemy.dialects.postgresql import INET, INTERVAL, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -194,4 +207,47 @@ class ParticipantStateCheckpoint(Base):
     last_event_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class IdempotencyKey(Base):
+    __tablename__ = "idempotency_keys"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    ttl: Mapped[timedelta] = mapped_column(
+        INTERVAL, nullable=False, server_default=text("interval '1 hour'")
+    )
+    result_ref: Mapped[str | None] = mapped_column(Text)
+    params_hash: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("key <> ''", name="ck_idempotency_keys_key_not_empty"),
+        CheckConstraint("ttl > interval '0'", name="ck_idempotency_keys_ttl_positive"),
+        Index("idempotency_keys_created_at_idx", "created_at"),
+    )
+
+
+class DayMark(Base):
+    __tablename__ = "day_marks"
+
+    pid: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tg_user_registry.pid", name="day_marks_pid_fkey"),
+        primary_key=True,
+    )
+    day_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    block_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("block_id <> ''", name="ck_day_marks_block_id_not_empty"),
     )
