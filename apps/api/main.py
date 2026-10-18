@@ -10,6 +10,8 @@
   GET  /miniapp/v1/consents                  — свои согласия (1e-2), только чтение
   GET  /miniapp/v1/texts/{key}               — текст из text_registry по ключу (1d)
   POST /miniapp/v1/texts/bulk                — пачка текстов по списку ключей (1d)
+  GET  /miniapp/v1/day/current               — текущий день участника (iter2-api-1),
+                                               только чтение
   POST /security/csp-report                  — приёмник CSP-репортов (E2), без initData
                                                (security: [] в miniapp-api-contract.yaml),
                                                без rate-limit
@@ -17,6 +19,9 @@
 Все маршруты /miniapp/v1/** подключаются ТОЛЬКО через miniapp_v1 — у него
 зависимости require_init_data (HMAC + TTL) и затем rate_limit (B-1: Redis,
 RATE_LIMIT_PER_MINUTE на tg_user_id, fail-open). Новые роутеры Mini App добавлять сюда же.
+
+Контент дня (apps/api/content) загружается и проверяется в create_app:
+битый контент → исключение DayContentError, api не стартует (iter2-api-1).
 """
 from __future__ import annotations
 
@@ -25,9 +30,10 @@ import logging
 from fastapi import APIRouter, Depends, FastAPI
 
 from app.config import get_settings
+from app.day_content import load_day_content
 from app.errors import install_error_handlers
 from app.rate_limit import rate_limit
-from app.routers import consents, health, onboarding, security, texts
+from app.routers import consents, day, health, onboarding, security, texts
 from app.telegram_init_data import require_init_data
 
 
@@ -53,6 +59,9 @@ def create_app() -> FastAPI:
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
 
+    # Контент дня: битый или отсутствующий → исключение, api не стартует (iter2-api-1).
+    load_day_content()
+
     app = FastAPI(
         title="course-bot API",
         version="0.1.0-iteration-0a",
@@ -64,7 +73,9 @@ def create_app() -> FastAPI:
 
     # /miniapp/v1/** — проверка initData и rate-limit на уровне роутера, для всех маршрутов.
     app.include_router(
-        build_miniapp_v1_router(onboarding.router, consents.router, texts.router)
+        build_miniapp_v1_router(
+            onboarding.router, consents.router, texts.router, day.router
+        )
     )
 
     app.include_router(security.router)
