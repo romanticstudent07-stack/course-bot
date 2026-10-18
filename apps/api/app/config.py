@@ -15,6 +15,9 @@ DSN по процессам (B-3, D-13). Пустая переменная = н�
     своя реализация.
 DSN, пароль и имя пользователя БД не пишутся в лог и не печатаются.
 Три DSN-поля скрыты из repr() и str() настроек (repr=False, B-3c); тип — str | None, не SecretStr.
+
+Тестовый вход в день (iter2-api-2a, решение Автора В3 — А): DAY_TEST_ENTRY_ENABLED,
+по умолчанию False. Только IRONCLAD; включение — отдельным заданием ШТАБа после выката.
 """
 from __future__ import annotations
 
@@ -78,6 +81,12 @@ class Settings(BaseSettings):
 
     # --- Часовой пояс (SERVER-IRONCLAD.md) ---
     server_timezone: str = "Europe/Moscow"
+
+    # --- Тестовый вход в день (iter2-api-2a, В3 — А) ---
+    # Только IRONCLAD, по умолчанию выключен. Выключен → POST /miniapp/v1/day/test-enter
+    # отдаёт 404 до любых запросов к БД; GET /day/current отдаёт test_entry = false.
+    # В тестах включается только явно (Settings(day_test_entry_enabled=True)).
+    day_test_entry_enabled: bool = False
 
     def sqlalchemy_dsn(self) -> str:
         """DSN API: DATABASE_URL → POSTGRES_*. Та же логика, что в migrations/env.py."""

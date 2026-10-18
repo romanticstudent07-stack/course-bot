@@ -86,7 +86,8 @@ def _count(engine, sql: str) -> int:
         return conn.execute(text(sql)).scalar_one()
 
 
-# 1. mini_app_first_consent → onboarding, status_flags '{}', projector_version 1; checkpoint.
+# 1. mini_app_first_consent → onboarding, status_flags '{}', projector_version 2
+#    (PROJECTOR_VERSION с iter2-api-2a); checkpoint.
 def test_first_consent_builds_onboarding(db_engine):
     pid = _participant(db_engine, 910001)
     event_id = _event(db_engine, pid)
@@ -97,7 +98,7 @@ def test_first_consent_builds_onboarding(db_engine):
     assert state is not None
     assert state["lifecycle_phase"] == "onboarding"
     assert list(state["status_flags"]) == []
-    assert state["projector_version"] == 1
+    assert state["projector_version"] == 2
     assert _checkpoint(db_engine, pid) == event_id
 
 

@@ -1,15 +1,15 @@
 # STATE — живое состояние course-bot
-Обновлено: 18.10.2026 (сжатие STATE; #97 iter2-db-3 — 0009 на сервере ✅ cfb089d; #98 research iter2-api + карточки iter2-api-1, 2a, 2b). До 90 строк. Секретов, реальных ID и IP здесь нет.
+Обновлено: 18.10.2026 (#100 iter2-api-1 — выкат ✅ 54ca133; старт iter2-api-2a). До 90 строк. Секретов, реальных ID и IP здесь нет.
 Кто обновляет: ШТАБ даёт строки → они идут первым файлом пакета следующей задачи.
 Подробности закрытых задач — docs/HISTORY.md. Прежний STATE целиком (до сжатия 18.10, дословно: выкаты сервера до 0008, «Смержено» #49–#96, строки учёта кредитов) — docs/history/STATE-a5ef1d7.md. КОДЕРАМ HISTORY и снимок не давать.
 Правила ШТАБа — docs/process/SHTAB.md (часть 1) + docs/process/SHTAB-2.md (часть 2), читать ОБА.
 Процессные решения (роли, РЕВЬЮЕР, окна чатов, терминал, rulesets main, форки, LF, expected_tables.txt, миграции по одной) — в SHTAB.md, SHTAB-2.md, DESIGNER.md, README.md.
 ## Сейчас
-- main = a5ef1d7; сервер ✅ cfb089d, alembic 0009_app_bot, 15 таблиц; очередь — iter2-api-1 → 2a → 2b. Сервер IRONCLAD работает только с main.
-- Сервер ✅ cfb089d (18.10.2026, 07:28–07:31 MSK): 0008 → 0009_app_bot, 9 с, Traceback 0; 15 таблиц + alembic_version; rolcanlogin app_bot = f; 4.3в t|f|t|f|t|t; 4.3г t|t; outbox 0, outbox_dlq 0; 7/7 Up, 5 healthy, StartedAt не менялись; 200/200/401; бэкап db-20261018_072841-before-0009.dump 41722 Б (116 объектов). #98 — только docs, выката не нужно.
+- main = 54ca133; сервер ✅ 54ca133 (#100), alembic 0009_app_bot, 15 таблиц; GET /miniapp/v1/day/current живой (401 без initData); text_registry 30 (18 B9.day_*); очередь — iter2-api-2a → 2b. Сервер IRONCLAD работает только с main.
+- Сервер ✅ 54ca133 (18.10.2026, 16:27–20:22 MSK): cfb089d → 54ca133 (#98, #99, #100), 18 файлов, миграций 0; пересоздан только api, healthy, RestartCount 0; texts load «загружено 18, обновлено 12, лишних в БД 0»; 7/7 Up, 5 healthy; данные участников не тронуты. Образы api и migrate — 54ca133, projector — 34907af.
 - Норма сервера: 7/7 Up, 5 healthy (db, redis, garage, api, miniapp), healthcheck нет у bot и projector; curl / 200, /healthz 200, /miniapp/v1/onboarding/status 401. Роли: api — coursebot_api, projector — coursebot_projector, alembic и texts load — владелец (только DC --profile tools run --rm --no-deps migrate); env_file нет ни у одного сервиса; repr/str Settings без DSN (api и projector). Перед каждой миграцией — бэкап before-000N и DC --profile tools build migrate.
 - bot при выкатах melochi-2 и 0007–0009 не пересобирался (комментарий apps/bot/Dockerfile #87 и docstring #83 подтянутся при следующем выкате bot). Ручной projector once не нужен (SERVER-IRONCLAD).
-- В БД (17.10): tg_user_registry 2, consent_events 4, participant_events 2: второй участник — живая проверка Автора на втором аккаунте 15.10 08:51 MSK (miniapp-fix).
+- В БД (18.10): tg_user_registry 2, consent_events 4, participant_events 2, participant_state 2, day_marks 0; второй участник — живая проверка Автора 15.10 (miniapp-fix).
 - ЗАКРЫТО: И1 (1d, B-1, 1e-1, 1e-2, 1e-2b), projector, returning, ЭТАП B-3 (14.10; D-13 и D-24 — в архиве), miniapp-fix и melochi-2 (15.10; D-23 → архив; gitleaks по истории — секретов 0), DOCS D-2/3/8/12, D-11/16/21, D-22; И2 БД: iter2-db-1 (0007) ✅ b27bdc8, iter2-db-2 (0008) ✅ c5715b6, iter2-db-3 (0009) ✅ cfb089d. Подробно — снимок docs/history/STATE-a5ef1d7.md.
 - DEFECTS-FOUND.md < 25 000 байт (prep-projector: правило А — D-15, D-17, D-18, D-19 в архиве целиком); DEFECTS-ARCHIVE.md КОДЕРАМ кода не давать.
 - Бэкапы before-0004 ✅ (02.10), before-0005 ✅ (05.10), before-0006 ✅ (09.10), before-b3d ✅ (14.10), before-0007 ✅ (17.10, 36771 Б), before-0008 ✅ (17.10, 39592 Б), before-0009 ✅ (18.10, 41722 Б). Downgrade ниже 0004 запрещён (стирает журнал согласий).
@@ -21,7 +21,7 @@
 ## Смержено (подробно — docs/HISTORY.md и снимок docs/history/STATE-a5ef1d7.md)
 - Сервер ✅ после каждого мержа ниже (только docs — только pull).
 - #22–#43 — docs/HISTORY.md; #49–#96 — снимок docs/history/STATE-a5ef1d7.md, раздел «Смержено».
-- #97 iter2-db-3 (0009_app_bot, роль app_bot, выкат 18.10 07:31 MSK); #98 research iter2-api + карточки iter2-api-1, 2a, 2b.
+- #97 iter2-db-3 (0009_app_bot, роль app_bot, выкат 18.10 07:31 MSK); #98 research iter2-api + карточки iter2-api-1, 2a, 2b; #99 сжатие STATE (снимок docs/history/STATE-a5ef1d7.md); #100 iter2-api-1 (GET day/current, контент дня, config/texts/day.json — 18 заглушек B9) — выкат ✅ 18.10.
 ## Решения Автора (процессные — в правилах, см. шапку)
 - Бот — long polling. Cloudflare Tunnel — нет. Прод — российский VPS (фаворит Timeweb Cloud), туннель дом→VPS autossh/WireGuard.
 - Память: сумма лимитов ≤ 2 ГБ; сейчас 1920 МБ (с одноразовым migrate 128 МБ, B-3d-1) (api 384, db 384, bot 512, garage 192, miniapp 128, projector 128, redis 64), реально ~362 МБ (06.10, projector 53).
@@ -46,10 +46,10 @@
 ## Цель и сроки
 - Всё до итерации 6 + 0-Б. Сроков нет: сначала правильная настройка. AI Chat Opus без кредитов до 31.12.2026 → пересмотр плана 01.11.2026 (решение 29.09).
 ## Очередь
-0. [сейчас] И2 API: iter2-api-1 → iter2-api-2a → iter2-api-2b (карточки — docs/tasks, миграций нет; api-1 — Р0+, Codespaces, РЕВЬЮЕР нет). Позже — iter2-send-1 (заметки ниже).
+0. [сейчас] И2 API: iter2-api-2a (Р0+, РЕВЬЮЕР да) → iter2-api-2b. Позже — iter2-send-1 (заметки ниже); задание «включить флаг DAY_TEST_ENTRY_ENABLED» (compose + .env.example, Р0) — после выката 2a.
 1. Итерации 2–6 по build-order.md, затем 0-Б.
 ## Для задач И2
-- Для api-1: после выката — DC --profile tools run --rm --no-deps migrate python -m app.texts load; ключи заглушек — apps/api/config/texts/<домен>.json по KEY_PATTERN texts.py.
+- api-1 закрыта 18.10. Норма texts load с #100: «загружено 0, обновлено 30, лишних в БД 0».
 - Для карточки iter2-api-2 (РЕВЬЮЕР #95, Н6): pid только из проверенного initData через tg_user_registry, не из тела; day_started_at из participant_state в той же транзакции; block_id — белый список блоков текущего дня + ограничение длины; участнику с tombstoned_at отметки не писать; тест «pid/day_started_at из тела игнорируются»; проектор считает «пришёл» и «+1 ч» только по текущему day_started_at.
 - Для iter2-send-1 (ревью #97): Н1 не-uuid — параметром в транзакции; Н2 тест tombstoned_at → адресат пуст; Н3 запрет app_bot на consent_events; Н4 rolcanlogin при выкате; Н6 current_user = 'app_bot'; LOGIN/пароль/DSN app_bot и драйвер БД в apps/bot (согласие Автора).
 ## Мелочи (собирать попутно в задачи без БД)
@@ -68,6 +68,7 @@
 - 17.10: ожидание числа таблиц в бэкапе before-000N = схема ДО этой миграции; DESIGNER.md — карточка до 150 строк (iter2-db-3 — 174); role_engine принимает только APP_ROLES — новая роль в тестах → своя функция.
 - 18.10: в проверках таблиц фильтр table_name <> 'alembic_version', в бэкапе ждать N + 1; откат миграции на сервере — только восстановлением дампа по решению Автора; Р0 через сайт — не больше 3 файлов (#98 — 4, отступление).
 - 18.10: STATE вырос до 32 КБ / 98 строк и съел бюджет чтения КОДЕРА — сжимать, когда STATE > 90 строк или > 15 КБ.
+- 18.10: новые тексты требуют пересборки образа migrate до texts load (как и миграции); бюджет чтения КОДЕРА до 100–120 КБ — не резать (решение Автора 18.10); порог сжатия STATE — > 90 строк или > 20 КБ.
 ## К пересмотру 01.11.2026 (не проверено)
 - Free Quota Deep Research: что покрывает и сколько (для D-1, D-5, D-9, 152-ФЗ, PSP).
 - Триггеры денег: Т1 — апгрейд тарифа на месяц; Т3 — GenTeam + свой Claude Code. Цены, механика.
@@ -87,3 +88,4 @@
 - Строки задач от 1d до «долги #22–#43 → HISTORY + SHTAB-2» — дословно в снимке docs/history/STATE-a5ef1d7.md, раздел «Учёт кредитов» (факт после 1d — 0 у всех).
 - #93–#98 (исследования И2, iter2-db-1/2/3, карточки iter2-api): строки не внесены.
 - сжатие STATE 18.10 / Р0 / 0 / 0 / часы не замерены (сайт, 2 файла).
+- iter2-api-1 / Р0+ / 0 / 0 / часы не замерены (КОДЕР 1 окно, З2 — 1 круг CI; сервер 1 выкат).
