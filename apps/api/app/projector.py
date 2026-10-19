@@ -5,9 +5,10 @@
            на отдельном соединении всё время работы (второй экземпляр ждёт);
   - once — один проход: lock → проход → unlock;
            печатает «projector once: обработано K, пропущено S».
+           На сервере рядом с run не запускать (infra/SERVER-IRONCLAD.md:146) — проверка по логам.
 
 Источники (docs/architecture/**, read-only; выдержки — docs/tasks/projector-2.md, раздел 4,
-и docs/tasks/iter2-api-2a.md, раздел 8):
+docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, раздел 8):
   - errata-unified E1: participant_state — обычная таблица, наполняемая проектором; API туда
     не пишет никогда (INV-1). SQL записи в participant_state — только в этом модуле
     (проверяет tests/test_projector_static.py);
@@ -21,7 +22,12 @@
     (WHERE day_no IS NULL). 0 строк (позиция уже есть или строки нет) → WARNING, пропуск.
     lifecycle_phase, status_flags и author_pause_reason не трогаются (В21).
     Граница: каждое из stage_no, module_no, day_no — целое от 1 до MAX_POSITION_VALUE
-    (32767, предел smallint); вне границы, не целое или bool → «bad payload», пропуск.
+    (32767, предел smallint); вне границы, не целое или bool → «bad payload», пропуск;
+  - day_report_submitted (iter2-api-2b, В18) — missed_streak = 0 при ЛЮБОМ вердикте, только
+    если day_started_at строки совпадает с payload.day_started_at (текущий день, ревью #95).
+    0 строк (старый день или строки нет) → WARNING, пропуск. Нет строки day_started_at
+    в payload → «bad payload»; строка не разбирается как timestamptz → DataError в savepoint →
+    «bad payload». Без ON CONFLICT; lifecycle_phase, status_flags и lives не упоминаются (Ш1).
 
 Курсор — по pid: события e с e.id > coalesce(c.last_event_id, 0) через LEFT JOIN
 participant_state_checkpoints c USING (pid), ORDER BY e.id, LIMIT 500. Глобальный
@@ -37,7 +43,8 @@ DataError или IntegrityError → откат только этого savepoint
 kind и именем класса ошибки (без payload и pid), пропуск, checkpoint pid сдвигается на id
 события — одно битое событие не останавливает проектор. Другие SQLAlchemyError — откат
 всей пачки, как раньше.
-participant_events только читается; at и payload читаются для day_entered, в лог не идут.
+participant_events только читается; at и payload читаются для day_entered и
+day_report_submitted, в лог не идут.
 author_pause_reason и last_seen_publish_epoch не трогаются.
 DSN проектора — Settings.projector_dsn(): PROJECTOR_DATABASE_URL → DATABASE_URL → POSTGRES_*
 (B-3a-2; роль app_projector — миграция 0006). DSN не логируется.
@@ -75,6 +82,8 @@ PHASE_PRE_REGISTERED = "pre_registered"
 PHASE_ONBOARDING = "onboarding"
 # Пишет POST /miniapp/v1/day/test-enter (app/routers/day.py) под замком participant:pid.
 EVENT_KIND_DAY_ENTERED = "day_entered"
+# Пишет POST /miniapp/v1/day/report/submit (app/routers/day.py) под замком participant:pid.
+EVENT_KIND_DAY_REPORT_SUBMITTED = "day_report_submitted"
 # Верхняя граница stage_no / module_no / day_no (smallint).
 MAX_POSITION_VALUE = 32767
 USAGE = "usage: python -m app.projector run | once"
@@ -83,7 +92,7 @@ _LOCK = text("SELECT pg_advisory_lock(hashtext('participant_state_projector'))")
 _UNLOCK = text("SELECT pg_advisory_unlock(hashtext('participant_state_projector'))")
 _PING = text("SELECT 1")
 
-# at и payload нужны для day_entered; в лог не попадают (только id и kind).
+# at и payload нужны для day_entered и day_report_submitted; в лог не попадают (только id и kind).
 _SELECT_BATCH = text(
     """
     SELECT e.id, e.pid, e.kind, e.at, e.payload
@@ -127,6 +136,19 @@ _SET_POSITION = text(
     """
 )
 
+# day_report_submitted: только текущий день (совпадение day_started_at). Без ON CONFLICT;
+# фаза, флаги и жизни не упоминаются (Ш1, В18).
+_RESET_MISSED_STREAK = text(
+    """
+    UPDATE participant_state
+    SET missed_streak = 0,
+        updated_at = now(),
+        projector_version = :version
+    WHERE pid = :pid AND day_started_at = CAST(:day_started_at AS timestamptz)
+    RETURNING pid
+    """
+)
+
 _UPSERT_CHECKPOINT = text(
     """
     INSERT INTO participant_state_checkpoints (pid, last_event_id, at)
@@ -151,11 +173,7 @@ def _skip(event_id: int, kind: str, reason: str) -> None:
     logger.warning("projector: skip event id=%s kind=%s (%s)", event_id, kind, reason)
 
 
-def position_from_payload(payload: Any) -> tuple[int, int, int] | None:
-    """(stage_no, module_no, day_no) из payload day_entered или None (битый payload).
-
-    Каждое значение — int (не bool) от 1 до MAX_POSITION_VALUE включительно.
-    """
+def _payload_dict(payload: Any) -> dict[str, Any] | None:
     if isinstance(payload, str):
         try:
             payload = json.loads(payload)
@@ -163,15 +181,40 @@ def position_from_payload(payload: Any) -> tuple[int, int, int] | None:
             return None
     if not isinstance(payload, dict):
         return None
+    return payload
+
+
+def position_from_payload(payload: Any) -> tuple[int, int, int] | None:
+    """(stage_no, module_no, day_no) из payload day_entered или None (битый payload).
+
+    Каждое значение — int (не bool) от 1 до MAX_POSITION_VALUE включительно.
+    """
+    data = _payload_dict(payload)
+    if data is None:
+        return None
     values: list[int] = []
     for field in _POSITION_FIELDS:
-        value = payload.get(field)
+        value = data.get(field)
         if isinstance(value, bool) or not isinstance(value, int):
             return None
         if value < 1 or value > MAX_POSITION_VALUE:
             return None
         values.append(value)
     return values[0], values[1], values[2]
+
+
+def report_day_started_at(payload: Any) -> str | None:
+    """payload.day_started_at (строка dsa) из day_report_submitted или None (битый payload).
+
+    Разбор строки как timestamptz — в SQL (CAST): ошибка → DataError в savepoint.
+    """
+    data = _payload_dict(payload)
+    if data is None:
+        return None
+    value = data.get("day_started_at")
+    if not isinstance(value, str) or not value:
+        return None
+    return value
 
 
 def _apply_first_consent(conn: Connection, event_id: int, pid: uuid.UUID, kind: str) -> bool:
@@ -220,6 +263,23 @@ def _apply_day_entered(
     return True
 
 
+def _apply_day_report_submitted(
+    conn: Connection, event_id: int, pid: uuid.UUID, kind: str, payload: Any
+) -> bool:
+    started = report_day_started_at(payload)
+    if started is None:
+        _skip(event_id, kind, "bad payload")
+        return False
+    applied = conn.execute(
+        _RESET_MISSED_STREAK,
+        {"pid": pid, "day_started_at": started, "version": PROJECTOR_VERSION},
+    ).first()
+    if applied is None:
+        _skip(event_id, kind, "not current day or no state")
+        return False
+    return True
+
+
 def _apply_event(
     conn: Connection,
     event_id: int,
@@ -233,6 +293,8 @@ def _apply_event(
         return _apply_first_consent(conn, event_id, pid, kind)
     if kind == EVENT_KIND_DAY_ENTERED:
         return _apply_day_entered(conn, event_id, pid, kind, at, payload)
+    if kind == EVENT_KIND_DAY_REPORT_SUBMITTED:
+        return _apply_day_report_submitted(conn, event_id, pid, kind, payload)
     _skip(event_id, kind, "unknown kind")
     return False
 

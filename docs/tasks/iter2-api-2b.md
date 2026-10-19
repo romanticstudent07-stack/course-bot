@@ -3,6 +3,7 @@
 ## 1. Паспорт
 - id: iter2-api-2b. PR: «iter2-api-2b: POST day/report/submit + kind day_report_submitted».
 - Ветка: feat/iter2-api-2b. Режим: Р0+. Начинать после мержа iter2-api-2a. Миграций нет.
+- Дополнения ШТАБа Д1–Д5 (19.10) внесены КОДЕРОМ: разделы 6, 9, 10; Д4 — docs/DEFECTS-FOUND.md, D-27.
 
 ## 2. Цель
 Участник отправляет отчёт дня. Зачёт фиксируется только после подтверждённой записи в БД (П-31).
@@ -25,15 +26,23 @@
 AGENT-BRIEF.md 15,0; apps/api/app/projector.py 11,3 (после 2a); apps/api/app/routers/day.py, app/participant_lock.py,
 app/day_keys.py, app/day_content.py (из api-1/2a); apps/api/app/errors.py (формат 422; КБ — ШТАБ);
 tests/test_day_marks.py (образец; КБ — ШТАБ). Чтение КОДЕРА ≈ 26 КБ + файлы iter2-api-1/2a.
+Для Д1–Д2 КОДЕР дополнительно прочитал: tests/conftest.py, tests/test_day_test_enter.py, main.py,
+app/db/models.py, app/db/session.py, app/telegram_init_data.py.
 
 ## 6. Файлы
 Создать:
-- apps/api/app/day_report.py — вердикт и params_hash, чистые функции;
-- tests/test_day_report_unit.py, tests/test_day_report_submit.py, tests/test_projector_day_report.py.
+- apps/api/app/day_report.py — вердикт, проверка набора и params_hash, чистые функции;
+- apps/api/tests/test_day_report_unit.py, test_day_report_submit.py, test_projector_day_report.py;
+- apps/api/tests/test_day_writers.py — Д1 (гонка двух писателей) и Д2 (флаг выкл. → 0 обращений к БД).
 Изменить:
-- app/routers/day.py — POST /day/report/submit;
-- app/projector.py — kind day_report_submitted.
-Итого 6 файлов, ≈ 500 строк.
+- apps/api/app/routers/day.py — POST /day/report/submit; test-enter: флаг проверяется в обработчике
+  до try (Д2: на 404 сессия не трогается, даже rollback);
+- apps/api/app/projector.py — kind day_report_submitted;
+- docs/STATE.md — строки ШТАБа С1–С3 и «Процесс»;
+- docs/DEFECTS-FOUND.md — D-27 (Д4; D-25 и D-26 зарезервированы ШТАБом, STATE «Долги ШТАБа»);
+- docs/tasks/iter2-api-2b.md — эта карточка (Д3, Д1–Д2 в разделе 9, раздел 6).
+Настройки api не меняются → infra/docker-compose.dev.yml и .env.example не трогаются (Д5).
+Итого 10 файлов.
 
 ## 7. Контракт
 POST /miniapp/v1/day/report/submit:
@@ -94,13 +103,22 @@ test_projector_day_report:
 - missed_streak обнуляется только при совпадении day_started_at; старый день → пропуск;
 - status_flags = '{block_lives}' и lives не меняются.
 
-tools/check.sh — быстрые (unit); с БД — CI.
+test_day_writers (дополнения ШТАБа):
+- Д1, два потока с БД: commit первого писателя придержан, второй ждёт замок participant:pid
+  (ожидание видно в pg_locks); test-enter + test-enter → одно событие day_entered и один ключ
+  day_enter; report/submit, затем marks → marks 409 DAY_ALREADY_SUBMITTED, отметки = отчёт;
+  marks, затем report/submit → отчёт принят, отметки = отчёт;
+- Д2, без БД: TestClient, подменены require_init_data, rate_limit и get_db_session (сессия-шпион),
+  флаг выкл. → POST /miniapp/v1/day/test-enter = 404 NOT_FOUND, у шпиона 0 обращений.
+
+tools/check.sh — быстрые (unit и HTTP без БД); с БД — CI.
 
 ## 10. Сервер (после мержа)
 - Миграций нет. Пересобрать и перезапустить api и projector ВМЕСТЕ (Ш5).
 - Проверки:
   - /healthz 200; POST /miniapp/v1/day/report/submit без initData → 401;
-  - projector once → пропущено 0, в логе нет WARNING;
+  - логи projector: Traceback 0, WARNING 0 (Д3: projector once на сервере ЗАПРЕЩЁН —
+    infra/SERVER-IRONCLAD.md:146, зависнет на lock рядом с run);
   - число таблиц не изменилось (фильтр table_name <> 'alembic_version').
 - Флаг входа — по отдельному заданию ШТАБа (не в этой задаче).
 
@@ -116,10 +134,10 @@ tools/check.sh — быстрые (unit); с БД — CI.
 
 ## 12. Готовность
 - CI 7/7; РЕВЬЮЕР — 0 блокирующих.
-- Тест П-31 зелёный. Живые проверки ✅.
+- Тест П-31 зелёный. Тесты Д1 и Д2 зелёные. Живые проверки ✅.
 
 ## 13. Оценка
 Автор ≈ 0,8 ч (+ РЕВЬЮЕР); кредиты 0.
 
 ## 14. РЕВЬЮЕР
-Да — П-31, идемпотентность, initData → pid (Ш7).
+Да — П-31, идемпотентность, initData → pid (Ш7), гонка писателей (Д1).
