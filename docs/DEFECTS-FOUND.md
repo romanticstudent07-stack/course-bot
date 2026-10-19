@@ -228,4 +228,22 @@
 
 - **D-24** (пароль владельца БД в контейнере api, env_file) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 14.10).
 
-<!-- следующие записи: новые — с D-25 -->
+- **D-25, D-26** — номера зарезервированы ШТАБом (docs/STATE.md, «Долги ШТАБа»): ключ замка I2B
+  'life:' vs 'participant:' (В20) и DOCS PR в CT (тела day/*, «повтор = тот же 200»). Записи внесёт ШТАБ.
+
+## D-27. Будущий tombstone/erasure обязан брать замок participant:pid
+
+- **Файл архитектуры (зеркало):** правила tombstone/erasure (И1 tombstone_semantics; точный раздел — ШТАБ);
+  ключ замка — В20 (docs/tasks/iter2-api-2a.md).
+- **Файлы реализации:** `apps/api/app/participant_lock.py` (`active_pid_locked`: find → замок →
+  повторная проверка tombstoned_at IS NULL); писатели под замком — `apps/api/app/routers/day.py`
+  (test-enter, marks, report/submit); tombstone/erasure — пока не создан.
+- **Суть расхождения:** Будущий tombstone/erasure обязан брать тот же замок
+  pg_advisory_xact_lock(hashtext('participant:' || pid)); иначе tombstone между повторной проверкой
+  и commit даст запись для удалённого pid. Источник: ревью PR #101.
+- **Предлагаемое решение:** задача tombstone/erasure ставит tombstoned_at (и удаляет данные) в
+  транзакции, которая сначала берёт этот замок (`lock_participant`), и приносит тест гонки
+  «писатель дня + tombstone» (второй ждёт замок, записи для удалённого pid нет).
+- **Ждём решения Автора:** нет.
+
+<!-- следующие записи: новые — с D-28 (D-25, D-26 зарезервированы ШТАБом) -->
