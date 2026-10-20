@@ -11,6 +11,8 @@
 **Источник истины** — репозиторий `romanticstudent07-stack/DOCS-course-bot`.
 В настоящем репозитории его копия зеркалируется в папку `docs/architecture/` как
 **read-only-зеркало** (обновляется автоматически GitHub Actions из DOCS-course-bot).
+Решения Автора, принятые до правки канона, — `docs/decisions/R-2026-10-*.md`
+и `docs/STATE.md` («Решения, перекрывающие канон»); при расхождении они главнее зеркала.
 
 ## КРИТИЧНО: папка `docs/architecture/` — только для чтения
 
@@ -27,10 +29,8 @@
 
 Сразу после клона (одноразово):
 
-```bash
-git config core.hooksPath .githooks
-chmod +x .githooks/pre-commit
-```
+    git config core.hooksPath .githooks
+    chmod +x .githooks/pre-commit
 
 Без этой команды `.githooks/pre-commit` не работает, и защита от случайного
 коммита в `docs/architecture/**` и `.env` не активна. Агент, работающий локально
@@ -53,9 +53,7 @@ chmod +x .githooks/pre-commit
 
 При расхождении между слоями побеждает верхний:
 
-```
-корпус v3 → И1 → И2 → И3 → И4 → Б17 → SEAM-PATCH-1 → OVERRIDES.yaml → ERRATA-UNIFIED (высшее)
-```
+    корпус v3 → И1 → И2 → И3 → И4 → Б17 → SEAM-PATCH-1 → OVERRIDES.yaml → ERRATA-UNIFIED (высшее)
 
 При конфликте YAML — читать `docs/architecture/normative/OVERRIDES.yaml`.
 
@@ -75,39 +73,37 @@ chmod +x .githooks/pre-commit
    Все критичные операции — только через серверную валидацию `initData`.
 8. **Не выдумывать значения открытых решений Автора** (см. ниже).
 9. **Не пушить в `main` напрямую** — только через PR.
-10. **Не встраивать платёжные экраны внутрь Mini App** — оплата пока только
-    на внешней ссылке / реквизитах, вне Telegram.
+10. **Не встраивать платёжные экраны и упоминания оплаты в Mini App (Р-1)**: оплата —
+    в личной переписке с Автором, вне продукта.
 11. **Не возвращаться к MinIO** — с октября 2025 бесплатных Docker-образов и бинарников
     community-версии нет (только исходники; issue minio/minio #21647), 25.04.2026 репозиторий
     minio/minio архивирован. Используем Garage (`dxflrs/garage`) как S3 в dev.
 
 ## Структура репозитория (по DIVISION.md)
 
-```
-course-bot/
-├── apps/
-│   ├── miniapp/           React 18 + Vite + TypeScript + Zustand + tanstack-query
-│   ├── bot/               Python 3.12 + aiogram 3
-│   └── api/               FastAPI + PostgreSQL 16 + Redis 7 + Alembic
-├── packages/
-│   └── shared/            общие типы, схемы, константы, OpenAPI-контракт
-├── infra/                 docker-compose, IaC, миграции, garage/, инструкции dev-входа (Tailscale serve)
-├── docs/
-│   ├── architecture/      ← read-only зеркало DOCS-course-bot (не править!)
-│   └── DEFECTS-FOUND.md   ← сюда писать расхождения архитектуры с реальностью
-├── .github/
-│   ├── workflows/         CI + sync-architecture.yml
-│   └── PULL_REQUEST_TEMPLATE.md
-├── .githooks/
-│   └── pre-commit         защита от коммитов в docs/architecture/ и .env
-├── .genspark/
-│   └── rules.md           жёсткие правила для Genspark Code
-├── .env.example
-├── .gitignore
-├── AGENTS.md              этот файл
-├── CONTEXT.md
-└── README.md
-```
+    course-bot/
+    ├── apps/
+    │   ├── miniapp/           React 18 + Vite + TypeScript + Zustand + tanstack-query
+    │   ├── bot/               Python 3.12 + aiogram 3
+    │   └── api/               FastAPI + PostgreSQL 16 + Redis 7 + Alembic
+    ├── packages/
+    │   └── shared/            общие типы, схемы, константы, OpenAPI-контракт
+    ├── infra/                 docker-compose, IaC, миграции, garage/, инструкции dev-входа (Tailscale serve)
+    ├── docs/
+    │   ├── architecture/      ← read-only зеркало DOCS-course-bot (не править!)
+    │   └── DEFECTS-FOUND.md   ← сюда писать расхождения архитектуры с реальностью
+    ├── .github/
+    │   ├── workflows/         CI + sync-architecture.yml
+    │   └── PULL_REQUEST_TEMPLATE.md
+    ├── .githooks/
+    │   └── pre-commit         защита от коммитов в docs/architecture/ и .env
+    ├── .genspark/
+    │   └── rules.md           жёсткие правила для Genspark Code
+    ├── .env.example
+    ├── .gitignore
+    ├── AGENTS.md              этот файл
+    ├── CONTEXT.md
+    └── README.md
 
 ## Как валидировать `initData` (единственная критичная процедура безопасности)
 
@@ -122,91 +118,31 @@ course-bot/
 
 Никогда не доверять `Telegram.WebApp.initDataUnsafe` — только серверная валидация.
 
-## Оплата: логика допуска (текущий режим — Вариант A, ручной)
+## Оплата и доступ участника (Р-1, Р-2, Р-4)
 
-Приём оплаты происходит **вне Telegram Mini App**: перевод на карту самозанятого
-(через СБП или по номеру карты). Внутри Mini App никаких платёжных экранов быть
-не должно.
+Оплата полностью вне продукта (Р-1, 17.10.2026): в Mini App нет платёжных экранов
+и упоминаний оплаты (`onb.payment`, `payment.*` не делать). Оплата — в личной переписке
+с Автором, доступ к курсу Автор выдаёт лично. Виджет PSP внутри Mini App не делать никогда.
 
-### FSM платежа (Вариант A):
+Схема доступа (Р-2, 17.10.2026), кратко:
 
-```
-[created] ──/pay──> [awaiting_transfer]
-   │                     │
-   │             клиент отправляет
-   │             скриншот в бот
-   │                     │
-   │                     ▼
-   │               [screenshot_received]
-   │                     │
-   │             бот пересылает Автору
-   │                     │
-   │                     ▼
-   │            Автор глазами сверяет
-   │            выписку по карте с суммой
-   │                     │
-   │       ┌─────────────┴─────────────┐
-   │       │                           │
-   │  /confirm_payment           /reject_payment
-   │       │                           │
-   │       ▼                           ▼
-   │  [confirmed]  ──────>  [rejected]
-   │       │
-   │       ▼
-   │  бот шлёт клиенту
-   │  инвайт-ссылку
-   │  на Mini App
-   │       │
-   │       ▼
-   │  Автор в «Мой Налог»
-   │  вручную создаёт чек
-   │  и отправляет клиенту
-```
+1. Оплата — в личной переписке с Автором (вне продукта).
+2. Автор шлёт участнику ссылку на бота и персональное кодовое слово.
+3. Участник нажимает Start.
+4. Бот просит ввести промокод.
+5. Участник пишет своё слово.
+6. Бот шлёт в админ-тему Рабочей группы «слово + ID» с кнопками [Выдать доступ] / [Запретить].
+7. После «Выдать доступ» бот пишет участнику, что можно продолжать.
+8. Онбординг в Mini App: возраст → согласия → участник создан (pid, SEAM-1). Без выданного
+   доступа — нейтральный экран «доступ не открыт», участник не создаётся.
 
-### Таблицы БД (минимум для Варианта A):
+Флажок «доступ выдан» хранится в новой таблице по `tg_user_id` (миграция — в задаче Р-2,
+после send-1, с РЕВЬЮЕРОМ). Пока не построено — не реализовывать без карточки.
+Имя команды Панели и тексты сообщений — в карточке задачи.
 
-- `payment_pending(user_id, amount, currency, status, screenshot_file_id,
-   created_at, confirmed_at, confirmed_by, client_op_id)`
-- `payment_confirmed(user_id, amount, currency, confirmed_at, confirmed_by,
-   receipt_url_manual, client_op_id)` — куда переезжают строки после `/confirm_payment`.
-
-### Команды бота (Вариант A):
-
-- **Клиент:** `/pay` — бот показывает реквизиты и просит скриншот.
-- **Клиент:** отправка скриншота — бот меняет статус на `screenshot_received`,
-  пересылает Автору.
-- **Автор:** `/confirm_payment <user_id>` — статус `confirmed`, бот шлёт клиенту
-  инвайт-ссылку.
-- **Автор:** `/reject_payment <user_id> <причина>` — статус `rejected`,
-  бот отвечает клиенту.
-
-### Связь с Mini App (SEAM-PATCH-1):
-
-Участник **создаётся при первом запуске Mini App**, не в момент оплаты.
-`payment_confirmed` — просто «префлаг доступа». В момент запуска Mini App
-через инвайт-ссылку:
-1. `SEAM-1` создаёт `participant` в БД.
-2. Проверяется наличие записи в `payment_confirmed` для этого `user_id`.
-3. Если запись есть — Age Gate → PID создан → Курс стартовал.
-4. Если записи нет — Mini App показывает экран «сначала оплатите через бота».
-
-### Реквизиты (в `.env`, не в коде!):
-
-```
-PAYMENT_MODE=manual
-PAYMENT_CARD_NUMBER=            # 2200 XXXX XXXX XXXX
-PAYMENT_CARD_HOLDER=            # ФИО как на карте
-PAYMENT_SBP_PHONE=              # +7XXXXXXXXXX
-PAYMENT_SBP_BANK=               # Т-Банк, Сбер, ...
-PAYMENT_AMOUNT_RUB=             # 5000
-PAYMENT_CURRENCY=RUB
-```
-
-### Будущее (Вариант B — YooKassa для самозанятых):
-
-Переменные `PSP_*` в `.env.example` уже заготовлены. Когда решим переехать,
-меняем `PAYMENT_MODE=yookassa` и настраиваем webhook `/payment/webhook/yookassa`.
-Пока — **не реализовывать**, не тратить время.
+Будущее — YooKassa (основной) / CloudPayments (запасной) только на внешнем сайте, вне Telegram (Р-4).
+Возвраты — вручную; `/refund` Панели Автора — учётная операция без PSP. Переменные `PSP_*`
+в `.env.example` остаются. Сейчас ничего платёжного не строить.
 
 ## Порядок работы агента
 
@@ -225,24 +161,20 @@ PAYMENT_CURRENCY=RUB
 - **Bot:** Python 3.12 + aiogram 3.
 - **Backend:** FastAPI + PostgreSQL 16 + Redis 7 + Alembic.
 - **S3 dev:** Garage (`dxflrs/garage`) — S3-совместимое хранилище, локально в compose.
-- **S3 prod:** Yandex Object Storage (или Timeweb / VK Cloud — открытый вопрос Автора).
+- **S3 prod:** Timeweb Object Storage, только бэкапы и WORM-аудит (Р-10).
   Переезд dev → prod — смена `S3_ENDPOINT` в `.env`, код на `boto3` не переписывается.
 - **Хостинг разработки:** локальный сервер Автора (Ubuntu Server IRONCLAD).
   Бот — на long polling, webhook не ставится (D-4). Dev-вход в Mini App —
   Tailscale serve (только tailnet, только Автор); Cloudflare Tunnel не используется.
-- **Вход prod / внешние тестировщики:** позже — российский VPS как вход, туннель
-  дом→VPS через autossh или WireGuard; провайдер VPS — открытый вопрос Автора (D-5).
-- **Хостинг prod:** будет выбран позже (Yandex Cloud vs Timeweb — открытый вопрос).
+- **Вход prod / внешние тестировщики:** позже — туннель дом→VPS Timeweb
+  через autossh или WireGuard (D-5, Р-9).
+- **Хостинг prod:** Timeweb Cloud: VPS + managed PostgreSQL; Yandex Cloud — запасной (Р-9).
 
 ## Открытые вопросы Автора (агент их не решает)
 
-- Выбор облачного провайдера prod (Yandex Cloud vs Timeweb).
-- Провайдер S3 в prod (Yandex Object Storage vs Timeweb vs VK Cloud) —
-  dev-контур на Garage уже определён.
-- Значение `full_backup_rotation_cycle`.
 - Три несовместимости Б17 (см. `docs/architecture/normative/README.md`).
 - Определение ролей `finance` и `moderator`.
-- Дефект D-1 (доставка медиа: pre-signed URL vs внешний Telegram-канал).
+- Решённое — `docs/decisions/R-2026-10-*.md`.
 
 Полный трекер открытых вопросов — **GitHub Issues** репозитория с меткой
 `author-decision`. При задачах, задевающих эти пункты — вежливо вернуть вопрос

@@ -1,6 +1,6 @@
 # AGENT-BRIEF.md — шпаргалка для AI-агента (читать ПЕРВОЙ)
 
-Версия 2.2 · 15.10.2026. Актуальный hash main — в промпте или в `docs/STATE.md`.
+Версия 2.3 · 19.10.2026. Актуальный hash main — в промпте или в `docs/STATE.md`.
 Заменяет обязательное чтение 9 файлов. Если промпт задачи противоречит этому
 файлу — прав промпт. Если этот файл противоречит AGENTS.md / CONTEXT.md в части
 «что читать» и «как тестировать» — прав этот файл.
@@ -71,7 +71,7 @@ Telegram-курс личной трансформации: Mini App + бот + b
 
 ## 6. Что уже есть в коде
 
-Сводка по коду (main a494599). Подробности — docstring модулей: их читать, если файл в «ЧТО ПРОЧИТАТЬ».
+Сводка по коду (main 9f3746a). Подробности — docstring модулей: их читать, если файл в «ЧТО ПРОЧИТАТЬ».
 
 - `apps/api/main.py` — сборка приложения. Все `/miniapp/v1/**` идут ТОЛЬКО через общий роутер
   `build_miniapp_v1_router`: сначала `require_init_data`, затем `rate_limit` (401 раньше 429).
@@ -99,14 +99,24 @@ Telegram-курс личной трансформации: Mini App + бот + b
   по каждому kind решает последнее событие; нет участника → `[]`.
 - `app/routers/texts.py` — `GET /miniapp/v1/texts/{key}` и `POST /miniapp/v1/texts/bulk`
   (до 100 ключей): тексты из `text_registry`, `notes` наружу не отдаются; 404 `TEXT_NOT_FOUND`.
+- `app/routers/day.py` — `GET /miniapp/v1/day/current`; `POST /miniapp/v1/day/test-enter`
+  (только при `DAY_TEST_ENTRY_ENABLED=true`, по умолчанию false); `PUT /miniapp/v1/day/marks`;
+  `POST /miniapp/v1/day/report/submit` (`X-Client-Op-Id`, `idempotency_keys`).
+- `app/participant_lock.py` — замок `pg_advisory_xact_lock(hashtext('participant:' || pid))`;
+  `active_pid_locked`: найти участника → замок → повторная проверка tombstoned_at IS NULL.
+- `app/day_content.py`, `app/day_keys.py`, `app/day_report.py` — контент дня (заглушки
+  `apps/api/content/module_1`), ключи и отчёт дня.
 - `app/routers/security.py` — `POST /security/csp-report` → 204, тело в лог (до 16 КБ).
 - `app/texts.py` — seed `apps/api/config/texts/*.json` (только заглушки) и загрузчик
   `python -m app.texts load`; на сервере — только через одноразовый сервис `migrate`.
 - `app/projector.py` — единственный писатель `participant_state` (E1 / INV-1):
   `python -m app.projector run | once`; битый DSN или нет драйвера → WARNING с именем класса, код 1.
   API в `participant_state` не пишет никогда.
-- Миграции: от `0001_init` до `0006_app_roles` (последняя — в `docs/STATE.md`).
-  Таблиц в public (без alembic_version): 13; полный список — `apps/api/tests/expected_tables.txt`.
+- Проектор: `PROJECTOR_VERSION = 2`; знает kinds `mini_app_first_consent`, `day_entered`,
+  `day_report_submitted`.
+- Роль БД `app_bot` создана миграцией 0009, но кода БД в `apps/bot` пока нет.
+- Миграции: от `0001_init` до `0009_app_bot` (последняя — в `docs/STATE.md`).
+  Таблиц в public (без alembic_version): 15; полный список — `apps/api/tests/expected_tables.txt`.
   `tg_user_registry`: pid uuid PK, tg_user_id bigint (>0), short_no bigint identity UNIQUE,
   created_via text (= 'mini_app_first_launch'), created_at timestamptz, tombstoned_at timestamptz;
   UNIQUE (tg_user_id) WHERE tombstoned_at IS NULL.
@@ -122,6 +132,10 @@ Telegram-курс личной трансформации: Mini App + бот + b
 - `participant_state` пишет только проектор (отдельная задача). API туда не пишет.
 - Идемпотентность: `client_op_id` обязателен для финансовых и state-меняющих операций.
 - CSP Mini App: `unsafe-eval` запрещён.
+- В Mini App нет платёжных экранов и упоминаний оплаты (Р-1); нет фото участников, согласия C5,
+  photo-экранов (Р-3); нет экрана настроек уведомлений (Р-6); нет S3 pre-signed URL для
+  материалов — медиа только во внешнем Telegram-канале (Р-5); паузы (Р-6а) не построены —
+  не реализовывать без карточки.
 
 ## 8. Окружение (значения — только из `.env`)
 
@@ -133,10 +147,10 @@ Telegram-курс личной трансформации: Mini App + бот + b
 
 ## 9. Открытые решения Автора — агент их НЕ решает
 
-Провайдер облака / российского VPS (D-5); Telegram в РФ и 152-ФЗ (D-6); медиа: S3 pre-signed
-или Telegram-канал (D-1); модель авторизации к проду, session_jwt (D-9); PSP и способ оплаты
-(противоречие: AGENTS.md — оплата вручную, build-order — YooKassa, экран `onb.payment`
-при правиле «оплата вне Mini App»); `full_backup_rotation_cycle`; три несовместимости Б17;
+Решённое — docs/STATE.md, «Решения, перекрывающие канон», и docs/decisions/R-2026-10-*.md; они главнее docs/architecture/**.
+Открыто: план Б по Telegram в РФ (Р-11: зарубежный бот-слой + уведомление РКН, 152-ФЗ — юристу);
+модель авторизации к проду — механизм продления `session_jwt` (D-9, Р-12); PITR у Timeweb
+и достаточность 30 дней хранения бэкапов — к 0-Б и юристу (Р-13); три несовместимости Б17;
 роли `finance` и `moderator`.
 Блокеры B-1 (rate-limit), B-2 (согласия до создания pid) и B-3 (роли/GRANT БД) закрыты
 (B-3 — 14.10.2026; подробности — `docs/STATE.md`).
