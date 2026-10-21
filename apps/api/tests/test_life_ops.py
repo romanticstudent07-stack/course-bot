@@ -12,6 +12,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
@@ -20,7 +21,8 @@ from sqlalchemy.orm import Session
 
 from app import day_clock, life_ops, projector
 from app.day_keys import dsa, key_day_close
-from app.life_ops import TickResult, close_one, dry_run, tick
+from app.life_ops import BLOCKING_FLAGS, TickResult, close_one, dry_run, tick
+from app.participant_lock import lock_participant
 from app.projector import ProjectorResult, run_once
 from app.routers.day import enter_day_by_test_flag
 from app.routers.onboarding import register_with_consents
@@ -396,22 +398,114 @@ def test_u1_day_closed_insert_fails_rollback_all(db_engine, monkeypatch, caplog)
     assert _events(db_engine, pid) == []
     run_once(db_engine)
     assert _state(db_engine, pid).lives == 3
-    warnings = [m for m in _life_msgs(caplog) if "db error" in m]
+    warnings = [m for m in _life_msgs(caplog) if "error on close" in m]
     assert warnings and all("OperationalError" in m and str(pid) not in m for m in warnings)
 
 
-def test_u2_block_lives_no_life_op(db_engine):
-    pid, started = _open_day(db_engine, 9715)
-    _prepare(db_engine, pid, missed_streak=1, flags="{block_lives}")
+def test_blocking_flags_match_canon():
+    assert BLOCKING_FLAGS == (
+        "pause_user", "pause_shadow", "author_pause", "block_lives", "ban_mod", "freeze_unpaid"
+    )
+
+
+@pytest.mark.parametrize("flag", BLOCKING_FLAGS)
+def test_k1_blocking_flag_full_skip(db_engine, flag):
+    # Канон (10-01, 02 §2.4, П.4): пауза замораживает жизни, block_lives — блок. Полный пропуск.
+    pid, _ = _open_day(db_engine, 9720 + BLOCKING_FLAGS.index(flag))
+    _prepare(db_engine, pid, missed_streak=1, flags="{%s}" % flag)
+    now = _overdue_now(db_engine, pid)
+    assert tick(db_engine, now) == TickResult(0, 0)  # отсеян уже в _CANDIDATES
+    assert close_one(db_engine, pid, now) is False  # и под замком (У3)
+    assert _events(db_engine, pid) == []
+    assert _close_keys(db_engine, pid) == 0
+    info = dry_run(db_engine, pid, now)
+    assert info is not None and info["blocked_by_flags"] == [flag]
+    run_once(db_engine)
+    state = _state(db_engine, pid)
+    assert (state.lives, state.missed_streak) == (3, 1)
+
+
+@pytest.mark.parametrize(("tg", "flags"), [(9730, "{normal}"), (9731, "{}")])
+def test_k1_non_blocking_flags_close_as_usual(db_engine, tg, flags):
+    pid, _ = _open_day(db_engine, tg)
+    _prepare(db_engine, pid, missed_streak=1, flags=flags)
     assert tick(db_engine, _overdue_now(db_engine, pid)) == TickResult(1, 0)
-    events = _events(db_engine, pid)
-    assert [e.kind for e in events] == ["day_closed"]
-    assert events[0].payload["outcome"] == "silent"
-    assert events[0].payload["missed_streak"] == 0
+    assert [e.kind for e in _events(db_engine, pid)] == ["life_op", "day_closed"]
     assert _close_keys(db_engine, pid) == 1
     run_once(db_engine)
     state = _state(db_engine, pid)
-    assert (state.lives, state.missed_streak) == (3, 0)
+    assert (state.lives, state.missed_streak) == (2, 0)
+
+
+def test_n2_runtime_error_on_first_pid_second_closed(db_engine, monkeypatch, caplog):
+    pid_a, _ = _open_day(db_engine, 9732)
+    pid_b, _ = _open_day(db_engine, 9733)
+    _prepare(db_engine, pid_a)
+    _prepare(db_engine, pid_b)
+    now = max(_overdue_now(db_engine, pid_a), _overdue_now(db_engine, pid_b))
+    real = life_ops.close_one
+    secret = str(uuid.uuid4())
+    seen: list = []
+
+    def flaky(engine, pid, now_):
+        if pid in (pid_a, pid_b):
+            seen.append(pid)
+            if len(seen) == 1:
+                raise RuntimeError(secret)
+        return real(engine, pid, now_)
+
+    monkeypatch.setattr(life_ops, "close_one", flaky)
+    with caplog.at_level(logging.WARNING, logger="app.life_ops"):
+        result = tick(db_engine, now)
+    assert result.skipped >= 1 and result.closed >= 1
+    assert len(seen) == 2
+    first, second = seen
+    assert _events(db_engine, first) == [] and _close_keys(db_engine, first) == 0
+    assert [e.kind for e in _events(db_engine, second)] == ["day_closed"]
+    warnings = [m for m in _life_msgs(caplog) if "error on close" in m]
+    assert warnings and all(
+        "RuntimeError" in m and secret not in m and str(first) not in m for m in warnings
+    )
+
+
+def test_n4_lock_timeout_skips_pid(db_engine, caplog):
+    pid, _ = _open_day(db_engine, 9734)
+    _prepare(db_engine, pid)
+    now = _overdue_now(db_engine, pid)
+    with db_engine.connect() as holder:
+        lock_participant(holder, pid)  # замок держит «другая транзакция»
+        with caplog.at_level(logging.WARNING, logger="app.life_ops"):
+            assert tick(db_engine, now) == TickResult(0, 1)
+        holder.rollback()
+    assert _events(db_engine, pid) == []
+    assert _close_keys(db_engine, pid) == 0
+    assert any("error on close" in m for m in _life_msgs(caplog))
+    assert tick(db_engine, now) == TickResult(1, 0)  # следующий тик повторил
+
+
+def test_n7_santiago_before_dst_switch(db_engine):
+    # Чили: 2026-09-06 00:00 по местному времени не существует (часы переводятся вперёд).
+    tz = "America/Santiago"
+    pid, _ = _open_day(db_engine, 9735)
+    _prepare(db_engine, pid)
+    started = datetime(2026, 9, 5, 0, 0, tzinfo=ZoneInfo(tz))
+    with db_engine.begin() as conn:
+        conn.execute(
+            text("UPDATE participant_state SET tz = :tz, day_started_at = :s WHERE pid = :p"),
+            {"p": pid, "tz": tz, "s": started},
+        )
+    now = _u(day_clock.deadline_at(started, tz)) + timedelta(seconds=121)
+    assert tick(db_engine, now) == TickResult(1, 0)
+    events = _events(db_engine, pid)
+    assert [e.kind for e in events] == ["day_closed"]
+    expected = day_clock.last_midnight(now, tz)
+    assert events[0].payload["next_day_started_at"] == dsa(expected)
+    assert events[0].payload["day_started_at"] == dsa(started)
+    assert _u(expected) > _u(started)
+    assert tick(db_engine, now) == TickResult(0, 1)  # проектор не догнал — без второго закрытия
+    run_once(db_engine)
+    assert tick(db_engine, now) == TickResult(0, 0)
+    assert len(_events(db_engine, pid)) == 1
 
 
 def test_u5_next_not_later_nothing_written(db_engine, monkeypatch, caplog):
@@ -434,6 +528,7 @@ def test_dry_run_writes_nothing(db_engine, capsys):
     assert info is not None
     assert info["is_overdue"] is True
     assert info["outcome_if_closed_now"]["life_delta"] == -1
+    assert info["blocked_by_flags"] == []
     assert _u(info["deadline_at"]) == _u(day_clock.deadline_at(started, "Europe/Moscow"))
     assert _events(db_engine, pid) == []
     assert _close_keys(db_engine, pid) == 0

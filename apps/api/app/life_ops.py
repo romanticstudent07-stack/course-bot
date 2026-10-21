@@ -10,10 +10,16 @@ idempotency_keys и события participant_events (life_op, day_closed); с�
 
 tick(engine, now) → TickResult(closed, skipped):
   1. Кандидаты — своя транзакция, только чтение: строки состояния с фазой onboarding / active,
-     author_pause_reason IS NULL, day_no IS NOT NULL; в Python — day_clock.is_overdue.
-     Не больше MAX_PER_TICK (самые старые day_started_at), остальные — в следующем тике.
-  2. Каждый pid — отдельная транзакция под lock_participant: состояние читается заново и фильтр
-     п. 1 + is_overdue проверяются снова (У3: sleeping, muted, erased, пауза → пропуск).
+     author_pause_reason IS NULL, day_no IS NOT NULL и без флагов BLOCKING_FLAGS в status_flags;
+     в Python — day_clock.is_overdue. Не больше MAX_PER_TICK (самые старые day_started_at),
+     остальные — в следующем тике.
+     Флаги (канон: docs/architecture/10/10-01-state-catalogue.md, 02-access-lives-pause.md §2.4
+     и П.4): пауза замораживает таймеры и жизни; block_lives — блок по исчерпанию жизней (доступ
+     закрыт до платного рестарта), а не «жизни не списывать». Любой из них — полный пропуск:
+     ни ключа, ни life_op, ни day_closed.
+  2. Каждый pid — отдельная транзакция под lock_participant (lock_timeout 5 с): состояние
+     читается заново и фильтр п. 1 (включая флаги) + is_overdue проверяются снова
+     (У3: sleeping, muted, erased, пауза, блок → пропуск).
   3. «Проектор догнал pid»: нет событий pid с id больше checkpoint (курсор по pid, как в
      projector._SELECT_BATCH). Есть — пропуск: отчёт, принятый до 00:00, не теряется.
   4. Есть ключ day_done или day_close по D → пропуск.
@@ -21,9 +27,10 @@ tick(engine, now) → TickResult(closed, skipped):
   6. next = last_midnight(now, tz); строго позже D в UTC (У5), иначе WARNING без pid и пропуск
      (проектор такой day_closed не применил бы, Н5).
   7. Ключ day_close:{pid}:{dsa(D)} (ON CONFLICT DO NOTHING RETURNING; 0 строк → пропуск),
-     затем life_op (если delta ≠ 0 и нет флага block_lives — У2), затем day_closed. Всё —
+     затем life_op (если delta ≠ 0), затем day_closed. Всё —
      ОДНА транзакция, один commit (У1, ревью #111 Н4): ни одно из трёх без остальных.
-  Ошибка БД на pid → rollback, WARNING с именем класса, пропуск; другие pid тика идут дальше.
+  Любая ошибка на pid (БД, таймаут замка, прочее) → rollback, WARNING с именем класса, пропуск;
+  другие pid тика идут дальше, следующий тик повторит.
 
 Время (У4): now — только аргумент (в run_forever — day_clock.utcnow()); все сравнения — через
 day_clock или в UTC. datetime.now(), time.time() и SQL now() в логике не используются.
@@ -59,8 +66,12 @@ ACTOR_ROLE = "system"
 EVENT_KIND_LIFE_OP = "life_op"
 EVENT_KIND_DAY_CLOSED = "day_closed"
 LIFE_OP_REASON = "missed_days"
-# Флаг status_flags (миграция 0001): жизни не списываются (решение 21.10, Issue #109).
-FLAG_BLOCK_LIVES = "block_lives"
+# Флаги status_flags, при которых день не закрывается (канон: 10-01-state-catalogue.md,
+# 02-access-lives-pause.md §2.4 и П.4): паузы замораживают таймеры и жизни, блоки закрывают доступ.
+BLOCKING_FLAGS = (
+    "pause_user", "pause_shadow", "author_pause", "block_lives", "ban_mod", "freeze_unpaid"
+)
+LOCK_TIMEOUT = "5s"
 PHASES = ("onboarding", "active")
 USAGE = "usage: python -m app.life_ops dry-run <pid>"
 
@@ -72,6 +83,7 @@ _CANDIDATES = text(
       AND author_pause_reason IS NULL
       AND day_no IS NOT NULL
       AND day_started_at IS NOT NULL
+      AND NOT (status_flags && CAST(:flags AS text[]))
     ORDER BY day_started_at, pid
     """
 )
@@ -101,6 +113,8 @@ _HAS_KEY = text("SELECT 1 FROM idempotency_keys WHERE key IN (:done, :close) LIM
 _HAS_MARKS = text(
     "SELECT 1 FROM day_marks WHERE pid = :pid AND day_started_at = :started LIMIT 1"
 )
+
+_LOCK_TIMEOUT = text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'")
 
 _INSERT_CLOSE_KEY = text(
     """
@@ -145,20 +159,27 @@ def _utc(ts: datetime) -> datetime:
     return ts.astimezone(timezone.utc)
 
 
+def _blocking_flags(row: Any) -> list[str]:
+    """Флаги BLOCKING_FLAGS, найденные в status_flags (порядок — как в BLOCKING_FLAGS)."""
+    flags = set(row.status_flags or ())
+    return [f for f in BLOCKING_FLAGS if f in flags]
+
+
 def _eligible(row: Any) -> bool:
-    """Фильтр §7 п. 1 (повторяется под замком, У3)."""
+    """Фильтр §7 п. 1 (повторяется под замком, У3), включая BLOCKING_FLAGS."""
     return (
         row.lifecycle_phase in PHASES
         and row.author_pause_reason is None
         and row.day_no is not None
         and row.day_started_at is not None
+        and not _blocking_flags(row)
     )
 
 
 def _candidates(engine: Engine, now: datetime) -> list[uuid.UUID]:
     """Своя транзакция, только чтение; не больше MAX_PER_TICK просроченных."""
     with engine.connect() as conn:
-        rows = conn.execute(_CANDIDATES).all()
+        rows = conn.execute(_CANDIDATES, {"flags": list(BLOCKING_FLAGS)}).all()
         conn.rollback()
     found: list[uuid.UUID] = []
     for pid, tz, started in rows:
@@ -189,8 +210,7 @@ def _plan(conn: Connection, pid: uuid.UUID, row: Any, now: datetime) -> ClosePla
     if not _utc(next_started) > _utc(started):
         logger.warning("life_ops: skip (next day not later than current)")
         return None
-    flags = list(row.status_flags or ())
-    write_life_op = outcome.life_delta != 0 and FLAG_BLOCK_LIVES not in flags
+    write_life_op = outcome.life_delta != 0
     return ClosePlan(started, next_started, outcome, came, write_life_op)
 
 
@@ -238,9 +258,16 @@ def _write(conn: Connection, pid: uuid.UUID, plan: ClosePlan) -> bool:
 
 
 def close_one(engine: Engine, pid: uuid.UUID, now: datetime) -> bool:
-    """Один pid — одна транзакция под замком participant:pid. True — день закрыт."""
+    """Один pid — одна транзакция под замком participant:pid. True — день закрыт.
+
+    Нужен уровень изоляции READ COMMITTED (по умолчанию Postgres): шаг 3 видит отчёт,
+    закоммиченный во время ожидания замка.
+    Ожидание замка ограничено lock_timeout (LOCK_TIMEOUT): таймаут → ошибка → rollback,
+    tick пишет WARNING и пропускает pid, следующий тик повторит.
+    """
     # Ошибка до commit → выход из with закрывает соединение, транзакция откатывается целиком.
     with engine.connect() as conn:
+        conn.execute(_LOCK_TIMEOUT)  # SET LOCAL — только эта транзакция
         lock_participant(conn, pid)
         row = conn.execute(_STATE, {"pid": pid}).first()
         plan = None if row is None else _plan(conn, pid, row, now)
@@ -248,8 +275,9 @@ def close_one(engine: Engine, pid: uuid.UUID, now: datetime) -> bool:
             conn.rollback()
             return False
         conn.commit()  # У1: ключ + life_op + day_closed — один commit
-    delta = plan.outcome.life_delta if plan.write_life_op else 0
-    logger.info("life_ops: day closed outcome=%s delta=%s", plan.outcome.outcome, delta)
+    logger.info(
+        "life_ops: day closed outcome=%s delta=%s", plan.outcome.outcome, plan.outcome.life_delta
+    )
     return True
 
 
@@ -261,9 +289,9 @@ def tick(engine: Engine, now: datetime) -> TickResult:
     for pid in _candidates(engine, now):
         try:
             done = close_one(engine, pid, now)
-        except SQLAlchemyError as exc:
+        except Exception as exc:  # Н2: любой сбой одного pid не роняет тик
             # Без pid и текста исключения: только имя класса.
-            logger.warning("life_ops: db error on close (%s)", type(exc).__name__)
+            logger.warning("life_ops: error on close (%s)", type(exc).__name__)
             done = False
         if done:
             closed += 1
@@ -291,6 +319,7 @@ def dry_run(engine: Engine, pid: uuid.UUID, now: datetime) -> dict[str, Any] | N
                 "deadline_at": None,
                 "is_overdue": False,
                 "outcome_if_closed_now": None,
+                "blocked_by_flags": _blocking_flags(row),
             }
             started = row.day_started_at
             if started is not None:
@@ -300,12 +329,11 @@ def dry_run(engine: Engine, pid: uuid.UUID, now: datetime) -> dict[str, Any] | N
                 came = conn.execute(_HAS_MARKS, {"pid": pid, "started": started}).first()
                 try:
                     o = day_clock.close_outcome(came is not None, row.missed_streak, row.lives)
-                    blocked = FLAG_BLOCK_LIVES in list(row.status_flags or ())
                     info["outcome_if_closed_now"] = {
                         "outcome": o.outcome,
                         "missed_streak": o.missed_streak,
-                        "life_delta": 0 if blocked else o.life_delta,
-                        "sleeping": False if blocked else o.sleeping,
+                        "life_delta": o.life_delta,
+                        "sleeping": o.sleeping,
                         "next_day_started_at": day_clock.last_midnight(now, row.tz),
                     }
                 except ValueError:
