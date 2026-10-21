@@ -10,6 +10,9 @@ aiogram==3.31.0
 # --- Обращение к нашему API (внутри compose-сети — http://api:${APP_PORT}) ---
 httpx==0.28.1
 
+# --- БД: воркер outbox (send-1b, В23 — согласие Автора), async, без SQLAlchemy ---
+psycopg[binary]==3.3.6
+
 # --- Утилиты ---
 pydantic==2.13.5
 python-dotenv==1.2.3

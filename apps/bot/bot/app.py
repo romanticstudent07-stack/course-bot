@@ -8,6 +8,12 @@ backend (apps/api), а контракт передачи апдейтов api �
 (вопрос Автору в PR). Если в Telegram уже зарегистрирован webhook (infra/README.md,
 шаг 8), getUpdates не работает — бот НЕ удаляет webhook сам, а пишет ошибку в лог
 и периодически перепроверяет, пока webhook не снимут (deleteWebhook).
+
+Воркер outbox (send-1b, bot/outbox.py): фоновая задача asyncio в том же процессе, тот же Bot
+(своей сессии и прокси нет, Р-11). Стартует до wait_until_no_webhook — доставке webhook не мешает.
+BOT_DATABASE_URL пуст → воркер не запускается (WARNING), бот работает как раньше.
+Остановка (SIGTERM → start_polling завершается → finally): stop.set(), ждём воркер до 25 с
+(текущая строка дописывается), затем cancel; потом закрываем сессию бота.
 """
 from __future__ import annotations
 
@@ -21,6 +27,8 @@ from bot.config import BotConfig
 from bot.handlers import build_router, menu_button
 
 logger = logging.getLogger(__name__)
+
+OUTBOX_STOP_TIMEOUT = 25
 
 
 def build_dispatcher(config: BotConfig) -> Dispatcher:
@@ -55,12 +63,43 @@ async def wait_until_no_webhook(bot: Bot, recheck_seconds: int) -> None:
         await asyncio.sleep(recheck_seconds)
 
 
+def start_outbox_worker(bot, config: BotConfig, stop: asyncio.Event) -> "asyncio.Task | None":
+    """Запустить воркер outbox фоновой задачей; BOT_DATABASE_URL пуст → None."""
+    if not config.database_url:
+        logger.warning("BOT_DATABASE_URL пуст — доставка outbox выключена")
+        return None
+    from bot.outbox import run_worker
+
+    return asyncio.create_task(run_worker(bot, config.database_url, stop), name="outbox")
+
+
+async def stop_outbox_worker(task: "asyncio.Task | None", stop: asyncio.Event) -> None:
+    stop.set()
+    if task is None:
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=OUTBOX_STOP_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning("outbox: воркер не остановился за %s с — cancel", OUTBOX_STOP_TIMEOUT)
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+    except Exception as exc:  # noqa: BLE001
+        logger.error("outbox: воркер завершился с ошибкой %s", type(exc).__name__)
+
+
 async def run(config: BotConfig) -> None:
     bot = Bot(token=config.bot_token)
+    stop = asyncio.Event()
+    task = None
     try:
+        task = start_outbox_worker(bot, config, stop)
         await wait_until_no_webhook(bot, config.webhook_recheck_seconds)
         dp = build_dispatcher(config)
         logger.info("Старт бота: long polling")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        await stop_outbox_worker(task, stop)
         await bot.session.close()
