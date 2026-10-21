@@ -1,5 +1,6 @@
 """PUT /day/marks (iter2-api-2a): отметки блоков в day_marks. С БД — только CI."""
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -7,11 +8,30 @@ from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app import day_clock
 from app.day_content import get_day_content
 from app.day_keys import KIND_DAY_DONE, dsa, key_day_done
 from app.projector import run_once
 from app.routers.day import DayMarkIn, enter_day_by_test_flag, insert_idempotency_key, put_day_mark
 from app.routers.onboarding import register_with_consents
+
+
+# life-ops-b: «сейчас» — от фактического day_started_at после открытия дня (ревью #112, Н1):
+# active_from(started, tz) + 1 ч. До открытия дня — фиксированный момент (результат проверок
+# до окна от него не зависит). Реальное время запуска на тесты не влияет.
+_FIXED_NOW = datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc)
+_CLOCK: dict[str, datetime] = {}
+
+
+@pytest.fixture(autouse=True)
+def _inside_day_window(monkeypatch):
+    _CLOCK["now"] = _FIXED_NOW
+    monkeypatch.setattr(day_clock, "utcnow", lambda: _CLOCK["now"])
+    return _CLOCK
+
+
+def _u(ts: datetime) -> datetime:
+    return ts.astimezone(timezone.utc)
 
 
 def _block_ids() -> list[str]:
@@ -31,10 +51,11 @@ def _open_day(engine, tg_user_id: int):
         enter_day_by_test_flag(session, tg_user_id, True)
     run_once(engine)
     with engine.connect() as conn:
-        started = conn.execute(
-            text("SELECT day_started_at FROM participant_state WHERE pid = :p"), {"p": pid}
-        ).scalar_one()
-    return pid, started
+        row = conn.execute(
+            text("SELECT day_started_at, tz FROM participant_state WHERE pid = :p"), {"p": pid}
+        ).one()
+    _CLOCK["now"] = _u(day_clock.active_from(row.day_started_at, row.tz)) + timedelta(hours=1)
+    return pid, row.day_started_at
 
 
 def _put(engine, tg_user_id: int, payload: dict):
@@ -76,7 +97,7 @@ def test_mark_and_toggle_keeps_at(db_engine):
     assert _put(db_engine, 9001, {"block_id": block, "value": "not_done"}).value == "not_done"
     second = _rows(db_engine, pid)
     assert len(second) == 1 and second[0].value is False
-    assert second[0].at == first[0].at  # at — время первой отметки (В19)
+    assert _u(second[0].at) == _u(first[0].at)  # at — время первой отметки (В19)
 
 
 def test_block_not_in_day_422(db_engine):

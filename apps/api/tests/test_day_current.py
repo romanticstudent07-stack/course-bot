@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import text
 
+from app import day_clock
 from app.day_content import load_day_content
 from app.day_keys import (
     KIND_DAY_DONE,
@@ -40,6 +41,13 @@ MSK = timezone(timedelta(hours=3))
 T_MSK = datetime(2026, 10, 18, 9, 0, tzinfo=MSK)
 T_UTC = datetime(2026, 10, 18, 6, 0, tzinfo=timezone.utc)
 PID = uuid.UUID("00000000-0000-4000-8000-000000000001")
+# life-ops-b: «сейчас» — внутри окна дня T_MSK (04:00 19.10 — 00:00 20.10 МСК).
+NOW_IN_WINDOW = datetime(2026, 10, 19, 12, 0, tzinfo=MSK)
+
+
+@pytest.fixture(autouse=True)
+def _inside_day_window(monkeypatch):
+    monkeypatch.setattr(day_clock, "utcnow", lambda: NOW_IN_WINDOW)
 
 
 def _headers(user_id: int) -> dict[str, str]:
@@ -236,6 +244,7 @@ def test_can_submit_when_all_marked(db_api_client, db_engine):
     body = db_api_client.get(URL, headers=_headers(2007)).json()
     assert body["status"] == "open"
     assert body["can_submit"] is True
+    assert body["buttons_active"] is True and body["queued_until"] is None
     assert all(b["mark"] is not None for b in body["blocks"])
 
 

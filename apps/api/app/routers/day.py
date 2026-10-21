@@ -1,12 +1,17 @@
 """/miniapp/v1/day/* — день участника (iter2-api-1: GET current; iter2-api-2a: test-enter, marks;
-iter2-api-2b: report/submit).
+iter2-api-2b: report/submit; life-ops-b: окно дня 04:00–00:00, позиция в отчёте, очередь в GET).
+
+Время (life-ops-b, У1): «сейчас» — только day_clock.utcnow(), один раз за запрос: в marks и
+submit — после замка participant:pid, в GET — в начале read_day_current. Окно, границы и
+очередь — функции day_clock; свои сравнения моментов — только в UTC (docstring day_clock).
+tz — из participant_state тем же SELECT; пустой tz передаётся в day_clock как есть.
 
 initData и rate-limit — роутер miniapp_v1 в main.py.
 Общие правила:
   - pid — ТОЛЬКО по tg_user_id из проверенной initData (find_active_participant);
     pid и day_started_at из тела запроса не берутся никогда (лишние поля игнорируются);
   - participant_state читается text-SQL SELECT (lives, stage_no, module_no, day_no,
-    day_started_at). Это только чтение: писатель participant_state — проектор (E1/INV-1);
+    day_started_at, tz). Это только чтение: писатель participant_state — проектор (E1/INV-1);
   - любая ошибка БД (SQLAlchemyError) → 503 SERVICE_UNAVAILABLE, в лог только имя класса;
   - транзакция закрывается сразу (ревью #101): GET — rollback перед ответом; test-enter,
     marks и report/submit — rollback перед каждым возвратом без записи и перед каждой ошибкой
@@ -16,10 +21,15 @@ GET /day/current — только чтение, ничего не пишет:
   - нет активного pid (или tombstoned) → 404 PARTICIPANT_NOT_FOUND;
   - нет строки state → not_started, lives 3 (DEFAULT колонки);
   - позиции нет (day_no NULL) → entering, если есть ключ day_enter, иначе not_started;
-  - позиция есть → open или submitted (есть ключ day_done по текущему day_started_at);
+  - позиция есть, статус по приоритету (life-ops-b): submitted (ключ day_done по текущему
+    day_started_at) → queued (ключ day_queue по текущему day_started_at и now < queued_until;
+    position, blocks, min_optional = null) → closed (окно closed) → open;
+  - при позиции: active_from, deadline_at (пояс участника), queued_until (только queued,
+    иначе null), buttons_active = окно open и статус не submitted/queued (submitted и queued →
+    false всегда: после сдачи marks отвечает 409 DAY_ALREADY_SUBMITTED);
   - отметки — из day_marks только по pid и текущему day_started_at (true → done,
     false → not_done, нет строки → null);
-  - can_submit = все блоки отмечены и статус open;
+  - can_submit = все блоки отмечены, статус open и окно open;
   - test_entry = флаг DAY_TEST_ENTRY_ENABLED включён и позиции нет (iter2-api-2a);
   - позиция есть, а контента дня нет → 503 DAY_CONTENT_MISSING, в лог ERROR
     (stage, module, day; без pid).
@@ -41,6 +51,7 @@ POST /day/test-enter (iter2-api-2a, В3 — А; тела нет). Писател
 
 PUT /day/marks (iter2-api-2a), тело {block_id ^[a-z0-9_]{1,32}$, value done | not_done}:
   нет активного pid под замком → 404; позиции нет → 409 DAY_NOT_STARTED;
+  окно not_active → 409 DAY_NOT_ACTIVE, closed → 409 DAY_CLOSED; нет контента → 503;
   block_id не из блоков текущего дня → 422 BLOCK_NOT_IN_DAY;
   есть ключ day_done → 409 DAY_ALREADY_SUBMITTED;
   INSERT day_marks (pid и day_started_at — с сервера) ON CONFLICT DO UPDATE SET value:
@@ -53,17 +64,24 @@ POST /day/report/submit (iter2-api-2b; П-31, В15, В18, В22), заголов�
   2) есть ключ day_report:{pid}:{op_id}: params_hash тот же → 200 {verdict: result_ref,
      queued: true} без записи (В15); другой → 409 IDEMPOTENCY_CONFLICT;
   3) позиции нет → 409 DAY_NOT_STARTED; контента нет → 503 DAY_CONTENT_MISSING;
+     окно not_active → 409 DAY_NOT_ACTIVE, closed → 409 DAY_CLOSED (повтор op_id — раньше);
   4) набор block_id ≠ блоки дня (лишний, недостающий, повтор) → 422 MARKS_INCOMPLETE;
   5) есть ключ day_done по текущему day_started_at → 409 DAY_ALREADY_SUBMITTED;
   6) UPSERT day_marks, как PUT (at не меняется);
   7) вердикт — app/day_report.py; жизни не меняются (Ш1);
   8) INSERT idempotency_keys: day_done (result_ref = verdict) и day_report (result_ref,
      params_hash) — без ON CONFLICT: под замком дубля нет, а если будет — ошибка БД → 503;
+  8а) INSERT idempotency_keys day_queue:{pid}:{dsa(next_started)} (kind day_queue) — тоже без
+     ON CONFLICT, как day_done: конфликт → IntegrityError → rollback → 503;
   9) INSERT participant_events kind day_report_submitted, payload {day_started_at (dsa),
-     verdict, stage_no, module_no, day_no}, actor participant;
+     verdict, stage_no, module_no, day_no, next_stage_no, next_module_no, next_day_no,
+     next_day_started_at = dsa(next_started)}, actor participant. passed → day_no + 1, если
+     такой день есть в контенте, иначе та же позиция; not_passed / all_not_done → та же.
+     next_started = now; если active_from(now) ≤ now (сдача ровно в 04:00) → now + 1 мкс:
+     кнопки следующего дня строго позже сдачи (У3);
   10) commit → 200 {verdict, queued: true}. Ответ строится только после успешного commit:
      ошибка БД, в том числе на commit → rollback, 503 (ложного 200 нет, П-31).
-  Время — now() сервера; время клиента не принимается.
+  Время — day_clock.utcnow() после замка; время клиента не принимается.
 Лог INFO: только tg_user_id и status (для marks — ещё block_id). pid и op_id в лог не идут.
 """
 from __future__ import annotations
@@ -72,7 +90,7 @@ import logging
 import uuid
 from collections.abc import Mapping
 from contextlib import suppress
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
@@ -82,6 +100,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app import day_clock
 from app.config import Settings, get_settings
 from app.consent_status import (
     STATUS_KINDS,
@@ -94,14 +113,16 @@ from app.day_content import Day, DayContent, get_day_content
 from app.day_keys import (
     KIND_DAY_DONE,
     KIND_DAY_ENTER,
+    KIND_DAY_QUEUE,
     KIND_DAY_REPORT,
     TTL_BY_KIND,
     dsa,
     key_day_done,
     key_day_enter,
+    key_day_queue,
     key_day_report,
 )
-from app.day_report import marks_complete, params_hash, verdict
+from app.day_report import VERDICT_PASSED, marks_complete, params_hash, verdict
 from app.db.models import ACTOR_SYSTEM, DayMark, IdempotencyKey, ParticipantEvent
 from app.db.session import get_db_session
 from app.participant_lock import active_pid_locked
@@ -120,6 +141,8 @@ STATUS_NOT_STARTED = "not_started"
 STATUS_ENTERING = "entering"
 STATUS_OPEN = "open"
 STATUS_SUBMITTED = "submitted"
+STATUS_QUEUED = "queued"
+STATUS_CLOSED = "closed"
 ENTER_ALREADY = "already"
 
 MARK_DONE = "done"
@@ -137,24 +160,24 @@ TEST_ENTRY_PAYLOAD: dict[str, Any] = {
     "source": "test_flag",
 }
 
-DayStatus = Literal["not_started", "entering", "open", "submitted"]
+DayStatus = Literal["not_started", "entering", "open", "submitted", "queued", "closed"]
 Mark = Literal["done", "not_done"]
 Verdict = Literal["passed", "not_passed", "all_not_done"]
 
 # Только SELECT: participant_state пишет проектор (E1).
 _STATE_SQL = text(
-    "SELECT lives, stage_no, module_no, day_no, day_started_at "
+    "SELECT lives, stage_no, module_no, day_no, day_started_at, tz "
     "FROM participant_state WHERE pid = :pid"
 )
 
-# Ключи не обновляются и не удаляются (day_keys.py); повтор под замком невозможен,
-# ON CONFLICT DO NOTHING — страховка.
+# Ключ day_enter (test-enter). Ключи не обновляются и не удаляются (day_keys.py).
 _INSERT_KEY_SQL = text(
     "INSERT INTO idempotency_keys (key, kind, ttl) "
     "VALUES (:key, :kind, CAST(:ttl AS interval)) ON CONFLICT DO NOTHING"
 )
 
-# report/submit: ключ с результатом. Без ON CONFLICT: дубль → ошибка БД → 503 (П-31).
+# report/submit: ключи day_done, day_report, day_queue. Без ON CONFLICT: дубль → ошибка БД → 503
+# (П-31).
 _INSERT_RESULT_KEY_SQL = text(
     "INSERT INTO idempotency_keys (key, kind, ttl, result_ref, params_hash) "
     "VALUES (:key, :kind, CAST(:ttl AS interval), :result_ref, :params_hash)"
@@ -184,6 +207,11 @@ class DayCurrentOut(BaseModel):
     blocks: list[BlockOut] | None = None
     min_optional: int | None = None
     can_submit: bool | None = None
+    # life-ops-b: только при позиции (exclude_unset — в ветках без позиции не задаются).
+    active_from: datetime | None = None
+    deadline_at: datetime | None = None
+    queued_until: datetime | None = None
+    buttons_active: bool | None = None
 
 
 class TestEnterOut(BaseModel):
@@ -257,6 +285,37 @@ def _day_already_submitted() -> HTTPException:
     )
 
 
+def _window_error(win: str) -> HTTPException | None:
+    """409 по окну дня (life-ops-b) или None, если окно open."""
+    if win == day_clock.WINDOW_NOT_ACTIVE:
+        return _error(
+            status.HTTP_409_CONFLICT, "DAY_NOT_ACTIVE", "Кнопки дня станут активны в 04:00."
+        )
+    if win == day_clock.WINDOW_CLOSED:
+        return _error(
+            status.HTTP_409_CONFLICT, "DAY_CLOSED", "День закрыт: отчёт принимался до 00:00."
+        )
+    return None
+
+
+def _utc(ts: datetime) -> datetime:
+    return ts.astimezone(timezone.utc)
+
+
+def next_day_started(now: datetime, tz: str | None) -> datetime:
+    """day_started_at следующего дня: now, но кнопки (active_from) строго позже now (У3)."""
+    if _utc(day_clock.active_from(now, tz)) <= _utc(now):
+        return now + timedelta(microseconds=1)
+    return now
+
+
+def next_position(content: DayContent, row: Any, result: str) -> tuple[int, int, int]:
+    """passed → day_no + 1, если такой день есть в контенте; иначе та же позиция (ЛО-3)."""
+    if result == VERDICT_PASSED and content.get(row.stage_no, row.module_no, row.day_no + 1):
+        return row.stage_no, row.module_no, row.day_no + 1
+    return row.stage_no, row.module_no, row.day_no
+
+
 def _content_missing(exc: DayContentMissing, where: str) -> HTTPException:
     logger.error(
         "%s: нет контента дня stage=%s module=%s day=%s — 503",
@@ -318,7 +377,7 @@ def insert_idempotency_key(session: Session, key: str, kind: str) -> None:
 
 
 def _insert_result_key(
-    session: Session, key: str, kind: str, result_ref: str, p_hash: str | None
+    session: Session, key: str, kind: str, result_ref: str | None, p_hash: str | None
 ) -> None:
     session.execute(
         _INSERT_RESULT_KEY_SQL,
@@ -370,6 +429,7 @@ def read_day_current(
     test_entry_enabled: bool = False,
 ) -> DayCurrentOut | None:
     """None — нет активного участника. DayContentMissing — позиция без контента."""
+    now = day_clock.utcnow()  # один раз за запрос (У1)
     found = find_active_participant(session, tg_user_id)
     if found is None:
         return None
@@ -391,16 +451,52 @@ def read_day_current(
         raise DayContentMissing(row.stage_no, row.module_no, row.day_no)
 
     started = row.day_started_at
+    tz = row.tz
+    active_from: datetime | None = None
+    deadline_at: datetime | None = None
+    win: str | None = None
+    queued_until: datetime | None = None
     if started is None:
         marks: dict[str, bool] = {}
         submitted = False
     else:
         marks = _marks(session, pid, started)
         submitted = _has_key(session, key_day_done(pid, started))
+        active_from = day_clock.active_from(started, tz)
+        deadline_at = day_clock.deadline_at(started, tz)
+        win = day_clock.window(started, tz, now)
+        if not submitted and _has_key(session, key_day_queue(pid, started)):
+            until = day_clock.queue_until(pid, started)
+            if _utc(now) < _utc(until):
+                queued_until = until.astimezone(day_clock.zone(tz))
+
+    if queued_until is not None:
+        return DayCurrentOut(
+            status=STATUS_QUEUED,
+            lives=lives,
+            test_entry=False,
+            position=None,
+            day_started_at=started,
+            blocks=None,
+            min_optional=None,
+            can_submit=False,
+            active_from=active_from,
+            deadline_at=deadline_at,
+            queued_until=queued_until,
+            buttons_active=False,
+        )
 
     blocks = build_blocks(day, marks)
-    day_status = STATUS_SUBMITTED if submitted else STATUS_OPEN
-    can_submit = day_status == STATUS_OPEN and all(b.mark is not None for b in blocks)
+    if submitted:
+        day_status = STATUS_SUBMITTED
+    elif win == day_clock.WINDOW_CLOSED:
+        day_status = STATUS_CLOSED
+    else:
+        day_status = STATUS_OPEN
+    window_open = win == day_clock.WINDOW_OPEN
+    can_submit = (
+        day_status == STATUS_OPEN and all(b.mark is not None for b in blocks) and window_open
+    )
     return DayCurrentOut(
         status=day_status,
         lives=lives,
@@ -412,6 +508,10 @@ def read_day_current(
         blocks=blocks,
         min_optional=day.min_optional,
         can_submit=can_submit,
+        active_from=active_from,
+        deadline_at=deadline_at,
+        queued_until=None,
+        buttons_active=window_open and not submitted,  # Р1: после сдачи кнопки неактивны
     )
 
 
@@ -493,9 +593,13 @@ def put_day_mark(
     pid = active_pid_locked(session, tg_user_id)
     if pid is None:
         raise _released(session, _participant_not_found())
+    now = day_clock.utcnow()  # после замка (У1)
     row = session.execute(_STATE_SQL, {"pid": pid}).first()
     if row is None or not _has_position(row) or row.day_started_at is None:
         raise _released(session, _day_not_started())
+    window_error = _window_error(day_clock.window(row.day_started_at, row.tz, now))
+    if window_error is not None:
+        raise _released(session, window_error)
     day = content.get(row.stage_no, row.module_no, row.day_no)
     if day is None:
         raise _released(session, DayContentMissing(row.stage_no, row.module_no, row.day_no))
@@ -529,6 +633,7 @@ def submit_day_report(
     pid = active_pid_locked(session, tg_user_id)
     if pid is None:
         raise _released(session, _participant_not_found())
+    now = day_clock.utcnow()  # после замка (У1)
 
     pairs = [(mark.block_id, mark.value) for mark in body.marks]
     p_hash = params_hash(pairs)
@@ -557,6 +662,9 @@ def submit_day_report(
     day = content.get(row.stage_no, row.module_no, row.day_no)
     if day is None:
         raise _released(session, DayContentMissing(row.stage_no, row.module_no, row.day_no))
+    window_error = _window_error(day_clock.window(row.day_started_at, row.tz, now))
+    if window_error is not None:
+        raise _released(session, window_error)
     if not marks_complete(day, [block_id for block_id, _ in pairs]):
         raise _released(
             session,
@@ -577,6 +685,10 @@ def submit_day_report(
     result = verdict(day, done)
     _insert_result_key(session, done_key, KIND_DAY_DONE, result, None)
     _insert_result_key(session, report_key, KIND_DAY_REPORT, result, p_hash)
+    # Один и тот же next_started — в ключ очереди и в payload (У4).
+    next_started = next_day_started(now, row.tz)
+    next_stage_no, next_module_no, next_day_no = next_position(content, row, result)
+    _insert_result_key(session, key_day_queue(pid, next_started), KIND_DAY_QUEUE, None, None)
     session.execute(
         ParticipantEvent.__table__.insert().values(
             pid=pid,
@@ -587,6 +699,10 @@ def submit_day_report(
                 "stage_no": row.stage_no,
                 "module_no": row.module_no,
                 "day_no": row.day_no,
+                "next_stage_no": next_stage_no,
+                "next_module_no": next_module_no,
+                "next_day_no": next_day_no,
+                "next_day_started_at": dsa(next_started),
             },
             actor=ACTOR_PARTICIPANT,
             actor_role=ACTOR_PARTICIPANT,
@@ -685,7 +801,9 @@ def post_day_test_enter(
     response_model=DayMarkOut,
     responses={
         404: {"description": "PARTICIPANT_NOT_FOUND"},
-        409: {"description": "DAY_NOT_STARTED / DAY_ALREADY_SUBMITTED"},
+        409: {
+            "description": "DAY_NOT_STARTED / DAY_NOT_ACTIVE / DAY_CLOSED / DAY_ALREADY_SUBMITTED"
+        },
         422: {"description": "BLOCK_NOT_IN_DAY / невалидное тело"},
         503: {"description": "SERVICE_UNAVAILABLE — ошибка БД; DAY_CONTENT_MISSING"},
     },
@@ -720,7 +838,10 @@ def put_day_marks(
     response_model=DayReportOut,
     responses={
         404: {"description": "PARTICIPANT_NOT_FOUND"},
-        409: {"description": "IDEMPOTENCY_CONFLICT / DAY_NOT_STARTED / DAY_ALREADY_SUBMITTED"},
+        409: {
+            "description": "IDEMPOTENCY_CONFLICT / DAY_NOT_STARTED / DAY_NOT_ACTIVE / "
+            "DAY_CLOSED / DAY_ALREADY_SUBMITTED"
+        },
         422: {"description": "MARKS_INCOMPLETE / нет или неверный X-Client-Op-Id / тело"},
         503: {"description": "SERVICE_UNAVAILABLE — ошибка БД (в т. ч. commit); DAY_CONTENT_MISSING"},
     },
