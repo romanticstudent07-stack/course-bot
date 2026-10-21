@@ -81,7 +81,7 @@ def test_position_from_payload():
     assert position_from_payload({"stage_no": 0, "module_no": 1, "day_no": 1}) is None
     assert position_from_payload({"stage_no": True, "module_no": 1, "day_no": 1}) is None
     assert position_from_payload("not json") is None
-    assert PROJECTOR_VERSION == 2
+    assert PROJECTOR_VERSION == 3  # life-ops-a
 
 
 def test_position_upper_bound():
@@ -104,7 +104,7 @@ def test_consent_and_day_entered_in_one_batch(db_engine):
     assert (state.stage_no, state.module_no, state.day_no) == (1, 1, 1)
     assert state.day_started_at == entered.at
     assert state.missed_streak == 0
-    assert state.projector_version == 2
+    assert state.projector_version == PROJECTOR_VERSION
 
 
 def test_day_entered_keeps_status_flags(db_engine):

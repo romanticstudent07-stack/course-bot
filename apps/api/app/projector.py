@@ -1,4 +1,4 @@
-"""Проектор participant_state: participant_events → participant_state (E1 / INV-1, projector-2).
+"""Проектор participant_state: participant_events → participant_state (E1 / INV-1, projector-2, life-ops-a).
 
 Запуск: python -m app.projector run | once
   - run  — постоянный цикл: проход раз в 1 с, пачки до 500 событий; advisory lock держится
@@ -15,7 +15,7 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
   - I2 fsm_participant: pre_registered → onboarding по mini_app_first_consent (6А, D-11);
   - I2 checkpoint_table: participant_state_checkpoints (pid, last_event_id, at).
 
-Виды событий (PROJECTOR_VERSION 2):
+Виды событий (PROJECTOR_VERSION 3, life-ops-a; выдержки — docs/tasks/life-ops-a.md, раздел 7):
   - mini_app_first_consent — строка состояния, фаза onboarding (без изменений с версии 1);
   - day_entered (iter2-api-2a) — позиция stage_no / module_no / day_no из payload,
     day_started_at = at события, missed_streak = 0; только если позиции ещё нет
@@ -28,6 +28,20 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
     0 строк (старый день или строки нет) → WARNING, пропуск. Нет строки day_started_at
     в payload → «bad payload»; строка не разбирается как timestamptz → DataError в savepoint →
     «bad payload». Без ON CONFLICT; lifecycle_phase, status_flags и lives не упоминаются (Ш1).
+    v3 (life-ops-a): если в payload есть все четыре поля next_stage_no, next_module_no,
+    next_day_no, next_day_started_at — позиция = next_*, day_started_at = next_day_started_at,
+    missed_streak = 0 (условие то же: текущий day_started_at = payload.day_started_at).
+    Ни одного поля → поведение v2 (старый payload #103 — только счётчик). Часть полей,
+    позиция вне [1, MAX_POSITION_VALUE] или битая строка → WARNING «bad payload», пропуск;
+  - life_op (life-ops-c, В31) — payload {day_started_at, delta, reason}: lives = lives + delta;
+    lives + delta = 0 → lifecycle_phase = 'sleeping' (Р477). Условие — day_started_at
+    совпадает и 0 ≤ lives + delta ≤ 3. 0 строк → WARNING, пропуск. delta — int (не bool);
+  - day_closed (life-ops-c, В31) — payload {day_started_at, outcome came|silent, missed_streak,
+    next_day_started_at}: day_started_at = next_day_started_at, missed_streak из payload;
+    позиция не меняется. Условие — day_started_at совпадает. 0 строк → WARNING, пропуск.
+  Порядок в life-ops-c: life_op раньше day_closed (меньший id) — оба видят старый
+  day_started_at. Повтор события после рестарта второй раз не применится: day_started_at
+  уже другой.
 
 Курсор — по pid: события e с e.id > coalesce(c.last_event_id, 0) через LEFT JOIN
 participant_state_checkpoints c USING (pid), ORDER BY e.id, LIMIT 500. Глобальный
@@ -43,8 +57,8 @@ DataError или IntegrityError → откат только этого savepoint
 kind и именем класса ошибки (без payload и pid), пропуск, checkpoint pid сдвигается на id
 события — одно битое событие не останавливает проектор. Другие SQLAlchemyError — откат
 всей пачки, как раньше.
-participant_events только читается; at и payload читаются для day_entered и
-day_report_submitted, в лог не идут.
+participant_events только читается; at и payload читаются для day_entered;
+payload — для day_report_submitted, life_op и day_closed; в лог не идут.
 author_pause_reason и last_seen_publish_epoch не трогаются.
 DSN проектора — Settings.projector_dsn(): PROJECTOR_DATABASE_URL → DATABASE_URL → POSTGRES_*
 (B-3a-2; роль app_projector — миграция 0006). DSN не логируется.
@@ -77,13 +91,21 @@ logger = logging.getLogger("app.projector")
 BATCH_SIZE = 500
 POLL_SECONDS = 1.0
 RETRY_SECONDS = 5.0
-PROJECTOR_VERSION = 2
+PROJECTOR_VERSION = 3
 PHASE_PRE_REGISTERED = "pre_registered"
 PHASE_ONBOARDING = "onboarding"
 # Пишет POST /miniapp/v1/day/test-enter (app/routers/day.py) под замком participant:pid.
 EVENT_KIND_DAY_ENTERED = "day_entered"
 # Пишет POST /miniapp/v1/day/report/submit (app/routers/day.py) под замком participant:pid.
 EVENT_KIND_DAY_REPORT_SUBMITTED = "day_report_submitted"
+# Пишет life-ops-c (закрытие дня) под замком participant:pid; раньше day_closed того же дня.
+EVENT_KIND_LIFE_OP = "life_op"
+# Пишет life-ops-c (закрытие дня) под замком participant:pid.
+EVENT_KIND_DAY_CLOSED = "day_closed"
+PHASE_SLEEPING = "sleeping"
+DAY_CLOSED_OUTCOMES = ("came", "silent")
+# Граница lives (CHECK ck_participant_state_lives_range, миграция 0007).
+MAX_LIVES = 3
 # Верхняя граница stage_no / module_no / day_no (smallint).
 MAX_POSITION_VALUE = 32767
 USAGE = "usage: python -m app.projector run | once"
@@ -149,6 +171,52 @@ _RESET_MISSED_STREAK = text(
     """
 )
 
+# day_report_submitted v3: переход на следующий день. Фаза, флаги и жизни не упоминаются.
+_ADVANCE_DAY = text(
+    """
+    UPDATE participant_state
+    SET stage_no = :stage_no,
+        module_no = :module_no,
+        day_no = :day_no,
+        day_started_at = CAST(:next_day_started_at AS timestamptz),
+        missed_streak = 0,
+        updated_at = now(),
+        projector_version = :version
+    WHERE pid = :pid AND day_started_at = CAST(:day_started_at AS timestamptz)
+    RETURNING pid
+    """
+)
+
+# life_op: жизни ± delta только для текущего дня и в границах [0, MAX_LIVES];
+# 0 жизней → sleeping (Р477). status_flags не упоминаются.
+_APPLY_LIFE_OP = text(
+    """
+    UPDATE participant_state
+    SET lives = lives + :delta,
+        lifecycle_phase = CASE WHEN lives + :delta = 0 THEN CAST(:sleeping AS text)
+                               ELSE lifecycle_phase END,
+        updated_at = now(),
+        projector_version = :version
+    WHERE pid = :pid
+      AND day_started_at = CAST(:day_started_at AS timestamptz)
+      AND lives + :delta BETWEEN 0 AND :max_lives
+    RETURNING pid
+    """
+)
+
+# day_closed: следующий день по часам, счётчик из payload; позиция, фаза и жизни не упоминаются.
+_CLOSE_DAY = text(
+    """
+    UPDATE participant_state
+    SET day_started_at = CAST(:next_day_started_at AS timestamptz),
+        missed_streak = :missed_streak,
+        updated_at = now(),
+        projector_version = :version
+    WHERE pid = :pid AND day_started_at = CAST(:day_started_at AS timestamptz)
+    RETURNING pid
+    """
+)
+
 _UPSERT_CHECKPOINT = text(
     """
     INSERT INTO participant_state_checkpoints (pid, last_event_id, at)
@@ -161,6 +229,10 @@ _UPSERT_CHECKPOINT = text(
 )
 
 _POSITION_FIELDS = ("stage_no", "module_no", "day_no")
+_NEXT_POSITION_FIELDS = ("next_stage_no", "next_module_no", "next_day_no")
+_NEXT_FIELDS = (*_NEXT_POSITION_FIELDS, "next_day_started_at")
+# Отметка «нет полей v3» — отличается от None («bad payload»).
+_NO_NEXT = object()
 
 
 @dataclass(frozen=True)
@@ -184,16 +256,31 @@ def _payload_dict(payload: Any) -> dict[str, Any] | None:
     return payload
 
 
-def position_from_payload(payload: Any) -> tuple[int, int, int] | None:
+def _int_value(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _str_value(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return value
+
+
+def position_from_payload(
+    payload: Any, fields: tuple[str, str, str] = _POSITION_FIELDS
+) -> tuple[int, int, int] | None:
     """(stage_no, module_no, day_no) из payload day_entered или None (битый payload).
 
     Каждое значение — int (не bool) от 1 до MAX_POSITION_VALUE включительно.
+    fields — имена полей (для day_report_submitted v3 — next_*).
     """
     data = _payload_dict(payload)
     if data is None:
         return None
     values: list[int] = []
-    for field in _POSITION_FIELDS:
+    for field in fields:
         value = data.get(field)
         if isinstance(value, bool) or not isinstance(value, int):
             return None
@@ -211,10 +298,60 @@ def report_day_started_at(payload: Any) -> str | None:
     data = _payload_dict(payload)
     if data is None:
         return None
-    value = data.get("day_started_at")
-    if not isinstance(value, str) or not value:
+    return _str_value(data.get("day_started_at"))
+
+
+def report_next_day(payload: Any) -> tuple[int, int, int, str] | object | None:
+    """Поля v3 day_report_submitted: (stage, module, day, next_day_started_at) или _NO_NEXT.
+
+    Ни одного из четырёх полей → _NO_NEXT (поведение v2); часть полей или битое значение →
+    None («bad payload»). Разбор next_day_started_at как timestamptz — в SQL (DataError).
+    """
+    data = _payload_dict(payload)
+    if data is None:
         return None
-    return value
+    present = [field in data for field in _NEXT_FIELDS]
+    if not any(present):
+        return _NO_NEXT
+    if not all(present):
+        return None
+    position = position_from_payload(data, _NEXT_POSITION_FIELDS)
+    next_started = _str_value(data.get("next_day_started_at"))
+    if position is None or next_started is None:
+        return None
+    return (*position, next_started)
+
+
+def life_op_from_payload(payload: Any) -> tuple[str, int] | None:
+    """(day_started_at, delta) из payload life_op или None (битый payload)."""
+    data = _payload_dict(payload)
+    if data is None:
+        return None
+    started = _str_value(data.get("day_started_at"))
+    delta = _int_value(data.get("delta"))
+    if started is None or delta is None:
+        return None
+    return started, delta
+
+
+def day_closed_from_payload(payload: Any) -> tuple[str, int, str] | None:
+    """(day_started_at, missed_streak, next_day_started_at) из payload day_closed или None."""
+    data = _payload_dict(payload)
+    if data is None:
+        return None
+    started = _str_value(data.get("day_started_at"))
+    next_started = _str_value(data.get("next_day_started_at"))
+    streak = _int_value(data.get("missed_streak"))
+    if (
+        started is None
+        or next_started is None
+        or streak is None
+        or streak < 0
+        or streak > MAX_POSITION_VALUE
+        or data.get("outcome") not in DAY_CLOSED_OUTCOMES
+    ):
+        return None
+    return started, streak, next_started
 
 
 def _apply_first_consent(conn: Connection, event_id: int, pid: uuid.UUID, kind: str) -> bool:
@@ -267,12 +404,77 @@ def _apply_day_report_submitted(
     conn: Connection, event_id: int, pid: uuid.UUID, kind: str, payload: Any
 ) -> bool:
     started = report_day_started_at(payload)
-    if started is None:
+    next_day = report_next_day(payload)
+    if started is None or next_day is None:
         _skip(event_id, kind, "bad payload")
         return False
+    if next_day is _NO_NEXT:
+        applied = conn.execute(
+            _RESET_MISSED_STREAK,
+            {"pid": pid, "day_started_at": started, "version": PROJECTOR_VERSION},
+        ).first()
+    else:
+        stage_no, module_no, day_no, next_started = next_day  # type: ignore[misc]
+        applied = conn.execute(
+            _ADVANCE_DAY,
+            {
+                "pid": pid,
+                "stage_no": stage_no,
+                "module_no": module_no,
+                "day_no": day_no,
+                "next_day_started_at": next_started,
+                "day_started_at": started,
+                "version": PROJECTOR_VERSION,
+            },
+        ).first()
+    if applied is None:
+        _skip(event_id, kind, "not current day or no state")
+        return False
+    return True
+
+
+def _apply_life_op(
+    conn: Connection, event_id: int, pid: uuid.UUID, kind: str, payload: Any
+) -> bool:
+    parsed = life_op_from_payload(payload)
+    if parsed is None:
+        _skip(event_id, kind, "bad payload")
+        return False
+    started, delta = parsed
     applied = conn.execute(
-        _RESET_MISSED_STREAK,
-        {"pid": pid, "day_started_at": started, "version": PROJECTOR_VERSION},
+        _APPLY_LIFE_OP,
+        {
+            "pid": pid,
+            "delta": delta,
+            "sleeping": PHASE_SLEEPING,
+            "day_started_at": started,
+            "max_lives": MAX_LIVES,
+            "version": PROJECTOR_VERSION,
+        },
+    ).first()
+    if applied is None:
+        _skip(event_id, kind, "not current day, lives out of range or no state")
+        return False
+    return True
+
+
+def _apply_day_closed(
+    conn: Connection, event_id: int, pid: uuid.UUID, kind: str, payload: Any
+) -> bool:
+    parsed = day_closed_from_payload(payload)
+    if parsed is None:
+        _skip(event_id, kind, "bad payload")
+        return False
+    started, streak, next_started = parsed
+    applied = conn.execute(
+        _CLOSE_DAY,
+        {
+            "pid": pid,
+            "day_started_at": started,
+            "missed_streak": streak,
+            "next_day_started_at": next_started,
+            "version": PROJECTOR_VERSION,
+        },
     ).first()
     if applied is None:
         _skip(event_id, kind, "not current day or no state")
@@ -295,6 +497,10 @@ def _apply_event(
         return _apply_day_entered(conn, event_id, pid, kind, at, payload)
     if kind == EVENT_KIND_DAY_REPORT_SUBMITTED:
         return _apply_day_report_submitted(conn, event_id, pid, kind, payload)
+    if kind == EVENT_KIND_LIFE_OP:
+        return _apply_life_op(conn, event_id, pid, kind, payload)
+    if kind == EVENT_KIND_DAY_CLOSED:
+        return _apply_day_closed(conn, event_id, pid, kind, payload)
     _skip(event_id, kind, "unknown kind")
     return False
 
@@ -394,7 +600,7 @@ def run_forever(
     while True:
         try:
             with _advisory_lock(engine) as lock_conn:
-                logger.info("projector: lock acquired, running")
+                logger.info("projector: lock acquired, running (version %s)", PROJECTOR_VERSION)
                 while True:
                     result = _drain(engine)
                     if result.processed or result.skipped:

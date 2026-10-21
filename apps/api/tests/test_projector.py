@@ -98,7 +98,7 @@ def test_first_consent_builds_onboarding(db_engine):
     assert state is not None
     assert state["lifecycle_phase"] == "onboarding"
     assert list(state["status_flags"]) == []
-    assert state["projector_version"] == 2
+    assert state["projector_version"] == 3  # PROJECTOR_VERSION с life-ops-a
     assert _checkpoint(db_engine, pid) == event_id
 
 
