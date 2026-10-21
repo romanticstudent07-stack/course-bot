@@ -9,7 +9,7 @@ active_from / deadline_at у дня из test-enter.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -32,6 +32,8 @@ from app.telegram_init_data import INIT_DATA_HEADER
 from tests.conftest import valid_init_data
 
 URL = "/miniapp/v1/day/current"
+SUBMIT = "/miniapp/v1/day/report/submit"
+SANTIAGO = "America/Santiago"
 SECOND = timedelta(seconds=1)
 PASSED = {"task_1": "done", "task_2": "done", "task_3": "done", "task_4": "not_done"}
 NOT_PASSED = {"task_1": "not_done", "task_2": "done", "task_3": "done", "task_4": "done"}
@@ -189,7 +191,7 @@ def test_get_queued_then_open(db_engine, monkeypatch):
     # active_from / deadline_at — нового дня; повтор GET не меняет queued_until.
     assert _u(queued.active_from) == _u(day_clock.active_from(new_started, tz))
     assert _u(queued.deadline_at) == _u(day_clock.deadline_at(new_started, tz))
-    assert _current(db_engine, 9505).queued_until == queued.queued_until
+    assert _u(_current(db_engine, 9505).queued_until) == _u(queued.queued_until)
 
     _set_now(monkeypatch, _u(queued.queued_until) + SECOND)
     shown = _current(db_engine, 9505)
@@ -200,8 +202,12 @@ def test_get_queued_then_open(db_engine, monkeypatch):
     assert shown.position.day_no == 2 and shown.blocks
     af = shown.active_from
     assert _u(af) > _u(now)
-    assert _u(af) - _u(now) <= timedelta(days=1)
-    assert af.astimezone(day_clock.zone(tz)).time().isoformat() == "04:00:00"
+    # Н4: ровно ближайшая 04:00 по поясу участника после момента сдачи (сдача в 06:00 местного).
+    zone = day_clock.zone(tz)
+    nearest = datetime.combine(
+        _u(now).astimezone(zone).date() + timedelta(days=1), time(4), tzinfo=zone
+    )
+    assert _u(af) == _u(nearest)
 
 
 def test_get_fields_for_test_enter_day(db_engine, monkeypatch):
@@ -212,8 +218,8 @@ def test_get_fields_for_test_enter_day(db_engine, monkeypatch):
     assert current.status == "open"
     assert current.buttons_active is False and current.can_submit is False
     assert current.queued_until is None
-    assert current.active_from == day_clock.active_from(started, tz)
-    assert current.deadline_at == day_clock.deadline_at(started, tz)
+    assert _u(current.active_from) == _u(day_clock.active_from(started, tz))
+    assert _u(current.deadline_at) == _u(day_clock.deadline_at(started, tz))
     assert str(current.active_from.tzinfo) == str(zone)  # пояс участника
     assert str(current.deadline_at.tzinfo) == str(zone)
     assert current.active_from.astimezone(zone).time().isoformat() == "04:00:00"
@@ -245,3 +251,46 @@ def test_get_http_fields_present(db_api_client, db_engine, monkeypatch):
     af = datetime.fromisoformat(body["active_from"])
     assert af.utcoffset() is not None and _u(af) == _u(day_clock.active_from(started, tz))
     assert datetime.fromisoformat(body["deadline_at"]).utcoffset() is not None
+
+
+def test_http_submit_santiago_before_dst_jump(db_api_client, db_engine, monkeypatch):
+    # Н4: пояс с переводом часов. Santiago 2026-09-06 00:00 −04:00 → 01:00 −03:00.
+    # День начат 2026-09-05 03:00 местного, сдача 23:30 местного (окно open) → passed.
+    with Session(db_engine) as session:
+        pid = register_with_consents(session, 9508, ["C0", "C1"]).participant.pid
+    run_once(db_engine)
+    with Session(db_engine) as session:
+        enter_day_by_test_flag(session, 9508, True)
+    run_once(db_engine)
+    zone = day_clock.zone(SANTIAGO)
+    started = datetime(2026, 9, 5, 3, 0, tzinfo=zone)
+    with db_engine.begin() as conn:  # тестовая подготовка состояния (не код приложения)
+        conn.execute(
+            text("UPDATE participant_state SET tz = :tz, day_started_at = :ts WHERE pid = :p"),
+            {"tz": SANTIAGO, "ts": started, "p": pid},
+        )
+    now = _u(datetime(2026, 9, 5, 23, 30, tzinfo=zone))
+    assert day_clock.window(started, SANTIAGO, now) == day_clock.WINDOW_OPEN
+    _set_now(monkeypatch, now)
+    headers = {INIT_DATA_HEADER: valid_init_data(user={"id": 9508, "first_name": "Test"})}
+    r = db_api_client.post(
+        SUBMIT,
+        json={"marks": [{"block_id": b, "value": v} for b, v in PASSED.items()]},
+        headers={**headers, "X-Client-Op-Id": str(uuid.uuid4())},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"verdict": "passed", "queued": True}
+    run_once(db_engine)
+    next_started, tz, day_no = _state(db_engine, pid)
+    assert (tz, day_no) == (SANTIAGO, 2)
+
+    r = db_api_client.get(URL, headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "queued"
+    af = datetime.fromisoformat(body["active_from"])
+    assert _u(af) == _u(day_clock.active_from(next_started, SANTIAGO))
+    assert _u(af) > now
+    assert _u(af) == datetime(2026, 9, 6, 7, 0, tzinfo=timezone.utc)  # 04:00 −03:00
+    delay = _u(datetime.fromisoformat(body["queued_until"])) - now
+    assert timedelta(minutes=10) <= delay <= timedelta(minutes=60)

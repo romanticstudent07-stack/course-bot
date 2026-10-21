@@ -25,7 +25,8 @@ GET /day/current — только чтение, ничего не пишет:
     day_started_at) → queued (ключ day_queue по текущему day_started_at и now < queued_until;
     position, blocks, min_optional = null) → closed (окно closed) → open;
   - при позиции: active_from, deadline_at (пояс участника), queued_until (только queued,
-    иначе null), buttons_active = окно open (queued → false);
+    иначе null), buttons_active = окно open и статус не submitted/queued (submitted и queued →
+    false всегда: после сдачи marks отвечает 409 DAY_ALREADY_SUBMITTED);
   - отметки — из day_marks только по pid и текущему day_started_at (true → done,
     false → not_done, нет строки → null);
   - can_submit = все блоки отмечены, статус open и окно open;
@@ -70,7 +71,8 @@ POST /day/report/submit (iter2-api-2b; П-31, В15, В18, В22), заголов�
   7) вердикт — app/day_report.py; жизни не меняются (Ш1);
   8) INSERT idempotency_keys: day_done (result_ref = verdict) и day_report (result_ref,
      params_hash) — без ON CONFLICT: под замком дубля нет, а если будет — ошибка БД → 503;
-  8а) INSERT idempotency_keys day_queue:{pid}:{dsa(next_started)} (kind day_queue);
+  8а) INSERT idempotency_keys day_queue:{pid}:{dsa(next_started)} (kind day_queue) — тоже без
+     ON CONFLICT, как day_done: конфликт → IntegrityError → rollback → 503;
   9) INSERT participant_events kind day_report_submitted, payload {day_started_at (dsa),
      verdict, stage_no, module_no, day_no, next_stage_no, next_module_no, next_day_no,
      next_day_started_at = dsa(next_started)}, actor participant. passed → day_no + 1, если
@@ -168,14 +170,14 @@ _STATE_SQL = text(
     "FROM participant_state WHERE pid = :pid"
 )
 
-# Ключи не обновляются и не удаляются (day_keys.py); повтор под замком невозможен,
-# ON CONFLICT DO NOTHING — страховка.
+# Ключ day_enter (test-enter). Ключи не обновляются и не удаляются (day_keys.py).
 _INSERT_KEY_SQL = text(
     "INSERT INTO idempotency_keys (key, kind, ttl) "
     "VALUES (:key, :kind, CAST(:ttl AS interval)) ON CONFLICT DO NOTHING"
 )
 
-# report/submit: ключ с результатом. Без ON CONFLICT: дубль → ошибка БД → 503 (П-31).
+# report/submit: ключи day_done, day_report, day_queue. Без ON CONFLICT: дубль → ошибка БД → 503
+# (П-31).
 _INSERT_RESULT_KEY_SQL = text(
     "INSERT INTO idempotency_keys (key, kind, ttl, result_ref, params_hash) "
     "VALUES (:key, :kind, CAST(:ttl AS interval), :result_ref, :params_hash)"
@@ -375,7 +377,7 @@ def insert_idempotency_key(session: Session, key: str, kind: str) -> None:
 
 
 def _insert_result_key(
-    session: Session, key: str, kind: str, result_ref: str, p_hash: str | None
+    session: Session, key: str, kind: str, result_ref: str | None, p_hash: str | None
 ) -> None:
     session.execute(
         _INSERT_RESULT_KEY_SQL,
@@ -509,7 +511,7 @@ def read_day_current(
         active_from=active_from,
         deadline_at=deadline_at,
         queued_until=None,
-        buttons_active=window_open,
+        buttons_active=window_open and not submitted,  # Р1: после сдачи кнопки неактивны
     )
 
 
@@ -686,7 +688,7 @@ def submit_day_report(
     # Один и тот же next_started — в ключ очереди и в payload (У4).
     next_started = next_day_started(now, row.tz)
     next_stage_no, next_module_no, next_day_no = next_position(content, row, result)
-    insert_idempotency_key(session, key_day_queue(pid, next_started), KIND_DAY_QUEUE)
+    _insert_result_key(session, key_day_queue(pid, next_started), KIND_DAY_QUEUE, None, None)
     session.execute(
         ParticipantEvent.__table__.insert().values(
             pid=pid,

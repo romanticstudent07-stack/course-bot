@@ -3,7 +3,8 @@
 «Сейчас» — monkeypatch app.day_clock.utcnow. Без БД: 409-ошибки окна и правило next_day_started
 (У3). С БД — только CI: до 04:00 → 409 DAY_NOT_ACTIVE; в 04:00:00 → 200; 23:59:59 и ровно 00:00:00
 → 200; 00:00:01 → 409 DAY_CLOSED; повтор того же op_id после 00:00 → тот же 200; после 409 ничего
-не записано; гонка на 00:00 — «сейчас» берётся после замка; GET closed.
+не записано; гонка на 00:00 — «сейчас» берётся после замка; GET closed; GET submitted внутри
+открытого окна — buttons_active и can_submit false (Р1).
 """
 from __future__ import annotations
 
@@ -321,3 +322,25 @@ def test_get_closed_after_midnight(db_engine, monkeypatch):
     assert current.queued_until is None
     assert current.blocks and current.position is not None
     assert dsa(current.day_started_at) == dsa(started)
+
+
+def test_get_submitted_inside_open_window_buttons_inactive(db_engine, monkeypatch):
+    # Р1: после сдачи marks отвечает 409 DAY_ALREADY_SUBMITTED → кнопки неактивны и в окне open.
+    pid, started, tz = _open_day(db_engine, 9409)
+    now = _u(day_clock.active_from(started, tz)) + timedelta(hours=1)
+    _set_now(monkeypatch, now)
+    assert day_clock.window(started, tz, now) == day_clock.WINDOW_OPEN
+    with db_engine.begin() as conn:  # ключ day_done есть, проектор день ещё не сдвинул
+        conn.execute(
+            text(
+                "INSERT INTO idempotency_keys (key, kind, ttl, result_ref) "
+                "VALUES (:k, 'day_done', CAST('3650 days' AS interval), 'passed')"
+            ),
+            {"k": key_day_done(pid, started)},
+        )
+    with Session(db_engine) as session:
+        current = read_day_current(session, 9409, get_day_content(), False)
+    assert current.status == "submitted"
+    assert current.buttons_active is False
+    assert current.can_submit is False
+    assert current.queued_until is None

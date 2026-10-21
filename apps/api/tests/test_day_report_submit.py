@@ -6,7 +6,7 @@
 import threading
 import time
 import uuid
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app import day_clock
 from app.day_content import get_day_content
-from app.day_keys import dsa, key_day_done, key_day_report
+from app.day_keys import dsa, key_day_done, key_day_queue, key_day_report
 from app.projector import run_once
 from app.rate_limit import rate_limit
 from app.routers.day import (
@@ -31,17 +31,23 @@ from app.telegram_init_data import INIT_DATA_HEADER, InitDataContext, TelegramUs
 from tests.conftest import valid_init_data
 
 
-# life-ops-b: «сейчас» — внутри окна дня из test-enter (ближайшая 04:00 + 1 ч, пояс по умолчанию).
-_REAL_UTCNOW = day_clock.utcnow
+# life-ops-b: «сейчас» — от фактического day_started_at после открытия дня (ревью #112, Н1):
+# active_from(started, tz) + 1 ч. До открытия дня — фиксированный момент (результат проверок
+# до окна от него не зависит). Реальное время запуска на тесты не влияет.
+_FIXED_NOW = datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc)
+_CLOCK: dict[str, datetime] = {}
 
 
 @pytest.fixture(autouse=True)
 def _inside_day_window(monkeypatch):
-    now = day_clock.active_from(_REAL_UTCNOW(), day_clock.DEFAULT_TZ).astimezone(
-        timezone.utc
-    ) + timedelta(hours=1)
-    monkeypatch.setattr(day_clock, "utcnow", lambda: now)
-    return now
+    _CLOCK["now"] = _FIXED_NOW
+    monkeypatch.setattr(day_clock, "utcnow", lambda: _CLOCK["now"])
+    return _CLOCK
+
+
+def _u(ts: datetime) -> datetime:
+    return ts.astimezone(timezone.utc)
+
 
 SUBMIT = "/miniapp/v1/day/report/submit"
 WAIT_SECONDS = 10
@@ -102,10 +108,11 @@ def _open_day(engine, tg_user_id: int):
         enter_day_by_test_flag(session, tg_user_id, True)
     run_once(engine)
     with engine.connect() as conn:
-        started = conn.execute(
-            text("SELECT day_started_at FROM participant_state WHERE pid = :p"), {"p": pid}
-        ).scalar_one()
-    return pid, started
+        row = conn.execute(
+            text("SELECT day_started_at, tz FROM participant_state WHERE pid = :p"), {"p": pid}
+        ).one()
+    _CLOCK["now"] = _u(day_clock.active_from(row.day_started_at, row.tz)) + timedelta(hours=1)
+    return pid, row.day_started_at
 
 
 def _body(values: dict[str, str], **extra) -> DayReportIn:
@@ -144,9 +151,10 @@ def _events(engine, pid) -> int:
 def _keys(engine, pid) -> int:
     return _scalar(
         engine,
-        "SELECT count(*) FROM idempotency_keys WHERE key LIKE :a OR key LIKE :b",
+        "SELECT count(*) FROM idempotency_keys WHERE key LIKE :a OR key LIKE :b OR key LIKE :c",
         a=f"day_done:{pid}:%",
         b=f"day_report:{pid}:%",
+        c=f"day_queue:{pid}:%",
     )
 
 
@@ -167,6 +175,7 @@ def _marks(engine, pid) -> dict[str, bool]:
 
 
 def _nothing_written(engine, pid) -> bool:
+    # Нет события, ключей day_done / day_report / day_queue и отметок (П-31).
     return (_events(engine, pid), _keys(engine, pid), _marks(engine, pid)) == (0, 0, {})
 
 
@@ -223,7 +232,7 @@ def test_submit_verdicts(db_engine, values, expected, _inside_day_window):
         "next_stage_no": 1,
         "next_module_no": 1,
         "next_day_no": 2 if expected == "passed" else 1,
-        "next_day_started_at": dsa(_inside_day_window),
+        "next_day_started_at": dsa(_inside_day_window["now"]),
     }
     assert _marks(db_engine, pid) == {b: v == "done" for b, v in values.items()}
 
@@ -301,6 +310,81 @@ def test_p31_commit_fails_503_nothing_written(db_engine, monkeypatch):
             )
     assert (exc.value.status_code, exc.value.detail["code"]) == (503, "SERVICE_UNAVAILABLE")
     assert _nothing_written(db_engine, pid)
+
+
+def _ctx(tg_user_id: int) -> InitDataContext:
+    return InitDataContext(user=TelegramUser(id=tg_user_id), auth_date=int(time.time()))
+
+
+def _fail_insert(monkeypatch, session: Session, match) -> dict[str, bool]:
+    """session.execute падает OperationalError на INSERT, для которого match(stmt, params)."""
+    real = session.execute
+    hit = {"hit": False}
+
+    def execute(stmt, *args, **kwargs):
+        params = args[0] if args else kwargs.get("params")
+        if match(str(stmt), params if isinstance(params, dict) else {}):
+            hit["hit"] = True
+            raise OperationalError("INSERT", {}, Exception("insert failed"))
+        return real(stmt, *args, **kwargs)
+
+    monkeypatch.setattr(session, "execute", execute)
+    return hit
+
+
+def _is_queue_key(sql: str, params: dict) -> bool:
+    return "INSERT INTO idempotency_keys" in sql and str(params.get("key", "")).startswith(
+        "day_queue:"
+    )
+
+
+def _is_report_event(sql: str, params: dict) -> bool:
+    return "INSERT INTO participant_events" in sql
+
+
+@pytest.mark.parametrize(
+    ("tg_user_id", "match"), [(9312, _is_queue_key), (9313, _is_report_event)]
+)
+def test_p31_insert_fails_503_nothing_written(db_engine, monkeypatch, tg_user_id, match):
+    # Сбой INSERT ключа day_queue / события day_report_submitted → 503, ничего не записано.
+    pid, _ = _open_day(db_engine, tg_user_id)
+    with Session(db_engine) as session:
+        hit = _fail_insert(monkeypatch, session, match)
+        with pytest.raises(HTTPException) as exc:
+            post_day_report_submit(
+                _body(_all("done")), uuid.uuid4(), _ctx(tg_user_id), session, get_day_content()
+            )
+    assert hit["hit"]
+    assert (exc.value.status_code, exc.value.detail["code"]) == (503, "SERVICE_UNAVAILABLE")
+    assert _nothing_written(db_engine, pid)
+
+
+def test_queue_key_conflict_503_nothing_written(db_engine, _inside_day_window):
+    # Н6: ключ day_queue без ON CONFLICT — конфликт → IntegrityError → rollback → 503.
+    pid, _ = _open_day(db_engine, 9314)
+    queue_key = key_day_queue(pid, _inside_day_window["now"])  # next_started = now (окно open)
+    with db_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO idempotency_keys (key, kind, ttl) "
+                "VALUES (:k, 'day_queue', CAST('3650 days' AS interval))"
+            ),
+            {"k": queue_key},
+        )
+    with Session(db_engine) as session:
+        with pytest.raises(HTTPException) as exc:
+            post_day_report_submit(
+                _body(_all("done")), uuid.uuid4(), _ctx(9314), session, get_day_content()
+            )
+    assert (exc.value.status_code, exc.value.detail["code"]) == (503, "SERVICE_UNAVAILABLE")
+    assert _events(db_engine, pid) == 0
+    assert _marks(db_engine, pid) == {}
+    assert _scalar(
+        db_engine,
+        "SELECT count(*) FROM idempotency_keys WHERE key LIKE :a OR key LIKE :b",
+        a=f"day_done:{pid}:%",
+        b=f"day_report:{pid}:%",
+    ) == 0
 
 
 def test_parallel_submits_one_200_one_409(db_engine):
