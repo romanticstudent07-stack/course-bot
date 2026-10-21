@@ -103,6 +103,50 @@ def test_check_html_rejects(bad):
         render.check_html(bad)
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "A & B",
+        "a &amp b",
+        "&;",
+        "&#;",
+        "&#x;",
+        "&#xZZ;",
+        "a < b",
+        "a <3 b",
+        "<b>x</b> < y",
+        "<>",
+        "</>",
+        "<b x</b>",
+        "a <<b>x</b>",
+    ],
+)
+def test_check_html_rejects_bare_amp_and_lt(bad):
+    with pytest.raises(TemplateError):
+        render.check_html(bad)
+
+
+@pytest.mark.parametrize(
+    "good",
+    ["&amp; &lt; &gt; &quot;", "&#38; &#x26; &#X3C;", "a > b", "<B>x</B>", "<b>x</b>&nbsp;y"],
+)
+def test_check_html_allows_entities_and_tags(good):
+    render.check_html(good)
+
+
+def test_bare_amp_lt_error_has_no_template_text():
+    for bad in ("секрет & тайна", "секрет < тайна"):
+        with pytest.raises(TemplateError) as err:
+            render.check_html(bad)
+        assert "секрет" not in str(err.value) and "тайна" not in str(err.value)
+
+
+def test_build_html_parts_bare_amp_falls_to_plain_path():
+    with pytest.raises(TemplateError):
+        render.build_html_parts("A & {name}", {"name": "x"}, "T1")
+    assert render.build_plain_parts("A & {name}", {"name": "x"}, "T1") == ["A & x"]
+
+
 def test_check_html_error_has_no_template_text():
     with pytest.raises(TemplateError) as err:
         render.check_html("<span>секрет</span>")

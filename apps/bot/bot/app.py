@@ -13,7 +13,8 @@ backend (apps/api), а контракт передачи апдейтов api �
 (своей сессии и прокси нет, Р-11). Стартует до wait_until_no_webhook — доставке webhook не мешает.
 BOT_DATABASE_URL пуст → воркер не запускается (WARNING), бот работает как раньше.
 Остановка (SIGTERM → start_polling завершается → finally): stop.set(), ждём воркер до 25 с
-(текущая строка дописывается), затем cancel; потом закрываем сессию бота.
+(текущая строка дописывается), затем cancel (возможный дубль — docstring bot/outbox.py);
+потом закрываем сессию бота (start_polling вызывается с close_bot_session=False).
 """
 from __future__ import annotations
 
@@ -99,7 +100,10 @@ async def run(config: BotConfig) -> None:
         await wait_until_no_webhook(bot, config.webhook_recheck_seconds)
         dp = build_dispatcher(config)
         logger.info("Старт бота: long polling")
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        # Сессию закрывает finally ниже — после остановки воркера outbox (он шлёт через неё же).
+        await dp.start_polling(
+            bot, allowed_updates=dp.resolve_used_update_types(), close_bot_session=False
+        )
     finally:
         await stop_outbox_worker(task, stop)
         await bot.session.close()
