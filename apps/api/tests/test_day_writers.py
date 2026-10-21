@@ -11,12 +11,14 @@ get_db_session (сессия-шпион); флаг выкл. → POST /miniapp/v
 import threading
 import time
 import uuid
+from datetime import timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app import day_clock
 from app.config import Settings, get_settings
 from app.day_content import get_day_content
 from app.db.session import get_db_session
@@ -32,6 +34,19 @@ from app.routers.day import (
 from app.routers.onboarding import register_with_consents
 from app.telegram_init_data import InitDataContext, TelegramUser, require_init_data
 from tests.conftest import FAKE_BOT_TOKEN, UNREACHABLE_DSN
+
+
+# life-ops-b: «сейчас» — внутри окна дня из test-enter (ближайшая 04:00 + 1 ч, пояс по умолчанию).
+_REAL_UTCNOW = day_clock.utcnow
+
+
+@pytest.fixture(autouse=True)
+def _inside_day_window(monkeypatch):
+    now = day_clock.active_from(_REAL_UTCNOW(), day_clock.DEFAULT_TZ).astimezone(
+        timezone.utc
+    ) + timedelta(hours=1)
+    monkeypatch.setattr(day_clock, "utcnow", lambda: now)
+    return now
 
 WAIT_SECONDS = 10
 TEST_ENTER = "/miniapp/v1/day/test-enter"

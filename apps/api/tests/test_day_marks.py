@@ -1,5 +1,6 @@
 """PUT /day/marks (iter2-api-2a): отметки блоков в day_marks. С БД — только CI."""
 import uuid
+from datetime import timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -7,11 +8,25 @@ from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app import day_clock
 from app.day_content import get_day_content
 from app.day_keys import KIND_DAY_DONE, dsa, key_day_done
 from app.projector import run_once
 from app.routers.day import DayMarkIn, enter_day_by_test_flag, insert_idempotency_key, put_day_mark
 from app.routers.onboarding import register_with_consents
+
+
+# life-ops-b: «сейчас» — внутри окна дня из test-enter (ближайшая 04:00 + 1 ч, пояс по умолчанию).
+_REAL_UTCNOW = day_clock.utcnow
+
+
+@pytest.fixture(autouse=True)
+def _inside_day_window(monkeypatch):
+    now = day_clock.active_from(_REAL_UTCNOW(), day_clock.DEFAULT_TZ).astimezone(
+        timezone.utc
+    ) + timedelta(hours=1)
+    monkeypatch.setattr(day_clock, "utcnow", lambda: now)
+    return now
 
 
 def _block_ids() -> list[str]:

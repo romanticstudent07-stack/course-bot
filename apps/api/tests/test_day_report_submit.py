@@ -6,6 +6,7 @@
 import threading
 import time
 import uuid
+from datetime import timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -13,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app import day_clock
 from app.day_content import get_day_content
 from app.day_keys import dsa, key_day_done, key_day_report
 from app.projector import run_once
@@ -27,6 +29,19 @@ from app.routers.day import (
 from app.routers.onboarding import register_with_consents
 from app.telegram_init_data import INIT_DATA_HEADER, InitDataContext, TelegramUser
 from tests.conftest import valid_init_data
+
+
+# life-ops-b: «сейчас» — внутри окна дня из test-enter (ближайшая 04:00 + 1 ч, пояс по умолчанию).
+_REAL_UTCNOW = day_clock.utcnow
+
+
+@pytest.fixture(autouse=True)
+def _inside_day_window(monkeypatch):
+    now = day_clock.active_from(_REAL_UTCNOW(), day_clock.DEFAULT_TZ).astimezone(
+        timezone.utc
+    ) + timedelta(hours=1)
+    monkeypatch.setattr(day_clock, "utcnow", lambda: now)
+    return now
 
 SUBMIT = "/miniapp/v1/day/report/submit"
 WAIT_SECONDS = 10
@@ -177,7 +192,7 @@ def test_marks_incomplete_422(db_engine):
         ({"task_1": "not_done", "task_2": "not_done", "task_3": "not_done", "task_4": "not_done"}, "all_not_done"),
     ],
 )
-def test_submit_verdicts(db_engine, values, expected):
+def test_submit_verdicts(db_engine, values, expected, _inside_day_window):
     assert set(values) == set(_block_ids())  # заглушка дня 1: task_1..task_4
     pid, started = _open_day(db_engine, 9302)
     op_id = uuid.uuid4()
@@ -204,6 +219,11 @@ def test_submit_verdicts(db_engine, values, expected):
         "stage_no": 1,
         "module_no": 1,
         "day_no": 1,
+        # life-ops-b: passed → день 2 (есть в контенте), иначе та же позиция; next — «сейчас».
+        "next_stage_no": 1,
+        "next_module_no": 1,
+        "next_day_no": 2 if expected == "passed" else 1,
+        "next_day_started_at": dsa(_inside_day_window),
     }
     assert _marks(db_engine, pid) == {b: v == "done" for b, v in values.items()}
 
@@ -337,5 +357,6 @@ def test_lives_unchanged_and_get_submitted(db_engine):
     assert lives() == before  # Ш1: жизни не меняются ни при каком вердикте
     with Session(db_engine) as session:
         current = read_day_current(session, 9311, get_day_content(), False)
-    assert current.status == "submitted"
+    # life-ops-b: проектор v3 сдвинул день по next_* — новый день в очереди показа.
+    assert current.status == "queued"
     assert current.can_submit is False
