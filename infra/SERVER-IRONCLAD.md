@@ -82,6 +82,11 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
     \password coursebot_api
     \password coursebot_projector
 
+Бот (send-1b; групповую роль `app_bot` создаёт миграция `0009_app_bot`):
+
+    CREATE ROLE coursebot_bot LOGIN IN ROLE app_bot;
+    \password coursebot_bot
+
 - Пароли генерируются командой `openssl rand -hex 24` (только 0-9a-f — экранировать в DSN не нужно).
 - Пароль задаётся только через `\password`: он не попадает в историю psql и не печатается при вводе.
   В SQL-команду (`PASSWORD '...'`) пароль не писать.
@@ -94,7 +99,7 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
 | `DATABASE_URL` | api (FastAPI) | `coursebot_api` (роль `app_api`) |
 | `PROJECTOR_DATABASE_URL` | projector | `coursebot_projector` (роль `app_projector`) |
 | `MIGRATIONS_DATABASE_URL` | сервис `migrate`: `alembic` и `python -m app.texts load` | владелец (`POSTGRES_USER`) |
-| — | bot | БД не использует |
+| `BOT_DATABASE_URL` | bot | `coursebot_bot` (роль `app_bot`) |
 
 - У projector `PROJECTOR_DATABASE_URL` — единственный путь к БД: запасного пути к владельцу нет,
   пусто в `.env` → проектор остаётся без БД.
@@ -114,7 +119,7 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
 
 **Не выводить в чат целиком** (там пароли): `docker compose config` и `env` контейнера.
 Список имён без значений можно: `DC exec projector env | cut -d= -f1 | sort`
-(так же для api: `DC exec api env | cut -d= -f1 | sort`).
+(так же для api: `DC exec api env | cut -d= -f1 | sort`; для bot: `DC exec bot env | cut -d= -f1 | sort`).
 
 ## Миграции и тексты (B-3d)
 

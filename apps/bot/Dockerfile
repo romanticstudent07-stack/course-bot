@@ -21,5 +21,5 @@ RUN useradd --system --uid 10001 --no-create-home app && chown -R app /app
 USER app
 
 # Long polling: входящих портов нет, EXPOSE не нужен (правило IRONCLAD).
-# BOT_TOKEN, WEBAPP_URL, LOG_LEVEL — из environment в infra/docker-compose.dev.yml (env_file нет, B-3).
+# BOT_TOKEN, WEBAPP_URL, LOG_LEVEL, BOT_DATABASE_URL — из environment в infra/docker-compose.dev.yml (env_file нет, B-3).
 CMD ["python", "-m", "bot"]

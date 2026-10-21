@@ -29,6 +29,9 @@ class TemplateError(ValueError):
 
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_][a-z0-9_]*)(?::[a-z_]+)?\}")
+# Голые & и < (Ф14): & — только в начале сущности, < — только в начале разрешённого тега.
+_ENTITY_AT_RE = re.compile(r"&(?:[A-Za-z][A-Za-z0-9]*|#[0-9]+|#[xX][0-9A-Fa-f]+);")
+_TAG_AT_RE = re.compile(r'</?([A-Za-z][A-Za-z0-9]*)(?:[^<>"\']|"[^"]*"|\'[^\']*\')*>')
 _SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*):")
 # Токены HTML: тег целиком | сущность &…; целиком | один символ.
 _TOKEN_RE = re.compile(
@@ -121,8 +124,22 @@ class _Checker(HTMLParser):
         self._fail("инструкция обработки в HTML")
 
 
+def _check_bare(text: str) -> None:
+    """«&» не в начале сущности и «<» не в начале разрешённого тега -> TemplateError."""
+    for m in re.finditer(r"[&<]", text):
+        pos = m.start()
+        if text[pos] == "&":
+            if not _ENTITY_AT_RE.match(text, pos):
+                raise TemplateError("голый & вне сущности")
+        else:
+            tag = _TAG_AT_RE.match(text, pos)
+            if not tag or tag.group(1).lower() not in ALLOWED_TAGS:
+                raise TemplateError("голый < вне разрешённого тега")
+
+
 def check_html(text: str) -> None:
     """Проверить HTML по контракту формы; нарушение -> TemplateError (без текста шаблона)."""
+    _check_bare(text)
     parser = _Checker()
     try:
         parser.feed(text)

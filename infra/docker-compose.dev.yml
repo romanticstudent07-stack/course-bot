@@ -18,6 +18,8 @@
 #     пустая строка из ${VAR} перекрыла бы дефолт кода, а в int-поле сломала бы старт.
 #   - projector ходит в БД только по PROJECTOR_DATABASE_URL (роль app_projector),
 #     запасного пути к владельцу нет: пусто в .env → проектор без БД.
+#   - bot ходит в БД только по BOT_DATABASE_URL (coursebot_bot, роль app_bot);
+#     пусто → доставка выключена.
 #   - Пароль владельца БД (MIGRATIONS_DATABASE_URL) есть только у одноразового сервиса
 #     migrate (profiles: tools): alembic и python -m app.texts load, запуск только вручную.
 #   - Подробности — infra/SERVER-IRONCLAD.md, разделы «Роли БД (B-3)»
@@ -234,8 +236,10 @@ services:
           memory: ${MEM_LIMIT_PROJECTOR:-128M}
 
   # Telegram bot (aiogram 3: /start + Menu Button; long polling, D-4).
-  # env_file нет (B-3): бот читает только BOT_TOKEN, WEBAPP_URL, LOG_LEVEL (bot/config.py);
-  # БД и Redis бот не использует.
+  # env_file нет (B-3): бот читает только BOT_TOKEN, WEBAPP_URL, LOG_LEVEL, BOT_DATABASE_URL
+  # (bot/config.py). bot ходит в БД только по BOT_DATABASE_URL (coursebot_bot, роль app_bot);
+  # пусто → доставка выключена. Redis бот не использует.
+  # stop_grace_period 30s: воркер outbox дописывает текущую строку (до 25 с, bot/app.py).
   bot:
     build:
       context: ../apps/bot
@@ -245,10 +249,14 @@ services:
       BOT_TOKEN: ${BOT_TOKEN}
       WEBAPP_URL: ${WEBAPP_URL}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      BOT_DATABASE_URL: ${BOT_DATABASE_URL}
       TZ: ${TZ}
     depends_on:
       api:
         condition: service_started
+      db:
+        condition: service_healthy
+    stop_grace_period: 30s
     restart: unless-stopped
     networks: [course-bot_net]
     deploy:
