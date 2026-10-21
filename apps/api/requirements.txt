@@ -33,3 +33,6 @@ httpx==0.28.1
 
 # --- Утилиты ---
 python-dotenv==1.2.3
+
+# --- IANA-пояса для zoneinfo в python:3.12-slim, life-ops-a, ЛО-4 ---
+tzdata==2026.5

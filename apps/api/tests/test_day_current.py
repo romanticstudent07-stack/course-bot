@@ -77,6 +77,8 @@ def test_kinds_and_ttl():
         "day_enter": "3650 days",
         "day_done": "3650 days",
         "day_report": "1 hour",
+        "day_close": "3650 days",  # life-ops-a
+        "day_queue": "3650 days",  # life-ops-a
     }
 
 
