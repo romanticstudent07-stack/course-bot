@@ -85,12 +85,13 @@ import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
 
+from app import day_clock, life_ops
 from app.config import get_settings
 from app.db.models import EVENT_KIND_MINI_APP_FIRST_CONSENT
 from app.db.session import get_engine
@@ -609,6 +610,23 @@ def run_once(engine: Engine) -> ProjectorResult:
         return _drain(engine)
 
 
+def _life_ops_step(engine: Engine, last_tick: datetime | None) -> datetime | None:
+    """«Часы» (life-ops-c): tick раз в LIFE_OPS_INTERVAL_S по day_clock.utcnow().
+
+    Любая ошибка tick → WARNING с именем класса, цикл проектора живёт дальше (У7).
+    Часы назад (now < last_tick) → tick сразу. Возвращает момент последнего tick.
+    """
+    now = day_clock.utcnow()
+    interval = timedelta(seconds=life_ops.LIFE_OPS_INTERVAL_S)
+    if last_tick is not None and timedelta(0) <= now - last_tick < interval:
+        return last_tick
+    try:
+        life_ops.tick(engine, now)
+    except Exception as exc:  # noqa: BLE001 — шаг «часов» не роняет проектор
+        logger.warning("projector: life_ops tick failed (%s)", type(exc).__name__)
+    return now
+
+
 def run_forever(
     engine: Engine,
     *,
@@ -616,7 +634,11 @@ def run_forever(
     retry_seconds: float = RETRY_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
-    """Режим run: lock держится всё время; сбой БД → WARNING, пауза, повтор."""
+    """Режим run: lock держится всё время; сбой БД → WARNING, пауза, повтор.
+
+    После прохода — шаг «часов» (_life_ops_step) под тем же lock проектора; once — без него.
+    """
+    last_tick: datetime | None = None
     while True:
         try:
             with _advisory_lock(engine) as lock_conn:
@@ -629,6 +651,7 @@ def run_forever(
                             result.processed,
                             result.skipped,
                         )
+                    last_tick = _life_ops_step(engine, last_tick)
                     # Проверка, что соединение с lock живо (иначе — повтор с начала).
                     lock_conn.execute(_PING)
                     lock_conn.commit()
