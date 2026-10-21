@@ -35,13 +35,22 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
     позиция вне [1, MAX_POSITION_VALUE] или битая строка → WARNING «bad payload», пропуск;
   - life_op (life-ops-c, В31) — payload {day_started_at, delta, reason}: lives = lives + delta;
     lives + delta = 0 → lifecycle_phase = 'sleeping' (Р477). Условие — day_started_at
-    совпадает и 0 ≤ lives + delta ≤ 3. 0 строк → WARNING, пропуск. delta — int (не bool);
+    совпадает, фаза onboarding или active (В29; muted / sleeping / erased не трогаются,
+    ревью #111, Н2) и 0 ≤ lives + delta ≤ 3. 0 строк → WARNING, пропуск.
+    Payload: только delta == −1 (int, не bool) и reason == "missed_days", иначе
+    «bad payload» (Н3);
   - day_closed (life-ops-c, В31) — payload {day_started_at, outcome came|silent, missed_streak,
     next_day_started_at}: day_started_at = next_day_started_at, missed_streak из payload;
-    позиция не меняется. Условие — day_started_at совпадает. 0 строк → WARNING, пропуск.
+    позиция не меняется. Условие — day_started_at совпадает и next_day_started_at строго
+    позже него (Н5: равные → пропуск, иначе повтор применился бы снова). 0 строк → WARNING,
+    пропуск.
   Порядок в life-ops-c: life_op раньше day_closed (меньший id) — оба видят старый
-  day_started_at. Повтор события после рестарта второй раз не применится: day_started_at
-  уже другой.
+  day_started_at. Защита от повтора (ревью #111, Н4) — ТОЛЬКО для пары life_op + day_closed:
+  после day_closed day_started_at уже другой, и повтор обоих пропускается. Сам по себе
+  life_op повторно применяется: два life_op одного дня без day_closed между ними —
+  оба (−2 жизни); проектор это не ловит. Поэтому писатель (life-ops-c) обязан писать
+  life_op, day_closed и ключ day_close:{pid}:{dsa} в ОДНОЙ транзакции под замком
+  participant:pid — тогда ни одно из трёх не появится без остальных.
 
 Курсор — по pid: события e с e.id > coalesce(c.last_event_id, 0) через LEFT JOIN
 participant_state_checkpoints c USING (pid), ORDER BY e.id, LIMIT 500. Глобальный
@@ -104,6 +113,9 @@ EVENT_KIND_LIFE_OP = "life_op"
 EVENT_KIND_DAY_CLOSED = "day_closed"
 PHASE_SLEEPING = "sleeping"
 DAY_CLOSED_OUTCOMES = ("came", "silent")
+# life_op: единственные допустимые delta и reason (life-ops-a §7, ревью #111, Н3).
+LIFE_OP_DELTAS = (-1,)
+LIFE_OP_REASON = "missed_days"
 # Граница lives (CHECK ck_participant_state_lives_range, миграция 0007).
 MAX_LIVES = 3
 # Верхняя граница stage_no / module_no / day_no (smallint).
@@ -187,8 +199,8 @@ _ADVANCE_DAY = text(
     """
 )
 
-# life_op: жизни ± delta только для текущего дня и в границах [0, MAX_LIVES];
-# 0 жизней → sleeping (Р477). status_flags не упоминаются.
+# life_op: жизни ± delta только для текущего дня, фазы onboarding / active (В29, Н2)
+# и в границах [0, MAX_LIVES]; 0 жизней → sleeping (Р477). status_flags не упоминаются.
 _APPLY_LIFE_OP = text(
     """
     UPDATE participant_state
@@ -199,12 +211,14 @@ _APPLY_LIFE_OP = text(
         projector_version = :version
     WHERE pid = :pid
       AND day_started_at = CAST(:day_started_at AS timestamptz)
+      AND lifecycle_phase IN ('onboarding', 'active')
       AND lives + :delta BETWEEN 0 AND :max_lives
     RETURNING pid
     """
 )
 
 # day_closed: следующий день по часам, счётчик из payload; позиция, фаза и жизни не упоминаются.
+# Следующий день строго позже текущего (Н5).
 _CLOSE_DAY = text(
     """
     UPDATE participant_state
@@ -213,6 +227,7 @@ _CLOSE_DAY = text(
         updated_at = now(),
         projector_version = :version
     WHERE pid = :pid AND day_started_at = CAST(:day_started_at AS timestamptz)
+      AND CAST(:next_day_started_at AS timestamptz) > day_started_at
     RETURNING pid
     """
 )
@@ -323,13 +338,18 @@ def report_next_day(payload: Any) -> tuple[int, int, int, str] | object | None:
 
 
 def life_op_from_payload(payload: Any) -> tuple[str, int] | None:
-    """(day_started_at, delta) из payload life_op или None (битый payload)."""
+    """(day_started_at, delta) из payload life_op или None (битый payload).
+
+    delta — только из LIFE_OP_DELTAS (int, не bool), reason == LIFE_OP_REASON.
+    """
     data = _payload_dict(payload)
     if data is None:
         return None
     started = _str_value(data.get("day_started_at"))
     delta = _int_value(data.get("delta"))
-    if started is None or delta is None:
+    if started is None or delta is None or delta not in LIFE_OP_DELTAS:
+        return None
+    if data.get("reason") != LIFE_OP_REASON:
         return None
     return started, delta
 
@@ -453,7 +473,7 @@ def _apply_life_op(
         },
     ).first()
     if applied is None:
-        _skip(event_id, kind, "not current day, lives out of range or no state")
+        _skip(event_id, kind, "not current day, phase, lives out of range or no state")
         return False
     return True
 

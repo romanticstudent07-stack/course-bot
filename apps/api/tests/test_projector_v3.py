@@ -46,14 +46,17 @@ def _open_day(engine, tg_user_id: int):
     return pid, started
 
 
-def _prepare(engine, pid, *, lives: int = 3, missed_streak: int = 1) -> None:
+def _prepare(
+    engine, pid, *, lives: int = 3, missed_streak: int = 1, phase: str | None = None
+) -> None:
     with engine.begin() as conn:
         conn.execute(
             text(
                 "UPDATE participant_state SET missed_streak = :m, lives = :l, "
-                "status_flags = CAST(:f AS text[]) WHERE pid = :p"
+                "status_flags = CAST(:f AS text[]), "
+                "lifecycle_phase = coalesce(:ph, lifecycle_phase) WHERE pid = :p"
             ),
-            {"p": pid, "m": missed_streak, "l": lives, "f": "{block_lives}"},
+            {"p": pid, "m": missed_streak, "l": lives, "f": "{block_lives}", "ph": phase},
         )
 
 
@@ -226,6 +229,7 @@ def test_life_op_to_zero_sleeping(db_engine):
     assert state.lifecycle_phase == "sleeping"
 
 
+# (3, 1): delta +1 теперь «bad payload» (Н3) — тоже пропуск без изменений.
 @pytest.mark.parametrize(("lives", "delta"), [(0, -1), (3, 1)])
 def test_life_op_out_of_range_skipped(db_engine, caplog, lives, delta):
     pid, started = _open_day(db_engine, 9513)
@@ -249,16 +253,65 @@ def test_life_op_other_day_skipped(db_engine):
 
 @pytest.mark.parametrize(
     "payload",
-    [{"delta": -1, "reason": "missed_days"}, {"day_started_at": OLD_DAY, "delta": True}],
+    [
+        {"delta": -1, "reason": "missed_days"},
+        {"day_started_at": OLD_DAY, "delta": True},
+        # Н3 (ревью #111): только delta == −1 и reason == "missed_days".
+        {"day_started_at": OLD_DAY, "delta": 1, "reason": "missed_days"},
+        {"day_started_at": OLD_DAY, "delta": -2, "reason": "missed_days"},
+        {"day_started_at": OLD_DAY, "delta": 0, "reason": "missed_days"},
+        {"day_started_at": OLD_DAY, "delta": -1, "reason": "other"},
+        {"day_started_at": OLD_DAY, "delta": -1},
+    ],
 )
-def test_life_op_bad_payload_skipped(db_engine, payload):
+def test_life_op_bad_payload_skipped(db_engine, caplog, payload):
     pid, started = _open_day(db_engine, 9515)
     _prepare(db_engine, pid, lives=3)
     if "day_started_at" in payload:
         payload = dict(payload, day_started_at=dsa(started))
     _event(db_engine, pid, EVENT_KIND_LIFE_OP, payload)
-    assert run_once(db_engine) == ProjectorResult(processed=0, skipped=1)
+    with caplog.at_level(logging.WARNING, logger="app.projector"):
+        assert run_once(db_engine) == ProjectorResult(processed=0, skipped=1)
     assert _state(db_engine, pid).lives == 3
+    assert any("bad payload" in m for m in _warnings(caplog))
+
+
+# Н2 (ревью #111): life_op — только для onboarding и active (В29).
+def test_life_op_active_applied(db_engine):
+    pid, started = _open_day(db_engine, 9516)
+    _prepare(db_engine, pid, lives=1, phase="active")
+    _event(db_engine, pid, EVENT_KIND_LIFE_OP, _life_op(dsa(started)))
+    assert run_once(db_engine) == ProjectorResult(processed=1, skipped=0)
+    state = _state(db_engine, pid)
+    assert state.lives == 0
+    assert state.lifecycle_phase == "sleeping"
+
+
+@pytest.mark.parametrize("phase", ["muted", "sleeping"])
+def test_life_op_muted_or_sleeping_skipped(db_engine, caplog, phase):
+    pid, started = _open_day(db_engine, 9517)
+    _prepare(db_engine, pid, lives=1, phase=phase)
+    _event(db_engine, pid, EVENT_KIND_LIFE_OP, _life_op(dsa(started)))
+    with caplog.at_level(logging.WARNING, logger="app.projector"):
+        assert run_once(db_engine) == ProjectorResult(processed=0, skipped=1)
+    state = _state(db_engine, pid)
+    assert state.lives == 1
+    assert state.lifecycle_phase == phase
+    assert any(f"kind={EVENT_KIND_LIFE_OP}" in m for m in _warnings(caplog))
+
+
+# Н4 (ревью #111): фиксирует ТЕКУЩЕЕ поведение — два life_op одного дня без day_closed
+# применяются оба (−2 жизни). Проектор это не ловит; защита — у писателя (life-ops-c):
+# life_op, day_closed и ключ day_close в одной транзакции под participant:pid.
+def test_two_life_ops_same_day_both_applied(db_engine):
+    pid, started = _open_day(db_engine, 9518)
+    _prepare(db_engine, pid, lives=3)
+    _event(db_engine, pid, EVENT_KIND_LIFE_OP, _life_op(dsa(started)))
+    _event(db_engine, pid, EVENT_KIND_LIFE_OP, _life_op(dsa(started)))
+    assert run_once(db_engine) == ProjectorResult(processed=2, skipped=0)
+    state = _state(db_engine, pid)
+    assert state.lives == 1
+    assert dsa(state.day_started_at) == dsa(started)
 
 
 # --- day_closed ---
@@ -298,6 +351,21 @@ def test_day_closed_bad_payload_skipped(db_engine, override):
     _event(db_engine, pid, EVENT_KIND_DAY_CLOSED, dict(_closed(dsa(started)), **override))
     assert run_once(db_engine) == ProjectorResult(processed=0, skipped=1)
     assert dsa(_state(db_engine, pid).day_started_at) == dsa(started)
+
+
+# Н5 (ревью #111): next_day_started_at не позже текущего → пропуск (иначе повтор применится).
+@pytest.mark.parametrize("shift", [timedelta(0), timedelta(seconds=-1)])
+def test_day_closed_next_not_later_skipped(db_engine, caplog, shift):
+    pid, started = _open_day(db_engine, 9524)
+    _prepare(db_engine, pid, missed_streak=0)
+    payload = dict(_closed(dsa(started)), next_day_started_at=dsa(started + shift))
+    _event(db_engine, pid, EVENT_KIND_DAY_CLOSED, payload)
+    with caplog.at_level(logging.WARNING, logger="app.projector"):
+        assert run_once(db_engine) == ProjectorResult(processed=0, skipped=1)
+    state = _state(db_engine, pid)
+    assert dsa(state.day_started_at) == dsa(started)
+    assert state.missed_streak == 0
+    assert any(f"kind={EVENT_KIND_DAY_CLOSED}" in m for m in _warnings(caplog))
 
 
 # --- порядок life-ops-c: life_op, затем day_closed; повтор не применяется ---

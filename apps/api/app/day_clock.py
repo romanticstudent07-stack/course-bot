@@ -16,6 +16,13 @@ life-ops-c; после life-ops-a этими функциями никто не 
     missed_streak + 1; на 2 → −1 жизнь и счётчик 0; 0 жизней → sleeping (Р477).
 
 Все datetime — aware; naive → ValueError (как day_keys.dsa). Результаты — в поясе участника.
+
+Сравнения и сложения — только в UTC (ревью #111, Б1). В Python два aware-datetime с одним и тем
+же объектом tzinfo сравниваются и складываются по «настенному» времени (без смещения и fold),
+а ZoneInfo(name) кэшируется — поэтому now, started_at и кандидаты границ перед каждым
+сравнением и сложением переводятся в UTC. Пояс участника нужен только для даты и для
+04:00 / 00:00 на этой дате. Вызывающим (life-ops-b, life-ops-c): результаты сравнивать
+с другими моментами тоже только после astimezone(timezone.utc) — или через эти функции.
 """
 from __future__ import annotations
 
@@ -73,45 +80,66 @@ def zone(tz_name: str | None) -> ZoneInfo:
             return ZoneInfo(tz_name)
         except (ZoneInfoNotFoundError, ValueError, OSError):
             pass
-    logger.warning("day_clock: bad timezone %r, using %s", tz_name, DEFAULT_TZ)
+    # Строка пояса приходит от клиента — в лог не больше 64 символов (ревью #111, Н9).
+    shown = tz_name[:64] if isinstance(tz_name, str) else tz_name
+    logger.warning("day_clock: bad timezone %r, using %s", shown, DEFAULT_TZ)
     return ZoneInfo(DEFAULT_TZ)
 
 
+def _utc(ts: datetime) -> datetime:
+    return ts.astimezone(timezone.utc)
+
+
 def _at_local(day: date, at: time, tz: ZoneInfo) -> datetime:
-    return datetime.combine(day, at, tzinfo=tz)
+    """Момент «day at» по поясу tz — в UTC.
+
+    datetime.combine с fold=0 (ревью #111, Н1):
+      - нет такого часа (перевод часов вперёд, напр. America/Santiago 2026-09-06 и
+        America/Havana 2026-03-08 — 00:00 нет) → момент перехода часов (Santiago:
+        00:00−04:00 = 04:00Z = 01:00−03:00); сдвига на сутки нет, день короче на час;
+      - час повторяется (перевод назад, напр. America/Havana 2026-11-01 — 00:00 дважды) →
+        первое вхождение (00:00−04:00 = 04:00Z).
+    """
+    return _utc(datetime.combine(day, at, tzinfo=tz))
 
 
-def _active_from(started_at: datetime, z: ZoneInfo) -> datetime:
+def _active_from_utc(started_at: datetime, z: ZoneInfo) -> tuple[datetime, date]:
+    """(первая 04:00 по поясу ≥ started_at — в UTC, местная дата этой 04:00)."""
     _require_aware(started_at, "started_at")
-    local = started_at.astimezone(z)
-    candidate = _at_local(local.date(), ACTIVATION_TIME, z)
-    if candidate < started_at:
-        candidate = _at_local(local.date() + timedelta(days=1), ACTIVATION_TIME, z)
-    return candidate
+    started_u = _utc(started_at)
+    day = started_u.astimezone(z).date()
+    candidate = _at_local(day, ACTIVATION_TIME, z)
+    if candidate < started_u:
+        day = day + timedelta(days=1)
+        candidate = _at_local(day, ACTIVATION_TIME, z)
+    return candidate, day
 
 
-def _deadline_at(started_at: datetime, z: ZoneInfo) -> datetime:
-    activation = _active_from(started_at, z)
-    return _at_local(activation.date() + timedelta(days=1), DEADLINE_TIME, z)
+def _deadline_at_utc(started_at: datetime, z: ZoneInfo) -> datetime:
+    _, day = _active_from_utc(started_at, z)
+    return _at_local(day + timedelta(days=1), DEADLINE_TIME, z)
 
 
 def active_from(started_at: datetime, tz: str | None) -> datetime:
     """Первая 04:00 по поясу, которая ≥ started_at."""
-    return _active_from(started_at, zone(tz))
+    z = zone(tz)
+    return _active_from_utc(started_at, z)[0].astimezone(z)
 
 
 def deadline_at(started_at: datetime, tz: str | None) -> datetime:
     """00:00 по поясу на дату (active_from.date + 1 день)."""
-    return _deadline_at(started_at, zone(tz))
+    z = zone(tz)
+    return _deadline_at_utc(started_at, z).astimezone(z)
 
 
 def window(started_at: datetime, tz: str | None, now: datetime) -> str:
     """not_active (now < active_from) | open (active_from ≤ now ≤ deadline) | closed."""
     _require_aware(now, "now")
     z = zone(tz)
-    if now < _active_from(started_at, z):
+    now_u = _utc(now)
+    if now_u < _active_from_utc(started_at, z)[0]:
         return WINDOW_NOT_ACTIVE
-    if now <= _deadline_at(started_at, z):
+    if now_u <= _deadline_at_utc(started_at, z):
         return WINDOW_OPEN
     return WINDOW_CLOSED
 
@@ -119,35 +147,52 @@ def window(started_at: datetime, tz: str | None, now: datetime) -> str:
 def is_overdue(started_at: datetime, tz: str | None, now: datetime) -> bool:
     """now > deadline_at + CLOSE_GRACE."""
     _require_aware(now, "now")
-    return now > deadline_at(started_at, tz) + CLOSE_GRACE
+    return _utc(now) > _deadline_at_utc(started_at, zone(tz)) + CLOSE_GRACE
 
 
 def last_midnight(now: datetime, tz: str | None) -> datetime:
     """Последняя 00:00 по поясу, которая ≤ now (после простоя — одна граница, В32)."""
     _require_aware(now, "now")
     z = zone(tz)
-    local = now.astimezone(z)
-    candidate = _at_local(local.date(), DEADLINE_TIME, z)
-    if candidate > now:
-        candidate = _at_local(local.date() - timedelta(days=1), DEADLINE_TIME, z)
-    return candidate
+    now_u = _utc(now)
+    day = now_u.astimezone(z).date()
+    candidate = _at_local(day, DEADLINE_TIME, z)
+    if candidate > now_u:
+        candidate = _at_local(day - timedelta(days=1), DEADLINE_TIME, z)
+    return candidate.astimezone(z)
 
 
 def queue_delay(pid: uuid.UUID | str, started_at: datetime) -> timedelta:
-    """Пауза очереди 10–60 мин, детерминирована по (pid, dsa(started_at)) (ЛО-1)."""
-    digest = hashlib.sha256(f"{pid}:{dsa(started_at)}".encode()).hexdigest()
+    """Пауза очереди 10–60 мин, детерминирована по (pid, dsa(started_at)) (ЛО-1).
+
+    pid нормализуется через uuid.UUID (регистр строки не влияет, ревью #111, Н8);
+    не UUID → ValueError.
+    """
+    pid_str = str(uuid.UUID(str(pid)))
+    digest = hashlib.sha256(f"{pid_str}:{dsa(started_at)}".encode()).hexdigest()
     span = QUEUE_MAX_MINUTES - QUEUE_MIN_MINUTES + 1
     return timedelta(minutes=QUEUE_MIN_MINUTES + int(digest, 16) % span)
 
 
 def queue_until(pid: uuid.UUID | str, started_at: datetime) -> datetime:
-    return started_at + queue_delay(pid, started_at)
+    """started_at + queue_delay — сложение в UTC (перевод часов не меняет паузу), результат —
+    в поясе started_at."""
+    delay = queue_delay(pid, started_at)
+    return (_utc(started_at) + delay).astimezone(started_at.tzinfo)
 
 
 def close_outcome(came: bool, missed_streak: int, lives: int) -> CloseOutcome:
-    """Исход закрытия дня (В27 = А). lives вне [0, 3] → ValueError."""
+    """Исход закрытия дня (В27 = А).
+
+    lives вне [0, 3] → ValueError; lives = 0 → ValueError (спящему день не закрывают,
+    ревью #111, Н6); missed_streak < 0, bool или не int → ValueError.
+    """
     if isinstance(lives, bool) or not isinstance(lives, int) or not 0 <= lives <= MAX_LIVES:
         raise ValueError("close_outcome: lives вне [0, 3]")
+    if lives == 0:
+        raise ValueError("close_outcome: lives = 0 (участник уже sleeping)")
+    if isinstance(missed_streak, bool) or not isinstance(missed_streak, int) or missed_streak < 0:
+        raise ValueError("close_outcome: missed_streak — int ≥ 0")
     if came:
         return CloseOutcome(OUTCOME_CAME, 0, 0, False)
     streak = missed_streak + 1
