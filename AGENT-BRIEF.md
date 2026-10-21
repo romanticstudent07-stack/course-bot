@@ -68,6 +68,7 @@ Telegram-курс личной трансформации: Mini App + бот + b
 `miniapp` (npm ci, tsc, vitest, vite build) · `docker` ×3 (сборка api / bot / miniapp,
 `nginx -t`) · `guard` (PR не трогает `docs/architecture/**` и не приносит `.env`).
 Красный CI → Автор пришлёт лог в этот же чат.
+- CI НЕ ЖДАТЬ (решение Автора 21.10): после push сразу пиши ИТОГ и заканчивай. gh run watch, gh pr checks --watch, опрос статуса проверок и ожидание — запрещены. CI проверяет Автор.
 
 ## 6. Что уже есть в коде
 

@@ -1,20 +1,19 @@
 # STATE — живое состояние course-bot
-Обновлено: 19.10.2026 (main 9f3746a = #104 docs-r-1; решения Р-1…Р-14 — docs/decisions/R-2026-10-1.md и -2.md; docs-r-2 — AGENT-BRIEF, AGENTS.md, DEFECTS по решениям). До 90 строк. Секретов, реальных ID и IP здесь нет.
+Обновлено: 21.10.2026 (main 88dc8d4 = #113 life-ops-c; сервер ✅ 88dc8d4). Решения 21.10 (Р-А1…Р-А4, Ш-1…Ш-4, правила А-CI, А-КАНОН, А-МЕРЖ) — Issue #109. До 90 строк. Секретов, реальных ID и IP здесь нет.
 Кто обновляет: ШТАБ даёт строки → они идут первым файлом пакета следующей задачи.
 Подробности закрытых задач — docs/HISTORY.md. Прежний STATE целиком (до сжатия 18.10, дословно: выкаты сервера до 0008, «Смержено» #49–#96, строки учёта кредитов) — docs/history/STATE-a5ef1d7.md. КОДЕРАМ HISTORY и снимок не давать.
 Правила ШТАБа — docs/process/SHTAB.md (часть 1) + docs/process/SHTAB-2.md (часть 2), читать ОБА.
 Процессные решения (роли, РЕВЬЮЕР, окна чатов, терминал, rulesets main, форки, LF, expected_tables.txt, миграции по одной) — в SHTAB.md, SHTAB-2.md, DESIGNER.md, README.md.
 ## Сейчас
-- main = 9f3746a (#104 docs-r-1, только docs); сервер ✅ 0817dc3 (код тот же; 19.10), alembic 0009_app_bot, 15 таблиц, 7/7 Up, 5 healthy; DAY_TEST_ENTRY_ENABLED в api = false (выкл.); PROJECTOR_VERSION = 2; очередь — docs-r-2 → ПРОЕКТИРОВЩИК send-1 и life-ops (параллельно) → Агент 22–24.10. Сервер IRONCLAD работает только с main.
+- main = 88dc8d4 (#113 life-ops-c); сервер ✅ 88dc8d4 (21.10), alembic 0009_app_bot, 15 таблиц, 7/7 Up, 5 healthy; DAY_TEST_ENTRY_ENABLED = false; PROJECTOR_VERSION = 3; в projector работают «часы» life_ops (tick раз в 30 с). Бот ходит в БД под coursebot_bot (роль app_bot), доставляет outbox. Сервер IRONCLAD работает только с main.
 - Выкаты: 19.10 — #101 (пересобраны api и projector), #102 (без сборки), #103 (api+projector вместе, новый kind day_report_submitted); выкаты 54ca133 и раньше — docs/HISTORY.md и снимок docs/history/STATE-a5ef1d7.md. Образ migrate — 54ca133 (перед следующей миграцией или texts load — build migrate; новые тексты требуют пересборки migrate до texts load); bot не пересобирался с melochi-2 (комментарий apps/bot/Dockerfile #87 и docstring #83 — при следующем выкате bot).
 - Норма сервера: 7/7 Up, 5 healthy (db, redis, garage, api, miniapp), healthcheck нет у bot и projector; curl / 200, /healthz 200, /miniapp/v1/onboarding/status 401; проектор проверяется по логам (Traceback 0, WARNING 0), projector once рядом с run запрещён (infra/SERVER-IRONCLAD.md:146). Роли: api — coursebot_api, projector — coursebot_projector, alembic и texts load — владелец (только DC --profile tools run --rm --no-deps migrate); env_file нет ни у одного сервиса; repr/str Settings без DSN. Перед каждой миграцией — бэкап before-000N и DC --profile tools build migrate.
-- В БД (18.10): tg_user_registry 2, consent_events 4, participant_events 2, participant_state 2, day_marks 0; второй участник — живая проверка Автора 15.10 (miniapp-fix).
+- В БД (21.10): participant_state 2 (onboarding, lives 3, позиции нет), participant_events 2, idempotency_keys 0, outbox 3 и dlq 2 (тестовые строки send-1b, не удалять). Живое закрытие дня «часами» НЕ проверено — нет участников с позицией (DEFECTS).
 - ЗАКРЫТО: И1 (1d, B-1, 1e-1, 1e-2, 1e-2b), projector, returning, ЭТАП B-3, miniapp-fix, melochi-2, DOCS D-2/3/8/12, D-11/16/21, D-22; И2 БД: iter2-db-1/2/3 (0007–0009); И2 API: iter2-api-1 ✅ 54ca133, iter2-api-2a ✅ e5de293, iter2-api-2b ✅ 0817dc3. Подробно — снимок docs/history/STATE-a5ef1d7.md.
 - DEFECTS-FOUND.md < 25 000 байт (правило А); DEFECTS-ARCHIVE.md КОДЕРАМ кода не давать.
 - Бэкапы before-0004 ✅ (02.10), before-0005 ✅ (05.10), before-0006 ✅ (09.10), before-b3d ✅ (14.10), before-0007 ✅ (17.10, 36771 Б), before-0008 ✅ (17.10, 39592 Б), before-0009 ✅ (18.10, 41722 Б). Downgrade ниже 0004 запрещён (стирает журнал согласий).
 - Процесс: лимиты чтения — КОДЕР ≈ 130–140 КБ; ПРОЕКТИРОВЩИК ПОЛНОЕ/КАРТОЧКИ 170 КБ, ИССЛЕДОВАНИЕ 200 КБ (решение Автора 19.10). SHTAB.md 3-Б: одна карточка = одна область, задачу режем, чтение не урезаем; DESIGNER.md «Бюджет окна». Файл восстановления ШТАБа — SHTAB-CONTEXT-CHAT.txt.
 - Живые проверки 02.10: 403 «младше 18» (ничего не создал) и 429 (числа — DEFECTS-ARCHIVE.md, D-7, D-10). Mini App после пересборки — закрыть и открыть заново (кэш Telegram).
-- Codespaces проверен 28.09: selftest unpack, hooksPath=.githooks, Python 3.12.14, Node v20.20.2, check.sh зелёный.
 - Репо ПУБЛИЧНЫЙ до 0-Б (обычный AI Chat приватные репо не читает); после 0-Б — приватный, файлы в чаты вставлять вручную.
 ## Смержено (подробно — docs/HISTORY.md и снимок docs/history/STATE-a5ef1d7.md)
 - Сервер ✅ после каждого мержа ниже (только docs — только pull). #22–#43 — docs/HISTORY.md; #49–#96 — снимок; #97 iter2-db-3 (0009), #98 research + карточки iter2-api, #99 сжатие STATE, #100 iter2-api-1 — выкат ✅ 54ca133 (18.10).
@@ -22,6 +21,9 @@
 - #102 limits-flag-env — DAY_TEST_ENTRY_ENABLED в environment api (дефолт false) и .env.example; лимиты чтения DESIGNER.md; выкачено 19.10 без сборки.
 - #103 iter2-api-2b — POST /miniapp/v1/day/report/submit + projector day_report_submitted; выкачено 19.10 (api + projector вместе).
 - #104 docs-r-1 — решения Р-1…Р-14 (docs/decisions/R-2026-10-1.md, -2.md), STATE после #103; только docs.
+- #105–#106 — docs (подробно — Issue #109); #107 — карточки life-ops-a/b/c; #108 send-1a.
+- #110 send-1b — воркер outbox в боте, роль coursebot_bot; #111 life-ops-a — day_clock, проектор v3 (life_op, day_closed), tzdata; выкачено 21.10 (bot; api+projector вместе).
+- #112 life-ops-b — окно дня 04:00–00:00 (409 DAY_NOT_ACTIVE / DAY_CLOSED), next_* в отчёте, очередь 10–60 мин в GET /day/current; #113 life-ops-c — «часы» в projector: закрытие дня, пропуски, жизни, sleeping, dry-run; флаги блока и паузы → полный пропуск. Выкачено 21.10 вместе (api+projector).
 ## Решения Автора (процессные — в правилах, см. шапку)
 - Бот — long polling. Cloudflare Tunnel — нет. Прод — Timeweb Cloud (Р-9), туннель дом→VPS autossh/WireGuard.
 - Память: сумма лимитов ≤ 2 ГБ; сейчас 1920 МБ (api 384, db 384, bot 512, garage 192, miniapp 128, projector 128, redis 64; migrate 128 одноразово), реально ~362 МБ (06.10).
@@ -51,12 +53,8 @@
 - Р-12: initData TTL 24 ч до прода; к проду — session_jwt 60 мин (пересмотр Б14).
 - Р-13: full_backup_rotation_cycle = 30 дней; PITR у Timeweb не описан (к 0-Б и юристу).
 - Р-14: репо публичный до 0-Б; при 0-Б — приватный (чек-лист — R-2026-10-2.md).
-## Цель и сроки
-- Всё до итерации 6 + 0-Б. Сроков нет: сначала правильная настройка. AI Chat Opus без кредитов до 31.12.2026 → пересмотр плана 01.11.2026 (решение 29.09).
-## План до 24.10 (решение Автора 19.10)
-- Тратим все кредиты до 24.10. Агент: 22.10 send-1 + life-ops (параллельно); 23.10 пуши + Р-2 (после мержа send-1; Р-2 с РЕВЬЮЕРОМ); 24.10 ≈ 1 000 на доделки. Бесплатно: docs-r-1, docs-r-2, ПРОЕКТИРОВЩИК (карточки к 22–23.10), экран /day — КОДЕР параллельно; api-3 — после мержа life-ops. Пересмотр плана 01.11.
 ## Очередь
-0. [сейчас] docs-r-2 → ПРОЕКТИРОВЩИК send-1 и life-ops (параллельно) → Агент 22–24.10 (план выше); iter2-api-3 — после мержа life-ops. Включение флага DAY_TEST_ENTRY_ENABLED — отдельным заданием ШТАБа.
+0. [сейчас] трек Д: экран /day + iter2-api-3 — карточки у ПРОЕКТИРОВЩИКА, затем Агент. Живое закрытие дня — после первой позиции (флаг DAY_TEST_ENTRY_ENABLED включает только отдельное задание ШТАБа).
 1. Итерации 2–6 по build-order.md (с поправками Р-1…Р-14), затем 0-Б.
 ## Для задач И2
 - Норма texts load с #100: «загружено 0, обновлено 30, лишних в БД 0».
@@ -88,3 +86,5 @@
 - Всего ≈ 11 500; остаток 12 900 (Автор, 19.10). Строки задач до 18.10 — снимок docs/history/STATE-a5ef1d7.md, «Учёт кредитов»; #93–#98 не внесены.
 - сжатие STATE 18.10 / Р0 / 0 / 0 / не замерены; iter2-api-1 / Р0+ / 0 / 0 / не замерены (КОДЕР 1 окно, З2 — 1 круг CI); docs-r-1 / Р0+ / 0 / 0 / не замерены.
 - docs-r-2 / Р0+ / 0 / 0 / не замерены.
+- 21.10 (Агент, факт): send-1b 696 + правки 1 049; life-ops-a 775 + ревью-Агент 790 + правки 614; life-ops-b 1 150 + правки 999; life-ops-c 1 722 + правки 380. docs-PR #114 159 (оценка 300–500). Остаток 4 803 (21.10), обновление 25.10.
+- Урок 21.10: ожидание CI Агентом оплачивается кредитами (правки #113 без ожидания — 380). Агент CI не ждёт (А-CI).
