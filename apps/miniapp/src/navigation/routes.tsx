@@ -1,13 +1,14 @@
 import type { ComponentType } from 'react';
 
-import { HomePage } from '@/pages/HomePage/HomePage.tsx';
+import { DayPage } from '@/pages/DayPage/DayPage.tsx';
 
 interface Route {
   path: string;
   Component: ComponentType;
 }
 
-// Экраны онбординга (onb.welcome → onb.age-gate → …) появятся в Итерации 1.
+// '/' занят onb.welcome (miniapp-screens.md); экран текущего дня — /day (day.current).
+// HomePage.tsx оставлен в репозитории, но в маршрутах не используется.
 export const routes: Route[] = [
-  { path: '/', Component: HomePage },
+  { path: '/day', Component: DayPage },
 ];

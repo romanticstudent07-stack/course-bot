@@ -13,7 +13,7 @@
 //                 после него: new → later, reconsent → то же правило, что после номера;
 //   later       — LaterSteps после pid (1e-2): offer → email → city → checkup → rules;
 //                 черновик — drafts.ts, привязан к tg_user_id;
-//   app         — роутер и остальной UI.
+//   app         — роутер: экран дня /day; путь «/» и любой другой → /day (З2, вариант А).
 // OnboardingFlow монтируется ТОЛЬКО в фазе onboarding (он шлёт /texts/bulk при монтировании).
 // «Пускать ли» решает сервер: клиент не смотрит ни initDataUnsafe, ни черновик, ни время.
 // short_no, status и reasons на устройстве не хранятся — только в памяти до закрытия.
@@ -133,7 +133,7 @@ export function App() {
     <HashRouter>
       <Routes>
         {routes.map((route) => <Route key={route.path} {...route}/>)}
-        <Route path="*" element={<Navigate to="/"/>}/>
+        <Route path="*" element={<Navigate to="/day"/>}/>
       </Routes>
     </HashRouter>
   );
