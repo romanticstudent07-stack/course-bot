@@ -5,10 +5,36 @@
 // только для новых ключей; ошибка текстов экран не ломает (pickText даёт заглушку).
 // «Какой экран» — только status, «можно ли нажать» — только buttons_active; окно 04:00–00:00
 // клиент не считает; дата и время — из строки сервера (wallClock). Ответы на устройстве не хранятся.
-// В day-screen-a блоки только для чтения: кнопок отметок и «Отправить отчёт» нет (day-screen-b).
+// day-screen-b: под блоком «Выполнил» / «Не выполнил» (PUT /day/marks, сразу на сервер — DM 3.4),
+// «Отправить отчёт» (POST /day/report/submit) — когда отмечены все блоки (DM 3.3). Один X-Client-Op-Id
+// на то же тело: повтор после ошибки — с ним же (D-17). «Отправлено» — только после 200 (DM 3.11);
+// после первого нажатия кнопка гаснет (DM 3.10). Вердикт экран не показывает (DM 3.19).
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 
-import { getDayCurrent, postDayTestEnter, postTextsBulk, type DayBlock, type DayCurrent } from '@/api/client.ts';
+import {
+  getDayCurrent,
+  newClientOpId,
+  postDayReport,
+  postDayTestEnter,
+  postTextsBulk,
+  putDayMark,
+  type DayBlock,
+  type DayCurrent,
+  type DayMarkValue,
+} from '@/api/client.ts';
+import {
+  actionMessage,
+  canPressMark,
+  canSendReport,
+  markErrorAction,
+  markLabels,
+  marksFromDay,
+  reportBody,
+  reuseOpId,
+  submitErrorAction,
+  type LocalMarks,
+  type OpRef,
+} from '@/components/dayMarks.ts';
 import {
   DAY_TEXT_KEYS,
   REOPEN_MESSAGE,
@@ -25,30 +51,46 @@ import { errorMessage, pickText, textsToMap, type TextMap } from '@/components/O
 const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 16, padding: 16 };
 const blockStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 8 };
 const noticeStyle: CSSProperties = { fontWeight: 600 };
+const rowStyle: CSSProperties = { display: 'flex', gap: 8 };
 
 type LoadStatus = 'loading' | 'ready' | 'error';
-
-const MARK_LABEL: Record<'done' | 'not_done', string> = { done: '✅ Выполнил', not_done: '⬜ Не выполнил' };
 
 interface BlockViewProps {
   block: DayBlock;
   t: (key: string) => string;
   helpOpen: boolean;
   onToggleHelp: () => void;
+  mark: DayMarkValue | undefined;
+  marksEnabled: boolean;
+  onMark: (value: DayMarkValue) => void;
 }
 
-function BlockView({ block, t, helpOpen, onToggleHelp }: BlockViewProps) {
-  const mark = block.mark === 'done' || block.mark === 'not_done' ? MARK_LABEL[block.mark] : 'не отмечено';
+function BlockView({ block, t, helpOpen, onToggleHelp, mark, marksEnabled, onMark }: BlockViewProps) {
+  const labels = markLabels(mark);
   return (
     <section style={blockStyle}>
       <p>
         {t(block.title_key)}
         {block.critical ? ' ⭐' : null}
       </p>
-      <p className="hint">{mark}</p>
-      <button type="button" aria-expanded={helpOpen} onClick={onToggleHelp}>
-        ❓ Как выполнить?
-      </button>
+      <div style={rowStyle}>
+        <button type="button" aria-pressed={mark === 'done'} disabled={!marksEnabled} onClick={() => onMark('done')}>
+          {labels.done}
+        </button>
+        <button
+          type="button"
+          aria-pressed={mark === 'not_done'}
+          disabled={!marksEnabled}
+          onClick={() => onMark('not_done')}
+        >
+          {labels.notDone}
+        </button>
+      </div>
+      <div style={rowStyle}>
+        <button type="button" aria-expanded={helpOpen} onClick={onToggleHelp}>
+          ❓ Как выполнить?
+        </button>
+      </div>
       {helpOpen ? <p>{t(block.help_key)}</p> : null}
     </section>
   );
@@ -63,6 +105,11 @@ export function DayPage() {
   const [openHelp, setOpenHelp] = useState<Record<string, boolean>>({});
   const [entering, setEntering] = useState(false);
   const [notice, setNotice] = useState('');
+  // Отметки — из каждого GET (сервер — источник правды) и из ответа PUT 200; на устройстве не хранятся.
+  const [marks, setMarks] = useState<LocalMarks>({});
+  const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
 
   const mountedRef = useRef(true);
   const requestIdRef = useRef(0);
@@ -72,6 +119,14 @@ export function DayPage() {
   const requestedKeysRef = useRef<Set<string>>(new Set());
   // Ref срабатывает синхронно: двойной клик «Тестовый вход» не шлёт два POST.
   const enteringRef = useRef(false);
+  // Один PUT на блок за раз; ref — синхронно, двойной клик не шлёт два запроса.
+  const pendingRef = useRef<Set<string>>(new Set());
+  // Двойной клик «Отправить отчёт» не шлёт два POST (DM 3.10).
+  const sendingRef = useRef(false);
+  // X-Client-Op-Id текущей попытки отчёта: повтор того же тела — с тем же id (D-17).
+  const opRef = useRef<OpRef | null>(null);
+  // view и day_started_at на момент успешной отправки: sent держится, пока GET их не сменит.
+  const sentFromRef = useRef<{ view: DayView; started: string | null } | null>(null);
 
   const clearTimer = () => {
     if (timerRef.current !== null) {
@@ -110,6 +165,12 @@ export function DayPage() {
           lastViewRef.current = next;
           setDay(resp);
           setView(next);
+          setMarks(marksFromDay(resp));
+          const from = sentFromRef.current;
+          if (from && (from.view !== next || from.started !== (resp.day_started_at ?? null))) {
+            sentFromRef.current = null;
+            setSent(false);
+          }
           setLoadError(null);
           setStatus('ready');
           if (next !== 'unknown') loadTexts(resp);
@@ -172,6 +233,67 @@ export function DayPage() {
     attempt(false);
   };
 
+  const markPress = (blockId: string, value: DayMarkValue) => {
+    if (!canPressMark(view, day, { sending: sendingRef.current, sent })) return;
+    if (marks[blockId] === value || pendingRef.current.has(blockId)) return;
+    pendingRef.current.add(blockId);
+    setPending(new Set(pendingRef.current));
+    setNotice('');
+    putDayMark({ block_id: blockId, value })
+      .then((r) => {
+        if (!mountedRef.current) return;
+        setMarks((m) => ({ ...m, [r.block_id]: r.value }));
+      })
+      .catch((err: unknown) => {
+        if (!mountedRef.current) return;
+        // Отметка остаётся прежней: ложного успеха нет (DM 3.11).
+        setNotice(actionMessage(err, 'mark'));
+        if (markErrorAction(err) === 'refetch') load(false);
+      })
+      .finally(() => {
+        pendingRef.current.delete(blockId);
+        if (mountedRef.current) setPending(new Set(pendingRef.current));
+      });
+  };
+
+  const sendReport = () => {
+    if (sendingRef.current || pendingRef.current.size > 0) return;
+    if (!canSendReport(view, day, { sending: false, sent }, marks)) return;
+    const blockList = day?.blocks ?? [];
+    sendingRef.current = true;
+    setSending(true);
+    setNotice('');
+    const body = reportBody(blockList, marks);
+    const op = reuseOpId(opRef.current, body, newClientOpId);
+    opRef.current = op;
+    const sentFrom = { view, started: day?.day_started_at ?? null };
+    postDayReport(body, op.opId)
+      .then(() => {
+        // Только после 200: кнопка остаётся погашенной, вердикт не показываем.
+        opRef.current = null;
+        if (!mountedRef.current) return;
+        sentFromRef.current = sentFrom;
+        setSent(true);
+        load(false);
+      })
+      .catch((err: unknown) => {
+        if (!mountedRef.current) return;
+        setNotice(actionMessage(err, 'report'));
+        const action = submitErrorAction(err);
+        if (action === 'new_op_refetch') {
+          opRef.current = null;
+          load(false);
+        } else if (action === 'refetch') {
+          load(false);
+        }
+        // 'retry' — кнопка снова активна, повтор уйдёт с тем же opId.
+      })
+      .finally(() => {
+        sendingRef.current = false;
+        if (mountedRef.current) setSending(false);
+      });
+  };
+
   const t = (key: string) => pickText(texts, key);
 
   if (status === 'loading') {
@@ -214,6 +336,8 @@ export function DayPage() {
     );
   };
 
+  // В not_active кнопки видны, но disabled (DM 3.1); в closed, queued и submitted блоков с кнопками нет.
+  const marksAllowed = canPressMark(view, day, { sending, sent });
   const blocks = () =>
     (day?.blocks ?? []).map((block) => (
       <BlockView
@@ -222,8 +346,23 @@ export function DayPage() {
         t={t}
         helpOpen={openHelp[block.block_id] === true}
         onToggleHelp={() => setOpenHelp((s) => ({ ...s, [block.block_id]: !s[block.block_id] }))}
+        mark={marks[block.block_id]}
+        marksEnabled={marksAllowed && !pending.has(block.block_id)}
+        onMark={(value) => markPress(block.block_id, value)}
       />
     ));
+
+  const reportRow = () => (
+    <div style={rowStyle}>
+      <button
+        type="button"
+        disabled={!canSendReport(view, day, { sending, sent }, marks) || pending.size > 0}
+        onClick={sendReport}
+      >
+        {sending ? 'Отправляем…' : 'Отправить отчёт'}
+      </button>
+    </div>
+  );
 
   let body;
   switch (view) {
@@ -247,12 +386,18 @@ export function DayPage() {
       body = (
         <>
           {blocks()}
+          {reportRow()}
           {activeFromLine()}
         </>
       );
       break;
     case 'open':
-      body = <>{blocks()}</>;
+      body = (
+        <>
+          {blocks()}
+          {reportRow()}
+        </>
+      );
       break;
     case 'submitted':
       body = <p>{t(DAY_TEXT_KEYS.queueWait)}</p>;
