@@ -164,3 +164,46 @@ export interface TextsBulkResponse {
 
 export const postTextsBulk = (keys: string[]) =>
   apiRequest<TextsBulkResponse>('/miniapp/v1/texts/bulk', { method: 'POST', body: { keys } });
+
+// ---- День (day-screen-a): GET /day/current, POST /day/test-enter ----
+// «Какой экран» решает только status, «можно ли нажать» — только buttons_active.
+// Окно 04:00–00:00 клиент не считает; время — ISO 8601 со сдвигом пояса участника.
+
+export type DayStatus = 'not_started' | 'entering' | 'open' | 'submitted' | 'queued' | 'closed';
+
+export interface DayBlock {
+  block_id: string;
+  title_key: string;
+  help_key: string;
+  critical: boolean;
+  mark: 'done' | 'not_done' | null;
+}
+
+export interface DayPosition {
+  stage_no: number;
+  module_no: number;
+  day_no: number;
+}
+
+/** not_started / entering — только status, lives, test_entry; остальные поля могут отсутствовать. */
+export interface DayCurrent {
+  status: DayStatus;
+  lives: number;
+  test_entry: boolean;
+  position?: DayPosition | null;
+  day_started_at?: string | null;
+  blocks?: DayBlock[] | null;
+  min_optional?: number | null;
+  can_submit?: boolean | null;
+  active_from?: string | null;
+  deadline_at?: string | null;
+  queued_until?: string | null;
+  buttons_active?: boolean | null;
+}
+
+/** Только чтение. Ошибки: 401, 404 PARTICIPANT_NOT_FOUND, 429, 503. */
+export const getDayCurrent = () => apiRequest<DayCurrent>('/miniapp/v1/day/current');
+
+/** Тестовый вход (флаг DAY_TEST_ENTRY_ENABLED): тела нет, X-Client-Op-Id не нужен. */
+export const postDayTestEnter = () =>
+  apiRequest<{ status: 'already' | 'entering' }>('/miniapp/v1/day/test-enter', { method: 'POST' });
