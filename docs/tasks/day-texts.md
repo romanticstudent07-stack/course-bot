@@ -11,12 +11,12 @@
 закрытый день. Только заглушки (репо публичный до 0-Б). Экран day-screen-a берёт их через /texts/bulk.
 
 ## 3. Решения (З2–З3, 21.10, сверено ШТАБом)
-- Ключи — B9.day_* (Day.* не проходит схему): B9.day_active_from_hint, B9.day_queue_wait, B9.day_closed_hint.
-- legal_status pre-legal-review; тон queue_wait — по DM 3.19 (soft).
+- Ключи — B9.day_* (Day.* не проходит схему): B9.day_active_from_hint, B9.day_queue_wait, B9.day_closed_hint. [канон text_registry.schema.json]
+- legal_status pre-legal-review; тон queue_wait — по DM 3.19 (soft). [канон DM 3.19]
 - Тон closed_hint — neutral: закрытый день — это пропуск (DM 3.6), для пропуска канон тон не задаёт;
-  DM 3.20 задаёт тон для возврата по критериям (rejected), не для пропуска (ШТАБ 21.10, ошибка З2).
-- Меток {date} нет: в схеме подстановок нет (есть только plurals_ru). Дату и «04:00» экран выводит рядом сам.
-- Отдельная задача Р0 до карточки a; на сервере: build migrate → texts load.
+  DM 3.20 задаёт тон для возврата по критериям (rejected), не для пропуска (ШТАБ 21.10, ошибка З2). [ШТАБ-тех; канон молчит: DM 3.6, 3.20]
+- Меток {date} нет: в схеме подстановок нет (есть только plurals_ru). Дату и «04:00» экран выводит рядом сам. [канон text_registry.schema.json]
+- Отдельная задача Р0 до карточки a; на сервере: build migrate → texts load. [ШТАБ-тех]
 
 ## 4. Выдержки
 - build/config-schemas/text_registry.schema.json: key ^(B2|B4|B5|B7|B9|B10|B14|B15|B16|legal)\.[a-z][a-z0-9_]*$;
