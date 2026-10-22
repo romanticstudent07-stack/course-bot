@@ -207,3 +207,40 @@ export const getDayCurrent = () => apiRequest<DayCurrent>('/miniapp/v1/day/curre
 /** Тестовый вход (флаг DAY_TEST_ENTRY_ENABLED): тела нет, X-Client-Op-Id не нужен. */
 export const postDayTestEnter = () =>
   apiRequest<{ status: 'already' | 'entering' }>('/miniapp/v1/day/test-enter', { method: 'POST' });
+
+// ---- День (day-screen-b): PUT /day/marks, POST /day/report/submit ----
+// Каждая отметка сразу уходит на сервер (DM 3.4); на устройстве не хранится.
+
+export type DayMarkValue = 'done' | 'not_done';
+
+export interface DayMarkIn {
+  block_id: string;
+  value: DayMarkValue;
+}
+
+export type DayMarkOut = DayMarkIn;
+
+export interface DayReportIn {
+  /** Каждый блок дня ровно один раз, в порядке блоков. */
+  marks: DayMarkIn[];
+}
+
+export interface DayReportOut {
+  verdict: 'passed' | 'not_passed' | 'all_not_done';
+  queued: true;
+}
+
+/**
+ * UPSERT отметки: X-Client-Op-Id не нужен (повтор безопасен).
+ * Ошибки: 404 PARTICIPANT_NOT_FOUND; 409 DAY_NOT_STARTED / DAY_NOT_ACTIVE / DAY_CLOSED /
+ * DAY_ALREADY_SUBMITTED; 422 BLOCK_NOT_IN_DAY; 401, 429, 503.
+ */
+export const putDayMark = (body: DayMarkIn) =>
+  apiRequest<DayMarkOut>('/miniapp/v1/day/marks', { method: 'PUT', body });
+
+/**
+ * Отчёт дня. clientOpId — один на попытку с тем же телом: повтор после ошибки — с ним же (D-17).
+ * 200 — только после commit. Вердикт экран не показывает (DM 3.19).
+ */
+export const postDayReport = (body: DayReportIn, clientOpId: string) =>
+  apiRequest<DayReportOut>('/miniapp/v1/day/report/submit', { method: 'POST', body, clientOpId });
