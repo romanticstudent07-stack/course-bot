@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "owner_block": "B9",
   "durability_block": "B14",
   "entries": [
@@ -111,6 +111,25 @@
       "tone": "neutral",
       "legal_status": "pre-legal-review",
       "text": "[ЗАГЛУШКА] Модуль 1, день 2: справка к заданию 5."
+    },
+    {
+      "key": "B9.day_active_from_hint",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Кнопки заданий станут активны:",
+      "notes": "day-texts: экран /day. После текста экран сам выводит дату и время из active_from. Заглушки до 0-Б."
+    },
+    {
+      "key": "B9.day_queue_wait",
+      "tone": "soft",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Вы поставлены в очередь на модерацию. Результат и задания следующего дня появятся здесь."
+    },
+    {
+      "key": "B9.day_closed_hint",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Приём отчёта за этот день завершён. Задания этого дня откроются снова."
     }
   ]
 }
