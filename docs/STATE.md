@@ -10,6 +10,7 @@
 - Норма сервера: 7/7 Up, 5 healthy (db, redis, garage, api, miniapp), healthcheck нет у bot и projector; curl / 200, /healthz 200, /miniapp/v1/onboarding/status 401; проектор проверяется по логам (Traceback 0, WARNING 0), projector once рядом с run запрещён (infra/SERVER-IRONCLAD.md:146). Роли: api — coursebot_api, projector — coursebot_projector, alembic и texts load — владелец (только DC --profile tools run --rm --no-deps migrate); env_file нет ни у одного сервиса; repr/str Settings без DSN. Перед каждой миграцией — бэкап before-000N и DC --profile tools build migrate.
 - В БД (22.10): participant_state 2, participant_events 3, day_marks 0; у участника #000001 позиция дня 1 (тестовый вход 22.10 21:43 MSK, Europe/Moscow, lives 3, lifecycle_phase onboarding); outbox 3 и dlq 2 (тестовые строки send-1b, не удалять). Живая проверка «C» (day-screen-b §10): шаги 1–2 ✅ 22.10; 23.10 после 04:00 — отчёт Автора; 24.10 — молчание; 25.10 утро — сервер проверяет day_closed. До конца проверки api, projector, miniapp не пересобирать; docs-PR — только pull.
 - db-access-1 (Р-2, а): 0010_access_grants — 16 таблиц; права app_bot (SELECT/INSERT/UPDATE по колонкам) и app_api (SELECT tg_user_id, status); backfill granted активным участникам. Выкат — после 25.10.
+- api-access-1 (Р-2, в1): гейт first-launch; выкат только с bot-access-1 или после него.
 - bot-access-1 (Р-2, б): промокод → заявка в админ-теме → кнопки и /access_grant, /access_deny; 5 отказов → пауза 24 ч (настройки). Новые env бота: WORK_GROUP_ID, ACCESS_ADMIN_TOPIC_ID, ACCESS_ADMIN_IDS, ACCESS_MAX_DENIES, ACCESS_LOCK_HOURS. Без них функция выключена.
 - ЗАКРЫТО: И1 (1d, B-1, 1e-1, 1e-2, 1e-2b), projector, returning, ЭТАП B-3, miniapp-fix, melochi-2, DOCS D-2/3/8/12, D-11/16/21, D-22; И2 БД: iter2-db-1/2/3 (0007–0009); И2 API: iter2-api-1 ✅ 54ca133, iter2-api-2a ✅ e5de293, iter2-api-2b ✅ 0817dc3. Подробно — снимок docs/history/STATE-a5ef1d7.md.
 - DEFECTS-FOUND.md < 25 000 байт (правило А); DEFECTS-ARCHIVE.md КОДЕРАМ кода не давать.
@@ -36,6 +37,7 @@
 Источник — docs/decisions/R-2026-10-1.md (Р-1…Р-8) и -2.md (Р-9…Р-14). Расходится с docs/architecture/** — прав этот раздел.
 - Р-1: оплаты в Mini App нет совсем (onb.payment, payment.* не делать); оплата — в личке с Автором.
 - Р-2: доступ — промокод в боте → админ-тема [Выдать доступ]/[Запретить] → флажок по tg_user_id → онбординг; до прода обязательно (миграция + РЕВЬЮЕР), после send-1.
+- Р-2 (дополнение 23.10, api-access-1): first-launch при отсутствии активного участника и access_grants.status ≠ granted → 403 ACCESS_NOT_GRANTED, pid не создаётся; GET /onboarding/status → 200 {"status":"no_access"}. Перекрывает запрет «403 для неизвестного tg_user_id» (D-9 п.2, R327). Существующих участников гейт не трогает.
 - Р-3: фото участников нет: C5, слой «фото» Карты, /view_photos, /grant_photos_access, photo_view_log, S3_BUCKET_PHOTOS — не делать.
 - Р-4: PSP на потом (YooKassa — основной, CloudPayments — запасной, только внешний сайт); Refund Saga на потом; /refund — учётная операция.
 - Р-5: медиа — только внешний Telegram-канал; S3 pre-signed не делать; D-1 закрыт.

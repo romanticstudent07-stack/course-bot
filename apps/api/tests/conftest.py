@@ -128,6 +128,7 @@ def db_engine(migrated_db):
             )
         )
     write_entries(engine, load_seed())  # upsert всех config/texts/*.json (B4 + legal)
+    grant_access(engine, TEST_USER_ID)  # api-access-1 (Р-2): без доступа first-launch → 403
     try:
         yield engine
     finally:
@@ -148,6 +149,29 @@ def db_api_client(db_engine, migrated_db):
         yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
+
+
+def grant_access(engine_or_url, tg_user_id: int, status: str = "granted") -> None:
+    """Строка access_grants под владельцем (api-access-1, Р-2); ON CONFLICT DO NOTHING.
+
+    engine_or_url — engine или DSN (соединение владельца, не app_api: у app_api INSERT нет).
+    status pending требует admin_message_id (CHECK 0010) — подставляется tg_user_id.
+    """
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(engine_or_url) if isinstance(engine_or_url, str) else engine_or_url
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO access_grants (tg_user_id, status, admin_message_id, created_via) "
+                    "VALUES (:u, :s, :m, 'bot_promo') ON CONFLICT DO NOTHING"
+                ),
+                {"u": tg_user_id, "s": status, "m": tg_user_id if status == "pending" else None},
+            )
+    finally:
+        if isinstance(engine_or_url, str):
+            engine.dispose()
 
 
 def count_registry_rows(engine, tg_user_id: int | None = None) -> int:

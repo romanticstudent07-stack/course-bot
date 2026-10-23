@@ -32,7 +32,7 @@ from app.day_keys import (
 )
 from app.routers.day import build_blocks
 from app.telegram_init_data import INIT_DATA_HEADER
-from tests.conftest import valid_init_data
+from tests.conftest import _database_url, grant_access, valid_init_data
 
 URL = "/miniapp/v1/day/current"
 FIRST_LAUNCH = "/miniapp/v1/onboarding/first-launch"
@@ -114,6 +114,7 @@ def test_db_unavailable_is_503(api_client):
 
 
 def _pid(client, user_id: int) -> uuid.UUID:
+    grant_access(_database_url(), user_id)  # api-access-1 (Р-2)
     r = client.post(FIRST_LAUNCH, json=BODY, headers=_headers(user_id))
     assert r.status_code == 201
     return uuid.UUID(r.json()["pid"])

@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from tests.conftest import UNREACHABLE_DSN, valid_init_data
+from tests.conftest import UNREACHABLE_DSN, _database_url, grant_access, valid_init_data
 
 API_DIR = Path(__file__).resolve().parents[1]
 
@@ -113,6 +113,7 @@ def _headers(tg_user_id: int) -> dict[str, str]:
 
 
 def _first_launch(client, tg_user_id: int):
+    grant_access(_database_url(), tg_user_id)  # api-access-1 (Р-2): владелец, не app_api
     return client.post(FIRST_LAUNCH_URL, headers=_headers(tg_user_id), json=FIRST_LAUNCH_BODY)
 
 
