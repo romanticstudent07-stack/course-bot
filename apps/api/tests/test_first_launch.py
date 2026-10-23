@@ -32,6 +32,7 @@ from tests.conftest import (
     UNREACHABLE_DSN,
     count_consent_rows,
     count_registry_rows,
+    grant_access,
     valid_init_data,
 )
 
@@ -370,6 +371,8 @@ def test_existing_pid_without_consents_gets_them_once(db_api_client, db_engine):
 
 
 def test_different_users_get_different_pid_and_short_no(db_api_client, db_engine):
+    grant_access(db_engine, 1001)
+    grant_access(db_engine, 1002)
     a = db_api_client.post(FIRST_LAUNCH, json=_body(), headers=_headers(1001)).json()
     b = db_api_client.post(FIRST_LAUNCH, json=_body(), headers=_headers(1002)).json()
     assert a["pid"] != b["pid"]
@@ -403,6 +406,7 @@ def test_rejected_init_data_creates_no_row(db_api_client, db_engine):
 
 
 def test_tg_user_id_from_body_is_ignored(db_api_client, db_engine):
+    grant_access(db_engine, 3001)
     r = db_api_client.post(
         FIRST_LAUNCH,
         json=_body(tg_user_id=999999, pid=str(uuid.uuid4())),
@@ -414,8 +418,9 @@ def test_tg_user_id_from_body_is_ignored(db_api_client, db_engine):
     assert count_registry_rows(db_engine) == 1
 
 
-def test_create_log_has_tg_user_id_and_outcome_only(db_api_client, caplog):
+def test_create_log_has_tg_user_id_and_outcome_only(db_api_client, db_engine, caplog):
     caplog.set_level(logging.DEBUG)
+    grant_access(db_engine, 4001)
     headers = _headers(4001, username="secret_nick", last_name="Secretov")
     db_api_client.post(FIRST_LAUNCH, json=_body(), headers=headers)
     db_api_client.post(FIRST_LAUNCH, json=_body(), headers=headers)
@@ -573,6 +578,7 @@ def test_short_no_cannot_be_set_manually(db_engine):
 
 def test_after_tombstone_same_user_gets_new_pid(db_api_client, db_engine):
     # И1 tombstone_semantics / Р243: новая регистрация того же tg_user_id → новый pid.
+    grant_access(db_engine, 9001)  # после tombstone нужен granted (api-access-1)
     first = db_api_client.post(FIRST_LAUNCH, json=_body(), headers=_headers(9001))
     with db_engine.begin() as conn:
         conn.execute(
@@ -587,3 +593,104 @@ def test_after_tombstone_same_user_gets_new_pid(db_api_client, db_engine):
     assert count_consent_rows(db_engine, uuid.UUID(second.json()["pid"])) == 2
     third = db_api_client.post(FIRST_LAUNCH, json=_body(), headers=_headers(9001))
     assert third.json() == second.json()
+
+
+# ================= api-access-1: гейт доступа (Р-2), с БД =================
+
+
+def _delete_access(engine, tg_user_id: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text("DELETE FROM access_grants WHERE tg_user_id = :u"), {"u": tg_user_id}
+        )
+
+
+def test_no_access_row_is_403_and_nothing_written(db_api_client, db_engine):
+    r = db_api_client.post(FIRST_LAUNCH, json=_body(), headers=_headers(9101))
+    assert r.status_code == 403
+    body = r.json()
+    assert body["code"] == "ACCESS_NOT_GRANTED"
+    assert "pid" not in body and "short_no" not in body
+    assert count_registry_rows(db_engine, 9101) == 0
+    assert count_consent_rows(db_engine) == 0
+
+
+@pytest.mark.parametrize(
+    ("status_value", "expected"), [("pending", 403), ("denied", 403), ("granted", 201)]
+)
+def test_access_status_decides(db_api_client, db_engine, status_value, expected):
+    grant_access(db_engine, 9102, status=status_value)
+    r = db_api_client.post(FIRST_LAUNCH, json=_body(), headers=_headers(9102))
+    assert r.status_code == expected, r.text
+    if expected == 403:
+        assert r.json()["code"] == "ACCESS_NOT_GRANTED"
+        assert count_registry_rows(db_engine, 9102) == 0
+        assert count_consent_rows(db_engine) == 0
+    else:
+        assert UUID_RE.match(r.json()["pid"])
+        assert count_registry_rows(db_engine, 9102) == 1
+
+
+def test_active_participant_passes_without_access_row(db_api_client, db_engine):
+    first = db_api_client.post(FIRST_LAUNCH, json=_body(), headers=_headers())
+    assert first.status_code == 201
+    _delete_access(db_engine, TEST_USER_ID)  # владелец; app_api DELETE не имеет
+    again = db_api_client.post(FIRST_LAUNCH, json=_body(), headers=_headers())
+    assert again.status_code == 201, again.text
+    assert again.json() == first.json()
+
+
+def test_tombstoned_without_grant_is_403(db_api_client, db_engine):
+    first = db_api_client.post(FIRST_LAUNCH, json=_body(), headers=_headers())
+    assert first.status_code == 201
+    with db_engine.begin() as conn:
+        conn.execute(
+            text("UPDATE tg_user_registry SET tombstoned_at = now() WHERE tg_user_id = :u"),
+            {"u": TEST_USER_ID},
+        )
+    _delete_access(db_engine, TEST_USER_ID)
+    r = db_api_client.post(FIRST_LAUNCH, json=_body(), headers=_headers())
+    assert r.status_code == 403
+    assert r.json()["code"] == "ACCESS_NOT_GRANTED"
+    assert count_registry_rows(db_engine, TEST_USER_ID) == 1  # только старая tombstoned
+
+
+def test_access_denied_log_has_only_reason(db_api_client, caplog):
+    caplog.set_level(logging.DEBUG)
+    r = db_api_client.post(
+        FIRST_LAUNCH, json=_body(), headers=_headers(777003, username="secret_nick")
+    )
+    assert r.status_code == 403
+    assert "first-launch: reason=access_not_granted" in caplog.text
+    assert "777003" not in caplog.text  # без tg_user_id
+    assert "secret_nick" not in caplog.text and ADULT not in caplog.text
+
+
+def test_has_access_query_under_app_api(db_engine, migrated_db):
+    """П2: ровно запрос _has_access под app_api — без ошибки прав; select(AccessGrant) — отказ."""
+    from psycopg import errors as pg_errors
+    from sqlalchemy import select
+    from sqlalchemy.exc import ProgrammingError
+
+    from app.db.models import AccessGrant
+    from tests.test_db_roles import role_engine
+
+    grant_access(db_engine, 9103)
+    api_engine = role_engine(migrated_db, "app_api")
+    try:
+        with Session(api_engine) as session:
+            assert session.execute(text("SELECT current_user")).scalar_one() == "app_api"
+            status_value = session.execute(
+                select(onboarding.AccessGrant.status).where(
+                    onboarding.AccessGrant.tg_user_id == 9103
+                )
+            ).scalar_one_or_none()
+            assert status_value == "granted"
+            assert onboarding._has_access(session, 9103) is True
+            assert onboarding._has_access(session, 9104) is False
+        with Session(api_engine) as session:
+            with pytest.raises(ProgrammingError) as caught:
+                session.execute(select(AccessGrant).where(AccessGrant.tg_user_id == 9103)).all()
+        assert isinstance(caught.value.orig, pg_errors.InsufficientPrivilege)
+    finally:
+        api_engine.dispose()

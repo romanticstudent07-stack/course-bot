@@ -17,7 +17,13 @@ from sqlalchemy import text
 from app.routers.consents import EventRow, fold_events
 from app.telegram_init_data import INIT_DATA_HEADER
 from app.texts import load_seed, write_entries
-from tests.conftest import count_consent_rows, count_registry_rows, valid_init_data
+from tests.conftest import (
+    _database_url,
+    count_consent_rows,
+    count_registry_rows,
+    grant_access,
+    valid_init_data,
+)
 
 URL = "/miniapp/v1/consents"
 FIRST_LAUNCH = "/miniapp/v1/onboarding/first-launch"
@@ -29,6 +35,12 @@ C1_KEY = "legal.consent_c1_pdn"
 
 def _headers(user_id: int) -> dict[str, str]:
     return {INIT_DATA_HEADER: valid_init_data(user={"id": user_id, "first_name": "Test"})}
+
+
+def _fl_headers(user_id: int) -> dict[str, str]:
+    """Заголовки для first-launch: сначала доступ (api-access-1, Р-2), владельцем."""
+    grant_access(_database_url(), user_id)
+    return _headers(user_id)
 
 
 def _ev(kind: str, action: str, minutes: int, key: str = C1_KEY) -> EventRow:
@@ -134,7 +146,7 @@ def test_no_participant_is_empty_list(db_api_client):
 
 
 def test_after_first_launch_c0_and_c1(db_api_client):
-    assert db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_headers(1002)).status_code == 201
+    assert db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_fl_headers(1002)).status_code == 201
     r = db_api_client.get(URL, headers=_headers(1002))
     assert r.status_code == 200
     body = r.json()
@@ -147,14 +159,14 @@ def test_after_first_launch_c0_and_c1(db_api_client):
 
 
 def test_isolation_between_users(db_api_client, db_engine):
-    a = db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_headers(1101)).json()
+    a = db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_fl_headers(1101)).json()
     # B без участника не видит согласий A, даже если подставит pid и tg_user_id A в запрос.
     r = db_api_client.get(
         URL, params={"tg_user_id": 1101, "pid": a["pid"]}, headers=_headers(1102)
     )
     assert r.status_code == 200
     assert r.json() == []
-    db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_headers(1102))
+    db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_fl_headers(1102))
     _insert_event(db_engine, a["pid"], "C1", "revoke")
     a_view = {c["id"]: c for c in db_api_client.get(URL, headers=_headers(1101)).json()}
     b_view = {c["id"]: c for c in db_api_client.get(URL, headers=_headers(1102)).json()}
@@ -166,8 +178,8 @@ def test_isolation_between_users(db_api_client, db_engine):
 
 def test_isolation_both_have_pid_query_params_ignored(db_api_client, db_engine):
     # Ревью #43: у A и B свои pid; B подставляет pid и tg_user_id A — видит только свои согласия.
-    ra = db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_headers(1501))
-    rb = db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_headers(1502))
+    ra = db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_fl_headers(1501))
+    rb = db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_fl_headers(1502))
     assert ra.status_code == 201
     assert rb.status_code == 201
     pid_a = ra.json()["pid"]
@@ -190,7 +202,7 @@ def test_isolation_both_have_pid_query_params_ignored(db_api_client, db_engine):
 
 
 def test_tombstoned_participant_is_empty_list(db_api_client, db_engine):
-    db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_headers(1201))
+    db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_fl_headers(1201))
     with db_engine.begin() as conn:
         conn.execute(
             text("UPDATE tg_user_registry SET tombstoned_at = now() WHERE tg_user_id = 1201")
@@ -201,7 +213,7 @@ def test_tombstoned_participant_is_empty_list(db_api_client, db_engine):
 
 
 def test_get_writes_nothing(db_api_client, db_engine):
-    db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_headers(1301))
+    db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_fl_headers(1301))
     before = (count_registry_rows(db_engine), count_consent_rows(db_engine))
     db_api_client.get(URL, headers=_headers(1301))
     db_api_client.get(URL, headers=_headers(1302))  # без участника — тоже ничего не создаёт
@@ -211,7 +223,7 @@ def test_get_writes_nothing(db_api_client, db_engine):
 
 def test_reload_texts_keeps_old_ver_of_text(db_api_client, db_engine):
     # D-15 в: смена версии текстов (0.2.0) не меняет ver_of_text уже записанных согласий.
-    pid = db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_headers(1401)).json()["pid"]
+    pid = db_api_client.post(FIRST_LAUNCH, json=BODY, headers=_fl_headers(1401)).json()["pid"]
     _insert_event(db_engine, pid, "C1", "give", ver="0.1.0")
     write_entries(db_engine, load_seed())
     with db_engine.connect() as conn:

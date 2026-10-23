@@ -1,4 +1,5 @@
-"""/miniapp/v1/onboarding/* — онбординг SEAM-1 (Итерации 1b+1c, 1e-1a, projector-1, returning-1).
+"""/miniapp/v1/onboarding/* — онбординг SEAM-1 (Итерации 1b+1c, 1e-1a, projector-1, returning-1,
+api-access-1).
 
 Контракт: build/miniapp-api-contract.yaml → POST /miniapp/v1/onboarding/first-launch
   request:  {birth_date: date, consents: ["C0", "C1", ...]}
@@ -15,10 +16,17 @@
   422 BIRTH_DATE_IN_FUTURE / ошибки валидации тела (нет consents, дубли, id вне C0–C6);
   503 SERVICE_UNAVAILABLE — БД недоступна; 503 SERVICE_MISCONFIGURED — нет BOT_TOKEN,
   неизвестный SERVER_TIMEZONE или нет текста согласия в text_registry (fail closed).
+Вне контракта (Р-2, docs/DEFECTS-FOUND.md D-38; api-access-1):
+  403 ACCESS_NOT_GRANTED — активного участника нет и access_grants.status ≠ granted;
+  GET /onboarding/status → 200 {"status": "no_access"} (см. ниже).
 
 Порядок (docs/tasks/1e-1.md, раздел 7 — НЕ МЕНЯТЬ):
   1) initData (роутер) → 2) тело (Pydantic) → 3) возраст БЕЗ БД → 403
-  → 4) обязательные согласия → 422 → 5) ОДНА транзакция: тексты согласий из text_registry
+  → 4) обязательные согласия → 422 → 5) ОДНА транзакция:
+  5а) (api-access-1, Р-2) активного участника нет (find_active_participant) И _has_access ложь
+  → откат, 403 ACCESS_NOT_GRANTED, ничего не записано; активный участник 5а проходит без
+  проверки флажка, строка tombstoned — не активный участник (нужен granted);
+  5б) тексты согласий из text_registry
   (нет текста → откат, 503) → участник (get_or_create, строка заблокирована) → события
   согласий pid → consent_events: give для каждого присланного kind, согласие по которому
   НЕ действует (отозвано, сменился текст или give не было; returning-1, D-22) →
@@ -40,14 +48,19 @@ GET /miniapp/v1/onboarding/status (returning-1, D-22; вне контракта 
     {"status": "returning", "short_no": "#000123"} — активная строка есть, C0 и C1 действуют;
     {"status": "reconsent", "reasons": [...]} — строка есть, хоть одно не действует
         (перечень — consent_status.REASONS); short_no не отдаётся;
-    {"status": "new"} — строки нет ИЛИ она tombstoned (erased): тело одинаковое.
+    {"status": "new"} — строки нет ИЛИ она tombstoned (erased), и доступ выдан
+        (access_grants.status = granted): тело одинаковое;
+    {"status": "no_access"} — строки нет ИЛИ она tombstoned, и доступа нет (Р-2, D-38).
   pid не отдаётся никогда. 401 / 429 — роутер miniapp_v1 (main.py). 403 не отдаётся.
   503 SERVICE_UNAVAILABLE — БД недоступна; 503 SERVICE_MISCONFIGURED — нет текста C0/C1.
   participant_state и проектор для решения НЕ используются (INV-1).
 
 Нормы:
   - SEAM-PATCH-1: first-launch Mini App — единственная точка создания участника;
-    403 для неизвестного tg_user_id НЕ отдаётся (решение Автора; D-9 п.2);
+    Р-2 (STATE): без доступа (access_grants.status ≠ granted) pid не создаётся → 403
+    ACCESS_NOT_GRANTED; прежний запрет D-9 п.2 (R327) перекрыт;
+  - access_grants читается ТОЛЬКО колонка status явным select (у app_api права только на
+    tg_user_id, status); без FOR UPDATE / FOR SHARE; в access_grants API не пишет;
   - ADD3 INV-AGE-GATE-BEFORE-PID: hard-check даты рождения ДО любого обращения к БД;
     при < 18 строка tg_user_registry не создаётся;
   - B-2: pid создаётся только вместе с согласиями C0 и C1, в одной транзакции;
@@ -60,8 +73,9 @@ GET /miniapp/v1/onboarding/status (returning-1, D-22; вне контракта 
     API пишет только событие в participant_events, состояние строит проектор (projector-2).
 
 Лог first-launch: только tg_user_id, исход (created / existing) и число новых согласий;
-для отказов по возрасту и согласиям — только reason, без tg_user_id.
-Лог status: «status: tg_user_id=<id> status=<returning|reconsent|new>».
+для отказов по возрасту, согласиям и доступу — только reason, без tg_user_id
+(«first-launch: reason=access_not_granted»).
+Лог status: «status: tg_user_id=<id> status=<returning|reconsent|new|no_access>».
 Имя, username, initData, дата рождения, текст согласия, pid, short_no, reasons — никогда.
 """
 from __future__ import annotations
@@ -91,10 +105,12 @@ from app.consent_status import (
     snapshot_of,
 )
 from app.db.models import (
+    ACCESS_STATUS_GRANTED,
     ACTOR_SYSTEM,
     CONSENT_ACTION_GIVE,
     CREATED_VIA_MINI_APP_FIRST_LAUNCH,
     EVENT_KIND_MINI_APP_FIRST_CONSENT,
+    AccessGrant,
     ConsentEvent,
     ParticipantEvent,
     TextRegistry,
@@ -148,7 +164,7 @@ class PidCreated(BaseModel):
 class OnboardingStatus(BaseModel):
     """Ответ GET /onboarding/status; пустые поля не отдаются (response_model_exclude_none)."""
 
-    status: Literal["returning", "reconsent", "new"]
+    status: Literal["returning", "reconsent", "new", "no_access"]
     short_no: str | None = None
     reasons: list[str] | None = None
 
@@ -192,6 +208,29 @@ def today_in_server_timezone(settings: Settings) -> date:
             "Сервис временно недоступен",
         ) from None
     return _utc_now().astimezone(tz).date()
+
+
+class AccessNotGrantedError(Exception):
+    """Шаг 5а: активного участника нет и доступ не выдан (Р-2)."""
+
+
+def _has_access(session, tg_user_id: int) -> bool:
+    status = session.execute(
+        select(AccessGrant.status).where(AccessGrant.tg_user_id == tg_user_id)
+    ).scalar_one_or_none()
+    return status == ACCESS_STATUS_GRANTED
+
+
+def check_access_gate(session: Session, tg_user_id: int) -> None:
+    """Шаг 5а (api-access-1): активный участник проходит без проверки флажка.
+
+    Нет активной строки (в т.ч. tombstoned) и status ≠ granted → AccessNotGrantedError.
+    Только чтение; вызывается в той же сессии (транзакции), что и register_with_consents.
+    """
+    if find_active_participant(session, tg_user_id) is not None:
+        return
+    if not _has_access(session, tg_user_id):
+        raise AccessNotGrantedError
 
 
 def register_with_consents(
@@ -256,15 +295,17 @@ def register_with_consents(
 
 
 def read_onboarding_status(session: Session, tg_user_id: int) -> OnboardingStatus:
-    """Кто открыл Mini App: returning / reconsent / new. Только чтение, без commit.
+    """Кто открыл Mini App: returning / reconsent / new / no_access. Только чтение, без commit.
 
     Тексты C0/C1 проверяются всегда (fail closed): нет текста → ConsentTextMissingError.
     """
     texts = current_texts(session, STATUS_KINDS)
     found = find_active_participant(session, tg_user_id)
     if found is None:
-        # Нет строки или она tombstoned (erased) — одно и то же тело.
-        return OnboardingStatus(status="new")
+        # Нет строки или она tombstoned (erased) — одно и то же тело; решает доступ (Р-2).
+        if _has_access(session, tg_user_id):
+            return OnboardingStatus(status="new")
+        return OnboardingStatus(status="no_access")
     pid, short_no = found
     problems = reasons(load_events(session, pid), texts, STATUS_KINDS)
     if problems:
@@ -318,7 +359,10 @@ def onboarding_status(
     response_model=PidCreated,
     responses={
         401: {"description": "initData невалидна / истекла (TG_INIT_MISSING / TG_INIT_INVALID)"},
-        403: {"description": "Возрастной гейт: < 18 (AGE_GATE_UNDERAGE)"},
+        403: {
+            "description": "Возрастной гейт: < 18 (AGE_GATE_UNDERAGE); доступ не выдан "
+            "(ACCESS_NOT_GRANTED, вне контракта, Р-2, D-38)"
+        },
         422: {
             "description": "CONSENTS_REQUIRED / CONSENT_NOT_SUPPORTED / BIRTH_DATE_IN_FUTURE / "
             "невалидное тело (вне контракта, D-10, D-12)"
@@ -367,10 +411,18 @@ def first_launch(
             details={"unsupported": unsupported},
         )
 
-    # --- 5. Одна транзакция: тексты → участник → согласия → событие ---
+    # --- 5. Одна транзакция: 5а доступ → тексты → участник → согласия → событие ---
     tg_user_id = init_data.tg_user_id  # только из проверенной initData
     try:
+        check_access_gate(session, tg_user_id)
         registration = register_with_consents(session, tg_user_id, body.consents)
+    except AccessNotGrantedError:
+        session.rollback()
+        # Р-2: pid не создаётся. В лог — без tg_user_id (как отказ по возрасту).
+        logger.info("first-launch: reason=access_not_granted")
+        raise _error(
+            status.HTTP_403_FORBIDDEN, "ACCESS_NOT_GRANTED", "Доступ не открыт."
+        ) from None
     except ConsentTextMissingError as exc:
         session.rollback()
         logger.error(

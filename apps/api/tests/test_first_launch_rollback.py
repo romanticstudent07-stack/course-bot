@@ -20,6 +20,7 @@ from tests.conftest import (
     UNREACHABLE_DSN,
     count_consent_rows,
     count_registry_rows,
+    grant_access,
     valid_init_data,
 )
 
@@ -61,6 +62,7 @@ def _drop_failing_trigger(engine) -> None:
 
 def test_operational_error_on_consent_insert_rolls_back_participant(db_api_client, db_engine):
     try:
+        grant_access(db_engine, 2001)  # api-access-1 (Р-2)
         _install_failing_trigger(db_engine, "57P01")
         r = db_api_client.post(FIRST_LAUNCH, headers=_headers(2001), json=BODY)
     finally:
@@ -76,6 +78,7 @@ def test_internal_error_on_consent_insert_rolls_back_participant(
 ):
     caplog.set_level(logging.DEBUG)
     try:
+        grant_access(db_engine, 2002)  # api-access-1 (Р-2)
         _install_failing_trigger(db_engine, None)
         r = db_api_client.post(FIRST_LAUNCH, headers=_headers(2002), json=BODY)
     finally:

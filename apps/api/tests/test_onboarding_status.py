@@ -29,7 +29,13 @@ from app.consent_status import (
     snapshot_of,
 )
 from app.telegram_init_data import INIT_DATA_HEADER
-from tests.conftest import count_consent_rows, count_registry_rows, valid_init_data
+from tests.conftest import (
+    _database_url,
+    count_consent_rows,
+    count_registry_rows,
+    grant_access,
+    valid_init_data,
+)
 
 STATUS = "/miniapp/v1/onboarding/status"
 FIRST_LAUNCH = "/miniapp/v1/onboarding/first-launch"
@@ -45,6 +51,7 @@ def _headers(user_id: int) -> dict[str, str]:
 
 
 def _first_launch(client, user_id: int) -> dict:
+    grant_access(_database_url(), user_id)  # api-access-1 (Р-2): владелец
     r = client.post(FIRST_LAUNCH, json=BODY, headers=_headers(user_id))
     assert r.status_code == 201
     return r.json()
@@ -224,6 +231,7 @@ def test_status_reconsent_after_text_change(db_api_client, db_engine):  # тес
 def test_status_new_and_erased_same_body(db_api_client, db_engine):  # тест 5
     # A есть → B новый: чужой участник не просачивается в ответ B.
     created_a = _first_launch(db_api_client, 2402)
+    grant_access(db_engine, 2401)  # api-access-1: «new» — только с доступом
     body_b = _status(db_api_client, 2401).content
     assert body_b == b'{"status":"new"}'
     assert created_a["short_no"].encode() not in body_b
@@ -332,3 +340,37 @@ def test_status_text_missing_is_503_misconfigured(db_api_client, monkeypatch):  
     assert "returning" not in r.text
     assert created["pid"] not in r.text
     assert created["short_no"] not in r.text
+
+
+# ================= api-access-1: status no_access (Р-2), с БД =================
+
+
+def test_status_no_access_without_participant_and_grant(db_api_client, db_engine, caplog):
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        r = _status(db_api_client, 3101)
+    assert r.content == b'{"status":"no_access"}'
+    assert count_registry_rows(db_engine, 3101) == 0
+    assert any("status: tg_user_id=3101 status=no_access" in line for line in _log_lines(caplog))
+
+
+def test_status_new_with_grant(db_api_client, db_engine):
+    grant_access(db_engine, 3102)
+    assert _status(db_api_client, 3102).content == b'{"status":"new"}'
+
+
+def test_status_returning_without_access_row(db_api_client, db_engine):
+    created = _first_launch(db_api_client, 3103)
+    with db_engine.begin() as conn:
+        conn.execute(text("DELETE FROM access_grants WHERE tg_user_id = 3103"))
+    body = _status(db_api_client, 3103).json()
+    assert body == {"status": "returning", "short_no": created["short_no"]}
+
+
+def test_status_tombstoned_without_grant_is_no_access(db_api_client, db_engine):
+    _first_launch(db_api_client, 3104)
+    with db_engine.begin() as conn:
+        conn.execute(
+            text("UPDATE tg_user_registry SET tombstoned_at = now() WHERE tg_user_id = 3104")
+        )
+        conn.execute(text("DELETE FROM access_grants WHERE tg_user_id = 3104"))
+    assert _status(db_api_client, 3104).json() == {"status": "no_access"}

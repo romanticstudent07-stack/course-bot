@@ -29,7 +29,7 @@ from app.routers.day import (
 )
 from app.routers.onboarding import register_with_consents
 from app.telegram_init_data import INIT_DATA_HEADER
-from tests.conftest import valid_init_data
+from tests.conftest import grant_access, valid_init_data
 
 URL = "/miniapp/v1/day/current"
 SUBMIT = "/miniapp/v1/day/report/submit"
@@ -229,6 +229,7 @@ def test_get_fields_for_test_enter_day(db_engine, monkeypatch):
 
 def test_get_http_fields_present(db_api_client, db_engine, monkeypatch):
     # HTTP: новые поля в ответе при позиции, queued_until явно null; ISO 8601 со сдвигом.
+    grant_access(db_engine, 9507)  # api-access-1 (Р-2)
     r = db_api_client.post(
         "/miniapp/v1/onboarding/first-launch",
         json={"birth_date": "1990-01-01", "consents": ["C0", "C1"]},
