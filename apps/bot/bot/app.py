@@ -15,6 +15,11 @@ BOT_DATABASE_URL пуст → воркер не запускается (WARNING)
 Остановка (SIGTERM → start_polling завершается → finally): stop.set(), ждём воркер до 25 с
 (текущая строка дописывается), затем cancel (возможный дубль — docstring bot/outbox.py);
 потом закрываем сессию бота (start_polling вызывается с close_bot_session=False).
+
+Доступ по промокоду (bot-access-1, bot/access_handlers.py): роутер подключается после /start,
+только если config.access_enabled; иначе один WARNING с именами переменных (без значений).
+При включённом доступе дефолтная Menu Button — стандартная: Mini App ставится персонально
+только при granted (bot/handlers.py, bot/access_handlers.py).
 """
 from __future__ import annotations
 
@@ -32,14 +37,25 @@ logger = logging.getLogger(__name__)
 OUTBOX_STOP_TIMEOUT = 25
 
 
-def build_dispatcher(config: BotConfig) -> Dispatcher:
+def build_dispatcher(config: BotConfig, connect=None) -> Dispatcher:
     dp = Dispatcher()
-    dp.include_router(build_router(config))
+    dp.include_router(build_router(config, connect))
+    if config.access_enabled:
+        from bot.access_handlers import build_access_router
+
+        dp.include_router(build_access_router(config, connect))
+    else:
+        logger.warning(
+            "Доступ по промокоду выключен: не заданы %s", ", ".join(config.access_missing_vars())
+        )
 
     @dp.startup()
     async def _on_startup(bot: Bot) -> None:
         # Дефолтная Menu Button для всех приватных чатов бота.
-        if config.webapp_enabled:
+        if config.access_enabled:
+            await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+            logger.info("Доступ по промокоду включён — Menu Button Mini App только после «Выдать»")
+        elif config.webapp_enabled:
             await bot.set_chat_menu_button(menu_button=menu_button(config.webapp_url))
             logger.info("Menu Button → WEBAPP_URL установлена")
         else:
