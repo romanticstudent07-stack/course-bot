@@ -1,7 +1,7 @@
 """Миграции ⇔ модели ⇔ живая схема. Нужен DATABASE_URL.
 
 - после upgrade head таблицы = apps/api/tests/expected_tables.txt (тот же список, что в CI);
-- цикл: head → 0007 (без day_marks)
+- цикл: head → 0009 (без access_grants) → 0007 (ещё и без day_marks)
   → 0006 (ещё и без idempotency_keys)
   → 0004 (ещё и без participant_events и participant_state_checkpoints)
   → 0003 (ещё и без consent_events) → 0002 (ещё и без text_registry)
@@ -30,6 +30,7 @@ EXPECTED_TABLES_FILE = API_DIR / "tests" / "expected_tables.txt"
 TABLES_0005 = {"participant_events", "participant_state_checkpoints"}
 TABLES_0007 = {"idempotency_keys"}
 TABLES_0008 = {"day_marks"}
+TABLES_0010 = {"access_grants"}
 
 _COUNT_SQL = text(
     "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'alembic_version'"
@@ -67,8 +68,9 @@ def test_expected_tables_file_includes_0001():
     assert _tables_0001() <= _expected_tables()
 
 
-def test_expected_tables_count_after_0008():
-    assert len(_expected_tables()) == 15
+def test_expected_tables_count_after_0010():
+    assert len(_expected_tables()) == 16
+    assert TABLES_0010 <= _expected_tables()
     assert "consent_events" in _expected_tables()
     assert TABLES_0005 <= _expected_tables()
     assert TABLES_0007 <= _expected_tables()
@@ -81,6 +83,10 @@ def test_upgrade_downgrade_upgrade_cycle(migrated_db):
     assert _tables(migrated_db) == expected
 
     try:
+        command.downgrade(cfg, "0009_app_bot")
+        assert _tables(migrated_db) == expected - TABLES_0010  # 0010 не ломает 0009
+
+        expected = expected - TABLES_0010  # дальше — как было, без таблиц 0010
         command.downgrade(cfg, "0007_day_state")
         assert _tables(migrated_db) == expected - TABLES_0008  # 0008 не ломает 0007
 
@@ -109,7 +115,7 @@ def test_upgrade_downgrade_upgrade_cycle(migrated_db):
     finally:
         command.upgrade(cfg, "head")
 
-    assert _tables(migrated_db) == expected
+    assert _tables(migrated_db) == _expected_tables()
 
 
 def test_models_match_live_schema(migrated_db):

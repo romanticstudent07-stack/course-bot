@@ -111,7 +111,8 @@ def migrated_db(database_url):
 def db_engine(migrated_db):
     """Чистые участники, согласия, события и состояние + seed текстов (1e-1a, projector-1).
 
-    participant_state_checkpoints и participant_state FK на tg_user_registry не имеют —
+    participant_state_checkpoints, participant_state и access_grants (0010) FK на
+    tg_user_registry не имеют —
     CASCADE их не очистит, поэтому они перечислены явно.
     """
     from sqlalchemy import create_engine, text
@@ -123,7 +124,7 @@ def db_engine(migrated_db):
         conn.execute(
             text(
                 "TRUNCATE participant_events, participant_state_checkpoints, participant_state, "
-                "consent_events, tg_user_registry RESTART IDENTITY CASCADE"
+                "consent_events, tg_user_registry, access_grants RESTART IDENTITY CASCADE"
             )
         )
     write_entries(engine, load_seed())  # upsert всех config/texts/*.json (B4 + legal)
