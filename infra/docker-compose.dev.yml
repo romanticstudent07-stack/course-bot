@@ -236,8 +236,8 @@ services:
           memory: ${MEM_LIMIT_PROJECTOR:-128M}
 
   # Telegram bot (aiogram 3: /start + Menu Button; long polling, D-4).
-  # env_file нет (B-3): бот читает только BOT_TOKEN, WEBAPP_URL, LOG_LEVEL, BOT_DATABASE_URL
-  # (bot/config.py). bot ходит в БД только по BOT_DATABASE_URL (coursebot_bot, роль app_bot);
+  # env_file нет (B-3): бот читает только BOT_TOKEN, WEBAPP_URL, LOG_LEVEL, BOT_DATABASE_URL,
+  # WORK_GROUP_ID, ACCESS_* (bot/config.py; доступ по промокоду — bot-access-1, без них выключен). bot ходит в БД только по BOT_DATABASE_URL (coursebot_bot, роль app_bot);
   # пусто → доставка выключена. Redis бот не использует.
   # stop_grace_period 30s: воркер outbox дописывает текущую строку (до 25 с, bot/app.py).
   bot:
@@ -250,6 +250,11 @@ services:
       WEBAPP_URL: ${WEBAPP_URL}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       BOT_DATABASE_URL: ${BOT_DATABASE_URL}
+      WORK_GROUP_ID: ${WORK_GROUP_ID}
+      ACCESS_ADMIN_TOPIC_ID: ${ACCESS_ADMIN_TOPIC_ID}
+      ACCESS_ADMIN_IDS: ${ACCESS_ADMIN_IDS}
+      ACCESS_MAX_DENIES: ${ACCESS_MAX_DENIES:-5}
+      ACCESS_LOCK_HOURS: ${ACCESS_LOCK_HOURS:-24}
       TZ: ${TZ}
     depends_on:
       api:
