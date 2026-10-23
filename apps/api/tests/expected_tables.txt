@@ -24,3 +24,5 @@ participant_state_checkpoints
 idempotency_keys
 # 0008_day_marks
 day_marks
+# 0010_access_grants
+access_grants

@@ -47,6 +47,16 @@ day_marks — отметки блоков дня (миграция 0008, iter2-d
   - отметки относятся к одному дню по day_started_at; iter2-api-1 только читает
     (GET /miniapp/v1/day/current), пишет — iter2-api-2.
 
+access_grants — флажок доступа по промокоду (миграция 0010, db-access-1, Р-2):
+  - PK tg_user_id (не pid: заявка идёт до онбординга); tg_user_registry не трогается;
+  - status pending / granted / denied, deny_count, locked_until (пауза; NULL — нет паузы),
+    admin_message_id — сообщение последней заявки в админ-теме (после решения не
+    обнуляется), requested_at, decided_at, decided_by, created_via bot_promo / backfill_0010;
+  - кодовое слово, имя и username НЕ хранятся (минимизация ПДн); updated_at пишет код;
+  - CHECK (ck_access_grants_*) и частичный UNIQUE по admin_message_id — в миграции 0010;
+  - app_bot: SELECT / INSERT / UPDATE по колонкам; app_api читает только (tg_user_id, status);
+    DELETE нет ни у кого; backfill 0010 — granted активным строкам tg_user_registry.
+
 participant_state (0001) здесь НЕ моделируется: единственный писатель — проектор
 (E1/INV-1), колонка last_seen_publish_epoch — xid8 (SQLAlchemy его не знает).
 CHECK lifecycle_phase (FSM I2, D-11 «6А») добавлен миграцией 0005.
@@ -65,6 +75,7 @@ from sqlalchemy import (
     ForeignKey,
     Identity,
     Index,
+    Integer,
     Text,
     UniqueConstraint,
     func,
@@ -86,6 +97,18 @@ CONSENT_ACTION_REVOKE = "revoke"
 # trigger mini_app_first_consent, actor system. Импортирует проектор (projector-2).
 EVENT_KIND_MINI_APP_FIRST_CONSENT = "mini_app_first_consent"
 ACTOR_SYSTEM = "system"
+
+# access_grants (0010, Р-2). Тот же список — в CHECK миграции 0010.
+ACCESS_STATUS_PENDING = "pending"
+ACCESS_STATUS_GRANTED = "granted"
+ACCESS_STATUS_DENIED = "denied"
+ACCESS_STATUSES: tuple[str, ...] = (
+    ACCESS_STATUS_PENDING,
+    ACCESS_STATUS_GRANTED,
+    ACCESS_STATUS_DENIED,
+)
+ACCESS_CREATED_VIA_BOT_PROMO = "bot_promo"
+ACCESS_CREATED_VIA_BACKFILL = "backfill_0010"
 
 
 def _in_list(column: str, values: tuple[str, ...]) -> str:
@@ -250,4 +273,50 @@ class DayMark(Base):
 
     __table_args__ = (
         CheckConstraint("block_id <> ''", name="ck_day_marks_block_id_not_empty"),
+    )
+
+
+class AccessGrant(Base):
+    __tablename__ = "access_grants"
+
+    tg_user_id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=False
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    deny_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    admin_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[int | None] = mapped_column(BigInteger)
+    created_via: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("tg_user_id > 0", name="ck_access_grants_tg_user_id_positive"),
+        CheckConstraint(_in_list("status", ACCESS_STATUSES), name="ck_access_grants_status"),
+        CheckConstraint("deny_count >= 0", name="ck_access_grants_deny_count_nonneg"),
+        CheckConstraint(
+            _in_list(
+                "created_via", (ACCESS_CREATED_VIA_BOT_PROMO, ACCESS_CREATED_VIA_BACKFILL)
+            ),
+            name="ck_access_grants_created_via",
+        ),
+        CheckConstraint(
+            f"status <> '{ACCESS_STATUS_PENDING}' OR admin_message_id IS NOT NULL",
+            name="ck_access_grants_pending_msg",
+        ),
+        Index(
+            "uq_access_grants_admin_message_id",
+            "admin_message_id",
+            unique=True,
+            postgresql_where=text("admin_message_id IS NOT NULL"),
+        ),
     )
