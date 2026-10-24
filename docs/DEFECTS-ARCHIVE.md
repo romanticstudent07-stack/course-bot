@@ -389,3 +389,74 @@
 - **Решение Автора (10.10):** «D-24 = А: alembic и texts load — отдельный одноразовый сервис compose; у api нет пароля владельца».
 - **Закрыто (14.10):** B-3d-1 (#76) — сервис migrate (profiles tools, только MIGRATIONS_DATABASE_URL и TZ, 128M), у api явный environment без env_file; B-3d-2 (#77) — texts load при кривом DSN выходит с кодом 1 без traceback; #78 — SERVER-IRONCLAD (откат B-3d-1, ручной `projector once` не нужен). Сервер ✅ 113acb8: в env api нет POSTGRES_PASSWORD, MIGRATIONS_DATABASE_URL, PROJECTOR_DATABASE_URL; пользователь БД — coursebot_api.
 - **Ждём решения Автора:** нет.
+
+## Перенесено 24.10 (правило А, docs-compress-2410) — дословно
+
+## D-1. Блок 15: доставка медиа (pre-signed URL vs внешний Telegram-канал)
+- **Статус:** решено (Р-5, 17.10): медиа — только внешний Telegram-канал; pre-signed URL не делать.
+- Правка канона (DIVISION.md) — в DOCS-course-bot.
+
+## D-6. Ограничения Telegram в РФ
+- **Статус:** решено (Р-11, 19.10): данные в РФ + прокси к api.telegram.org; план Б — зарубежный бот-слой + уведомление РКН (позже).
+- Правки канона (build-order 0-Б, 99-legal) — в DOCS-course-bot.
+
+## D-10. Порядок first-launch: согласия и оплата до `pid` — источники расходятся, в контракте их нет
+
+- **Файлы архитектуры (зеркало):**
+  - `normative/errata-unified.md` → ADD3: `ordering: [age_soft_checkbox, age_hard_check_dob,
+    legal_consents, pid_creation]`;
+  - `build/miniapp-security-checklist.md` §3: `age_gate → legal_consents → payment → pid_creation`;
+  - `AGENTS.md` (репо реализации), «Связь с Mini App»: сначала SEAM-1 создаёт participant,
+    потом проверяется `payment_confirmed`, потом Age Gate → PID;
+  - `build/miniapp-api-contract.yaml` → first-launch: в теле только `birth_date`
+    (нет ни soft-checkbox, ни согласий, ни ссылки на оплату);
+  - И1 R_378 (`consent_events: [pid, kind, action, at, ip, ua, ver_of_text]`, append-only), И1 D_14.
+- **Файлы реализации:** `apps/api/app/routers/onboarding.py`, `apps/api/app/participants.py`,
+  `apps/api/app/db/models.py`, `apps/api/migrations/versions/…0004_consent_events…`,
+  `apps/api/config/texts/legal.json`.
+- **Суть расхождения:** три разных порядка (оплата до `pid` / после / не упомянута), а контракт
+  first-launch не несёт данных ни для согласий, ни для soft-checkbox 18+.
+- **Закрытые части записи** (API PR #38, Mini App PR #40, живые проверки 02.10) — `docs/DEFECTS-ARCHIVE.md`, «D-10 (закрытые части)».
+- **Остаётся:** оплата до `pid` — до решения противоречия по оплате; отложенное по ревью #38 — D-15.
+  Правка контракта сделана: DOCS PR #11 (first-launch: `consents`, 422, 503), sync PR #51.
+- **Ждём решения Автора:** нет для API и экранов; по оплате — да.
+
+## D-14. text_registry: шаблон ключа, формат seed и тоны — источники расходились
+- **Файлы:** зеркало — `build/config-schemas/text_registry.schema.json`, `build/miniapp-api-contract.yaml`, `normative/I4-wave-d.md` §1; код — `apps/api/app/texts.py`, `apps/api/config/texts/*.json`.
+- **Статус:** решено (Р-8 + «ОК А», 17–19.10): ключ B2…B16/legal, seed JSON, тоны soft/neutral/dry + strict; код не менять; правки — в каноне.
+
+## D-22. Вернувшийся участник: GET /onboarding/status и повторное согласие
+
+- **Файл архитектуры (зеркало):** `build/miniapp-api-contract.yaml` (first-launch; пути status нет).
+- **Файлы реализации:** `apps/api/app/routers/onboarding.py`, `apps/api/app/consent_status.py` (PR #62);
+  `apps/miniapp/src/components/App.tsx`, `startup.ts`, `drafts.ts` (PR #63).
+- **Суть расхождения:** 1) в контракте нет способа узнать «кто я» без экранов 18+ и C1;
+  2) «уже данные согласия повторно не записываются» — после отзыва или смены текста
+  повторное согласие не записалось бы (круг); 3) что видит фаза sleeping — не определено.
+- **Решение Автора (06.10, вариант А; returning: 1 Б, 2 Б, 3 да):**
+  а) GET /miniapp/v1/onboarding/status → 200: {status: returning, short_no} / {status: reconsent,
+     reasons} / {status: new}; «нет участника» и erased — одно тело; pid не отдаётся;
+     401/429/503 как у /miniapp/v1/**; 403 нет;
+  б) reasons — закрытый перечень: C0_missing, C0_revoked, C0_text_changed, C1_missing,
+     C1_revoked, C1_text_changed;
+  в) согласие действует = последнее событие по kind — give, и text_snapshot = текущий текст
+     ключа (snapshot_of при записи и проверке); ver_of_text не критерий; participant_state не используется;
+  г) first-launch пишет give по присланному kind, только если согласие не действует;
+     revoke не трогает; participant_events — только при создании pid;
+  д) sleeping — позже (задача, которая введёт /block);
+  е) метка finished на устройстве убрана, «пускать ли» решает сервер — исполнено PR #63 (D-19).
+- **Сделано:** PR #62 (живая 06.10: status без initData 401, у Автора returning);
+  PR #63 (живая 08.10: номер сразу, без экранов; first-launch не вызывался).
+- **Остаётся (ревью #62):** условие для первой задачи, которая пишет revoke: revoke берёт ту же
+  блокировку строки участника (FOR UPDATE), порядок событий — по id (bigint), не по at
+  (at = время начала транзакции: give может встать «после» более позднего revoke).
+- **Правка DOCS сделана:** DOCS PR #13 (miniapp-api-contract.yaml: путь status, схема OnboardingStatus, reasons, повторный give в first-launch), sync PR #65.
+- **Ждём решения Автора:** нет.
+
+## D-28. Квота пауз: П.8 «1 пауза на Этап» vs патч И2 «14 дн./год»
+- **Файл архитектуры (зеркало):** `02-access-lives-pause.md` (П.8 — «1 пауза на Этап»; шапка, патч И2 — «14 дн./год»).
+- **Файл реализации:** нет — паузы в коде не построены.
+- **Статус:** решено (Р-6а, 17.10): канон — патч И2 (14 дн./год, одна ≤ 7 дн., между ≥ 24 ч).
+- **Предлагаемое решение:** П.8 привести к патчу И2 в DOCS-course-bot.
+- **Ждём решения Автора:** нет.
+
