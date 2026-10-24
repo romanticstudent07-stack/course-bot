@@ -7,6 +7,9 @@
 //                 больше ничего не показывается и не монтируется;
 //   start-error — status не получен (401 / 429 / 503 / сеть / прочее): текст и «Повторить»
 //                 → снова checking. Ошибка status НИКОГДА не ведёт ни в онбординг, ни к номеру;
+//   no-access   — status no_access или 403 ACCESS_NOT_GRANTED из first-launch (Р-2): текст
+//                 «доступ не открыт» и «Проверить ещё раз» → снова checking (один GET status);
+//                 OnboardingFlow не монтируется, номера нет, черновик не открывается;
 //   number      — сервер ответил returning: «Ваш номер участника» и «Продолжить» →
 //                 незаконченный черновик моложе 24 ч → later, иначе → app;
 //   onboarding  — new / reconsent / непонятный ответ: OnboardingFlow до pid (1e-1b);
@@ -24,10 +27,19 @@ import { getOnboardingStatus, readTgUserId } from '@/api/client.ts';
 import { createDraftStore, openDraft } from '@/components/drafts.ts';
 import { LaterSteps } from '@/components/LaterSteps.tsx';
 import { OnboardingFlow } from '@/components/OnboardingFlow.tsx';
-import { afterNumber, isReconsent, returningShortNo, startErrorMessage, startPhase } from '@/components/startup.ts';
+import {
+  NO_ACCESS_BUTTON,
+  NO_ACCESS_TEXT,
+  afterNumber,
+  isAccessNotGranted,
+  isReconsent,
+  returningShortNo,
+  startErrorMessage,
+  startPhase,
+} from '@/components/startup.ts';
 import { routes } from '@/navigation/routes.tsx';
 
-type Phase = 'checking' | 'start-error' | 'number' | 'onboarding' | 'later' | 'app';
+type Phase = 'checking' | 'start-error' | 'no-access' | 'number' | 'onboarding' | 'later' | 'app';
 
 const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 16, padding: 16 };
 
@@ -52,6 +64,10 @@ export function App() {
         if (startPhase(resp) === 'number' && no !== null) {
           setShortNo(no);
           setPhase('number');
+          return;
+        }
+        if (startPhase(resp) === 'no-access') {
+          setPhase('no-access');
           return;
         }
         setReconsent(isReconsent(resp));
@@ -103,6 +119,17 @@ export function App() {
     );
   }
 
+  if (phase === 'no-access') {
+    return (
+      <div className="page" style={pageStyle}>
+        <p>{NO_ACCESS_TEXT}</p>
+        <button type="button" onClick={retry}>
+          {NO_ACCESS_BUTTON}
+        </button>
+      </div>
+    );
+  }
+
   if (phase === 'number') {
     return (
       <div className="page" style={pageStyle}>
@@ -120,6 +147,11 @@ export function App() {
         onComplete={() => {
           if (reconsent) routeByDraft();
           else setPhase('later');
+        }}
+        onSubmitError={(err) => {
+          if (!isAccessNotGranted(err)) return false;
+          setPhase('no-access');
+          return true;
         }}
       />
     );

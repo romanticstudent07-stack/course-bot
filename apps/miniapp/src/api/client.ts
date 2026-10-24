@@ -119,7 +119,10 @@ export interface PidCreated {
   short_no: string;
 }
 
-/** clientOpId — один на весь онбординг; повтор после ошибки уходит с тем же id (D-17). */
+/**
+ * clientOpId — один на весь онбординг; повтор после ошибки уходит с тем же id (D-17).
+ * 403 ACCESS_NOT_GRANTED — доступ не выдан (Р-2).
+ */
 export const postFirstLaunch = (body: FirstLaunchRequest, clientOpId: string) =>
   apiRequest<PidCreated>('/miniapp/v1/onboarding/first-launch', { method: 'POST', body, clientOpId });
 
@@ -130,9 +133,13 @@ export const postFirstLaunch = (body: FirstLaunchRequest, clientOpId: string) =>
 export type OnboardingStatus =
   | { status: 'returning'; short_no: string }
   | { status: 'reconsent'; reasons: string[] }
-  | { status: 'new' };
+  | { status: 'new' }
+  | { status: 'no_access' };
 
-/** Только чтение: без X-Client-Op-Id (запрос ничего не меняет). Ошибки — 401, 429, 503. */
+/**
+ * Только чтение: без X-Client-Op-Id (запрос ничего не меняет). Ошибки — 401, 429, 503.
+ * 200 no_access (Р-2).
+ */
 export const getOnboardingStatus = () => apiRequest<OnboardingStatus>('/miniapp/v1/onboarding/status');
 
 // ---- Согласия (1e-2): только чтение своих ----
