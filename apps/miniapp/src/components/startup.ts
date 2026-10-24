@@ -7,11 +7,13 @@
 //   - номер — только при status 'returning' с непустым short_no;
 //   - reconsent, new, неизвестный status, битое тело → онбординг (безопасная сторона:
 //     экраны согласий, решение снова за сервером);
-//   - ошибка запроса status → экран «Повторить» (App.tsx): ни номера, ни онбординга.
+//   - ошибка запроса status → экран «Повторить» (App.tsx): ни номера, ни онбординга;
+//   - no_access (и 403 ACCESS_NOT_GRANTED из first-launch) → экран «доступ не открыт» (Р-2).
+import { ApiError } from '../api/client.ts';
 import type { Draft } from './drafts.ts';
 import { errorMessage } from './OnboardingFlow.tsx';
 
-export type StartPhase = 'number' | 'onboarding';
+export type StartPhase = 'number' | 'onboarding' | 'no-access';
 export type AfterNumber = 'later' | 'app';
 
 /** short_no из ответа status, если это returning с непустой строкой; иначе null. */
@@ -23,10 +25,28 @@ export function returningShortNo(resp: unknown): string | null {
   return r.short_no;
 }
 
-/** Что показать после ответа status: номер или онбординг. */
-export function startPhase(resp: unknown): StartPhase {
-  return returningShortNo(resp) === null ? 'onboarding' : 'number';
+/** Сервер прислал no_access: доступ не выдан (Р-2). */
+export function isNoAccess(resp: unknown): boolean {
+  if (typeof resp !== 'object' || resp === null) return false;
+  return (resp as { status?: unknown }).status === 'no_access';
 }
+
+/** Что показать после ответа status: номер, экран «доступ не открыт» или онбординг. */
+export function startPhase(resp: unknown): StartPhase {
+  if (returningShortNo(resp) !== null) return 'number';
+  if (isNoAccess(resp)) return 'no-access';
+  return 'onboarding';
+}
+
+/** first-launch ответил 403 ACCESS_NOT_GRANTED — доступ не выдан (Р-2). */
+export function isAccessNotGranted(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 403 && err.code === 'ACCESS_NOT_GRANTED';
+}
+
+/** Экран «доступ не открыт» (Р-2): заглушка на «Вы», не через text_registry (D-39). */
+export const NO_ACCESS_TEXT =
+  'Доступ пока не открыт. Если у Вас есть промокод — отправьте его боту. Когда бот ответит, нажмите «Проверить ещё раз».';
+export const NO_ACCESS_BUTTON = 'Проверить ещё раз';
 
 /** Сервер прислал reconsent (онбординг повторяется из-за согласий, pid уже есть). */
 export function isReconsent(resp: unknown): boolean {

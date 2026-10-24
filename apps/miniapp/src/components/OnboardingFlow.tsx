@@ -249,9 +249,11 @@ const NOTICE_FUTURE_DATE = 'Дата рождения не может быть �
 export interface OnboardingFlowProps {
   /** Вызывается, когда пользователь на шаге done нажал «Начать». */
   onComplete: () => void;
+  /** true — ошибку обработал App, компонент ничего не показывает. */
+  onSubmitError?: (err: unknown) => boolean;
 }
 
-export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
+export function OnboardingFlow({ onComplete, onSubmitError }: OnboardingFlowProps) {
   const [texts, setTexts] = useState<TextMap>({});
   const [textsStatus, setTextsStatus] = useState<TextsStatus>('loading');
   const [textsError, setTextsError] = useState<unknown>(null);
@@ -298,6 +300,7 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
         setStep('done');
       })
       .catch((err: unknown) => {
+        if (onSubmitError?.(err)) return;
         const next = screenAfterError(err);
         if (next === 'consent') setNotice(NOTICE_CONSENT);
         if (next === 'age-gate') setNotice(NOTICE_FUTURE_DATE);
@@ -308,7 +311,7 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
         submittingRef.current = false;
         setSubmitting(false);
       });
-  }, [state]);
+  }, [state, onSubmitError]);
 
   const t = (key: string) => pickText(texts, key);
 
