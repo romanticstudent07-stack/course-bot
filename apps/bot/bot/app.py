@@ -20,6 +20,7 @@ BOT_DATABASE_URL пуст → воркер не запускается (WARNING)
 только если config.access_enabled; иначе один WARNING с именами переменных (без значений).
 При включённом доступе дефолтная Menu Button — стандартная: Mini App ставится персонально
 только при granted (bot/handlers.py, bot/access_handlers.py).
+Личный роутер доступа ловит ВСЕ личные сообщения — новые обработчики лички подключать ДО него.
 """
 from __future__ import annotations
 

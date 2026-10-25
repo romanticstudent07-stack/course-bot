@@ -5,7 +5,7 @@
 
 Переменные: BOT_TOKEN (обязателен), WEBAPP_URL, LOG_LEVEL,
 BOT_DATABASE_URL — DSN бота (coursebot_bot, роль app_bot; send-1b), формат
-postgresql://… без +psycopg. Пусто → доставка outbox выключена, остальное как раньше.
+postgresql://… без +psycopg. Пусто → доставка outbox и доступ по промокоду выключены, остальное как раньше.
 
 Доступ по промокоду (bot-access-1, Р-2): WORK_GROUP_ID (id Рабочей группы),
 ACCESS_ADMIN_TOPIC_ID (message_thread_id админ-темы), ACCESS_ADMIN_IDS (whitelist tg id

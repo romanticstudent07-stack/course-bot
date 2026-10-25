@@ -3,12 +3,13 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import pytest
 from aiogram import Bot
-from aiogram.methods import EditMessageText, SendMessage
-from aiogram.types import Chat, Message, Update, User
+import psycopg
+from aiogram.methods import AnswerCallbackQuery, EditMessageReplyMarkup, EditMessageText, GetMe, SendMessage
+from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
 from bot import access, texts
 from bot.access import (
@@ -19,6 +20,7 @@ from bot.app import build_dispatcher
 from bot.config import BotConfig, ConfigError
 
 FAKE_TOKEN = "123456:TEST-token-not-real"
+BOT_ID = 123456  # часть FAKE_TOKEN до «:» = Bot.id
 WEBAPP = "https://miniapp.example.test/"
 GROUP, TOPIC, ADMIN, USER, MID = -1001234, 77, 555, 4242, 900
 WORD = "Секрет<b>&слово"
@@ -162,11 +164,12 @@ def test_admin_context_filters():
     assert not access.is_admin_context(cfg(access_admin_ids=frozenset()), GROUP, TOPIC, ADMIN)
 
 
-def _cmd(chat_id=GROUP, thread=TOPIC, user=ADMIN, reply_id=None):
+def _cmd(chat_id=GROUP, thread=TOPIC, user=ADMIN, reply_id=None, reply_from=BOT_ID):
     reply = None
     if reply_id is not None:
+        rkw = {"from_user": User(id=reply_from, is_bot=True, first_name="B")} if reply_from is not None else {}
         reply = Message(message_id=reply_id, date=datetime.now(), chat=Chat(id=chat_id, type="supergroup"),
-                        text="заявка")
+                        text="заявка", **rkw)
     return Message(message_id=1000, date=datetime.now(), chat=Chat(id=chat_id, type="supergroup"),
                    from_user=User(id=user, is_bot=False, first_name="A"), text="/access_deny",
                    message_thread_id=thread, reply_to_message=reply)
@@ -317,12 +320,16 @@ def test_new_request_after_lock_end_resets_counter():
 
 # --- через Dispatcher (Bot API перехвачен) ---
 
-async def _feed(config, update, conn):
+async def _feed(config, update, conn, fail=()):
     bot = Bot(token=FAKE_TOKEN)
     calls: list = []
 
     async def fake_request(_bot, method, timeout=None):
         calls.append(method)
+        if isinstance(method, GetMe):
+            return User(id=BOT_ID, is_bot=True, first_name="B", username="course_bot")
+        if type(method) in fail:
+            raise RuntimeError("tg fail")
         return True
 
     bot.session.make_request = AsyncMock(side_effect=fake_request)
@@ -368,8 +375,9 @@ def test_other_command_send_text():
     assert [c.text for c in calls if isinstance(c, SendMessage)] == [texts.ACCESS_SEND_TEXT]
 
 
-def _group_cmd(text, reply_id=MID, thread=TOPIC, user=ADMIN):
-    return Update(update_id=2, message=_cmd(thread=thread, user=user, reply_id=reply_id).model_copy(
+def _group_cmd(text, reply_id=MID, thread=TOPIC, user=ADMIN, reply_from=BOT_ID):
+    return Update(update_id=2, message=_cmd(thread=thread, user=user, reply_id=reply_id,
+                                            reply_from=reply_from).model_copy(
         update={"text": text}))
 
 
@@ -393,6 +401,8 @@ def test_command_deny_already_decided_nothing_to_user():
     conn = db(pending_row(), deny_rowcount=0)
     calls = asyncio.run(_feed(cfg(), _group_cmd("/access_deny"), conn))
     assert not [c for c in calls if isinstance(c, EditMessageText)]
+    marks = [c for c in calls if isinstance(c, EditMessageReplyMarkup)]
+    assert len(marks) == 1 and marks[0].message_id == MID and marks[0].reply_markup is None
     sends = [c for c in calls if isinstance(c, SendMessage)]
     assert [s.chat_id for s in sends] == [GROUP] and sends[0].text == texts.ACCESS_ALREADY_DECIDED
 
@@ -404,3 +414,83 @@ def test_command_deny_edits_topic_and_tells_user():
     assert len(edits) == 1 and edits[0].reply_markup is None and "Запрещено 1 из 5" in edits[0].text
     sends = [c for c in calls if isinstance(c, SendMessage)]
     assert [(s.chat_id, s.text) for s in sends] == [(USER, texts.ACCESS_DENIED_RETRY.format(n=4))]
+
+
+# --- bot-access-2: @BotName, чужие решения, кнопки при ALREADY_*, reply только на бота, lock_timeout ---
+
+def _button(data=f"acc:g:{USER}", user=ADMIN):
+    return Update(update_id=3, callback_query=CallbackQuery(
+        id="cb1", from_user=User(id=user, is_bot=False, first_name="A"), chat_instance="ci", data=data,
+        message=Message(message_id=MID, chat=Chat(id=GROUP, type="supergroup"), message_thread_id=TOPIC,
+                        text="заявка", date=datetime.now())))
+
+
+def test_command_with_own_botname_works():
+    conn = db(pending_row())
+    calls = asyncio.run(_feed(cfg(), _group_cmd("/access_deny@course_bot"), conn))
+    assert len([c for c in calls if isinstance(c, EditMessageText)]) == 1
+    sends = [c for c in calls if isinstance(c, SendMessage)]
+    assert [s.chat_id for s in sends] == [USER]
+
+
+def test_command_with_other_botname_ignored():
+    conn = db(pending_row())
+    calls = asyncio.run(_feed(cfg(), _group_cmd("/access_deny@OtherBot"), conn))
+    assert len(calls) == 1 and isinstance(calls[0], GetMe)
+    assert conn.log == []
+
+
+def test_decide_grant_foreign_admin_message_already_decided():
+    conn = db(pending_row(mid=MID + 1))
+    d = asyncio.run(access.decide(conn, cfg(), access.GRANT, USER, MID, ADMIN, NOW))
+    assert d.kind == access.ALREADY_DECIDED
+    assert GRANT_UPDATE not in conn.sqls()
+    assert conn.log[-1] == "commit"
+
+
+def test_button_from_stranger_answer_without_text():
+    conn = db(pending_row())
+    calls = asyncio.run(_feed(cfg(), _button(user=1), conn))
+    assert len(calls) == 1 and isinstance(calls[0], AnswerCallbackQuery) and calls[0].text is None
+    assert conn.log == []
+
+
+def test_button_already_granted_removes_buttons():
+    calls = asyncio.run(_feed(cfg(), _button(), db(("granted", 0, None, MID))))
+    marks = [c for c in calls if isinstance(c, EditMessageReplyMarkup)]
+    assert len(marks) == 1
+    assert (marks[0].chat_id, marks[0].message_id, marks[0].reply_markup) == (GROUP, MID, None)
+    assert not [c for c in calls if isinstance(c, (EditMessageText, SendMessage))]
+    answers = [c for c in calls if isinstance(c, AnswerCallbackQuery)]
+    assert [a.text for a in answers] == [texts.ACCESS_ALREADY_GRANTED]
+
+
+def test_button_not_found_edits_nothing():
+    calls = asyncio.run(_feed(cfg(), _button(), db(None)))
+    assert not [c for c in calls if isinstance(c, (EditMessageReplyMarkup, EditMessageText))]
+    answers = [c for c in calls if isinstance(c, AnswerCallbackQuery)]
+    assert [a.text for a in answers] == [texts.ACCESS_REQUEST_NOT_FOUND]
+
+
+def test_button_already_granted_markup_fail_only_logged(caplog):
+    caplog.set_level(logging.WARNING)
+    calls = asyncio.run(_feed(cfg(), _button(), db(("granted", 0, None, MID)), fail={EditMessageReplyMarkup}))
+    answers = [c for c in calls if isinstance(c, AnswerCallbackQuery)]
+    assert [a.text for a in answers] == [texts.ACCESS_ALREADY_GRANTED]
+    assert any(r.levelno == logging.WARNING and "кнопки старой заявки не сняты" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_command_reply_not_to_bot_no_db():
+    conn = db(pending_row())
+    calls = asyncio.run(_feed(cfg(), _group_cmd("/access_deny", reply_from=ADMIN), conn))
+    assert [c.text for c in calls if isinstance(c, SendMessage)] == [texts.ACCESS_REQUEST_NOT_FOUND]
+    assert conn.log == [] and conn.closed is False  # connect не вызывался
+
+
+def test_connect_lock_timeout_argument(monkeypatch):
+    fake = AsyncMock()
+    monkeypatch.setattr(psycopg.AsyncConnection, "connect", fake)
+    asyncio.run(access.connect("postgresql://x/y"))
+    assert fake.await_args == call("postgresql://x/y", autocommit=True, connect_timeout=10,
+                                   options="-c lock_timeout=10s")
