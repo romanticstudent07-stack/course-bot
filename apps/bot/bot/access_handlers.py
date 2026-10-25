@@ -5,10 +5,13 @@
 - Кнопки «acc:g:<id>» / «acc:d:<id>»: только из админ-темы (WORK_GROUP_ID + ACCESS_ADMIN_TOPIC_ID)
   и от ACCESS_ADMIN_IDS; иначе answerCallbackQuery без текста + лог.
 - Команды /access_grant и /access_deny (Command учитывает @BotName): только из темы и от whitelist,
-  иначе игнор + лог; без reply → REPLY_REQUIRED; reply не на заявку бота → REQUEST_NOT_FOUND.
-- После COMMIT: заявке в теме дописывается итог и снимаются кнопки; пользователю — ответ.
+  иначе игнор + лог; без reply → REPLY_REQUIRED; reply не на заявку бота → REQUEST_NOT_FOUND;
+  reply не на сообщение бота → REQUEST_NOT_FOUND без обращения к БД.
+- После COMMIT: заявке в теме дописывается итог и снимаются кнопки; пользователю — ответ;
+  при ALREADY_* снимаются кнопки.
   Ошибки Telegram после COMMIT только логируются: решение уже записано.
 Роутер подключается, только если config.access_enabled (bot/app.py).
+Личный роутер доступа ловит ВСЕ личные сообщения — новые обработчики лички подключать ДО него.
 Логи: без кодового слова, имени, username и tg_user_id.
 """
 from __future__ import annotations
@@ -63,6 +66,11 @@ async def after_commit(bot: Bot, config: BotConfig, decision: access.Decision, c
     """Итог в теме + ответ пользователю. Ошибки Telegram — только в лог."""
     note = access.admin_note_for(decision, config.access_max_denies, now)
     if note is None:
+        if decision.kind in (access.ALREADY_GRANTED, access.ALREADY_DECIDED):
+            try:
+                await bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id, reply_markup=None)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("access: кнопки старой заявки не сняты (%s)", type(exc).__name__)
         return
     try:
         await bot.edit_message_text(
@@ -132,6 +140,9 @@ def build_access_router(config: BotConfig, connect=None) -> Router:
             await message.reply(texts.ACCESS_REPLY_REQUIRED)
             return
         reply = message.reply_to_message
+        if reply.from_user is None or reply.from_user.id != message.bot.id:
+            await message.reply(texts.ACCESS_REQUEST_NOT_FOUND)
+            return
         now = _now()
 
         async def run(conn):

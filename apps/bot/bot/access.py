@@ -18,6 +18,9 @@ deny — условный UPDATE (status = 'pending' AND admin_message_id). Од
 
 Кодовое слово в БД не хранится (только в сообщении темы) и в лог не пишется. Имя, username и
 tg_user_id в лог не пишутся. «Сейчас» передаётся параметром (UTC); время для людей — МСК.
+
+Строка = последняя заявка + последнее решение: новая заявка (UPSERT_REQUEST) decided_at / decided_by
+не сбрасывает. Соединение — lock_timeout 10s: ожидание блокировки дольше → исключение → TRY_LATER.
 """
 from __future__ import annotations
 
@@ -37,6 +40,7 @@ logger = logging.getLogger(__name__)
 MSK = ZoneInfo("Europe/Moscow")
 WORD_MAX_LEN = 64
 CONNECT_TIMEOUT = 10
+LOCK_TIMEOUT = "10s"
 CALLBACK_PREFIX = "acc"
 GRANT, DENY = "g", "d"
 
@@ -246,7 +250,8 @@ def admin_reply_for(decision: Decision) -> str | None:
 
 async def connect(dsn: str):
     """Соединение на запрос (autocommit; транзакции — явно)."""
-    return await psycopg.AsyncConnection.connect(dsn, autocommit=True, connect_timeout=CONNECT_TIMEOUT)
+    return await psycopg.AsyncConnection.connect(dsn, autocommit=True, connect_timeout=CONNECT_TIMEOUT,
+                                                 options=f"-c lock_timeout={LOCK_TIMEOUT}")
 
 
 async def read_state(conn, tg_user_id: int, now: datetime) -> Verdict:
@@ -261,7 +266,11 @@ class _SendFailed(Exception):
 
 async def submit_request(conn, bot, config, tg_user_id: int, word_text: str | None, who: str,
                          now: datetime) -> tuple[str, datetime | None]:
-    """Текст от пользователя → (исход раздела 7/8, locked_until). Одна транзакция."""
+    """Текст от пользователя → (исход раздела 7/8, locked_until). Одна транзакция.
+
+    Если UPSERT/COMMIT упал после отправки в тему — в теме остаётся заявка-сирота; удалять её нельзя
+    (COMMIT мог пройти). Нажатие на сироту даёт NOT_FOUND или ALREADY_DECIDED; при ALREADY_* кнопки снимаются.
+    """
     try:
         async with conn.transaction():
             await conn.execute(LOCK, (tg_user_id,))
