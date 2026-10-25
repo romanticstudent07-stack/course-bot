@@ -1,98 +1,92 @@
 # Исследование: пуши и лестница напоминаний (pushi)
-Окно ИССЛЕДОВАНИЕ, 25.10.2026, main 8833b18 (#132). Правило К — docs/process/CANON-CHECK.md. Ссылки «путь@8833b18». Тексты — заглушки до 0-Б. Карточки пишет окно КАРТОЧКИ.
+Окно ИССЛЕДОВАНИЕ, З2 25.10.2026, main 8833b18 (#132), PR #133. Правило К — docs/process/CANON-CHECK.md. Ссылки «путь@8833b18». Тексты — заглушки до 0-Б. Карточки пишет окно КАРТОЧКИ.
 
 ## 0. Решения (К-6)
-- НП1 А — полуденное в 12:00 по ТЗ участника [Автор, канон проверен 03 §3.18].
-- НП2 А — пуша в 04:00 нет [Автор, канон проверен 03 §3.1].
-- НП3 А — после очереди и после онбординга «Задания откроются завтра в 04:00 по Вашему времени» (заглушка) [Автор, канон проверен 03 §3.19, 09 R257].
-- Р-6 тумблеров нет [STATE Р-6]; совпадает с 09 R123-FINAL, NR-201, NR-215.
-- Р-8 ключ = раздел B2…B16 + имя маленькими, seed JSON [STATE Р-8].
+- НП1 А — полуденное в 12:00 по ТЗ участника [Автор; 03 §3.18].
+- НП2 А — пуша в 04:00 нет [Автор; 03 §3.1].
+- НП3 А — после очереди и после онбординга «Задания откроются … в 04:00 по Вашему времени», заглушка [Автор; 03 §3.19, 09 R257].
+- В1 А — НП3 после онбординга пишут «часы» в проекторе (app_projector, права 0009); миграции нет; задержка до одного тика (30 с) допустима [Автор, канон молчит].
+- В2 Б — два текста; выбор по местному времени в момент записи в outbox: до 04:00 — «сегодня», с 04:00 — «завтра» [Автор, канон молчит].
+- В3 А — полуденное, пропущенное из-за простоя, догоняется до 18:00 по ТЗ; с 18:00 не отправляется; ключ пишется только при отправке [Автор, канон молчит].
+- Р-6 тумблеров нет [STATE Р-6] = 09 R123-FINAL, NR-215. Р-8 ключ = раздел + имя маленькими, seed JSON [STATE Р-8].
+- Таймер — шаг в проекторе [решил ШТАБ: 0009 В4 = В; В1 А].
 
-## 1. Кто пишет outbox, права
-- Бот: CLAIM, MARK, DLQ; «Нет: INSERT в outbox» — apps/bot/bot/outbox.py@8833b18.
+## 1. Outbox и права
+- Бот: CLAIM, MARK, DLQ, «Нет: INSERT в outbox» — apps/bot/bot/outbox.py@8833b18.
 - «Часы»: «Outbox здесь не пишется» — apps/api/app/life_ops.py@8833b18.
-- 0001: GRANT INSERT ON outbox TO outbox_writer; SELECT, UPDATE — outbox_relay (2026_09_23_1700-0001_init_init.py@8833b18). Члены outbox_writer — не проверено.
-- 0009: app_projector INSERT (aggregate_id, event_type, payload, tx_id) + USAGE outbox_id_seq, SELECT нет (RETURNING нельзя); app_bot SELECT, UPDATE (sent_at), INSERT outbox_dlq (2026_10_17_1200-0009_app_bot_app_bot.py@8833b18). Схема В4 = В: «часы» в проекторе пишут событие и outbox одной транзакцией.
-- app_api: в 0001 и 0009 прав на outbox нет; 0002–0008, 0010 не читал — не проверено.
-- Писателя outbox в прочитанном коде нет (на сервере 3 тестовые строки send-1b, STATE). day.py, onboarding.py, projector.py не читал — не проверено.
-Вывод: все пуши пишут «часы» в проекторе → миграция не нужна. API пишет НП3 (В1 = Б) → миграция 0011 отдельной карточкой (down_revision 0010_access_grants), РЕВЬЮЕР да (B-3). До карточек проверить: нет ли CHECK на idempotency_keys.kind (0007, не читал); есть — новый kind тоже требует миграции.
+- 0001: INSERT outbox — outbox_writer; SELECT, UPDATE — outbox_relay (2026_09_23_1700-0001_init_init.py@8833b18).
+- 0009: app_projector INSERT (aggregate_id, event_type, payload, tx_id) + USAGE outbox_id_seq; SELECT на outbox нет, поэтому RETURNING нельзя. Схема В4 = В: событие и outbox — одна транзакция (2026_10_17_1200-0009_app_bot_app_bot.py@8833b18).
+- app_api прав на outbox нет: 0006, 0007, 0008, 0010 [ШТАБ проверил].
+- CHECK на idempotency_keys.kind нет, есть только на key и ttl (2026_10_16_1200-0007_day_state_day_state.py@8833b18) [ШТАБ] → новый kind без миграции.
+Вывод: миграций в пачке нет.
 
-## 2. Где таймер 12:00
-- А. Шаг в проекторе рядом с life_ops.tick, свой модуль (например app/notify_ops.py), интервал 30 с. Плюсы: схема 0009 В4 = В; права уже есть (outbox; idempotency_keys, day_marks, participant_events, participant_state использует life_ops); образец кода и тестов; время — аргумент now через day_clock. Минусы: пересборка projector (на сервере 88dc8d4, ждёт живую проверку «C» 26.10); тяжелее тик.
-- Б. Планировщик в боте. Минусы: у app_bot нет SELECT на participant_state → миграция; бизнес-логика в транспорте (09 ownership: does_not_own business_logic).
-- В. Отдельный APScheduler или Celery (03 §3.19 упоминает для очереди). Минусы: новая зависимость, память (сейчас 1920 из 2048 МБ).
-Мнение: А [ШТАБ-тех: 0009 В4 = В].
-Ключ (образец apps/api/app/day_keys.py@8833b18: {kind}:{pid}:{...}, ON CONFLICT DO NOTHING RETURNING, ttl 3650 days): noon:{pid}:{местная дата YYYY-MM-DD} — раз в сутки участника (03 §3.18 «ежедневно»), не зависит от смен day_started_at. Ключ и outbox — одна транзакция под lock_participant (как life_ops шаг 7).
-Простой в 12:00: канон о догоне молчит (03 §3.18; 09 T3: must_deliver false, droppable). У «часов» после простоя — одна граница (day_clock.last_midnight, В32). → вопрос В3.
+## 2. Таймер 12:00
+- Место: новый модуль app/notify_ops.py, вызов из projector run_forever рядом с life_ops.tick, тот же интервал. Время — аргумент now, функции day_clock. Образец транзакций — life_ops: кандидаты только чтением, потом каждый pid — своя транзакция под lock_participant с повторной проверкой; ключ ON CONFLICT DO NOTHING + outbox в одной транзакции.
+- Ключ: noon:{pid}:{местная дата YYYY-MM-DD}, kind noon, ttl 3650 days, по образцу apps/api/app/day_keys.py@8833b18. Раз в сутки участника (03 §3.18 «ежедневно»).
+- Окно отправки: 12:00 ≤ местное время < 18:00 (В3). Тик в окне шлёт, если условия выполнены; ключ — только вместе с outbox. С 18:00 — ничего не писать.
+- Пояс: tz из participant_state; смена пояса — со следующего дня (03 yaml timezone_change). При смене пояса возможны 2 T3 за 24 ч (09 R260) — допустимо как редкий случай, D-e.
 
 ## 3. Условия полуденного
-Канон: 12:00 (НП1) и ноль активности сегодня, активность = нажатие или сообщение (03 §3.18); не слать активному или сдавшему; гейт T3-NOON-NUDGE: has_open_step AND day_not_13P AND not_shadow; общий гейт T3: не ban, erased, refund_final, shadow_pause_active (09 tiers, NR-211); не больше 1 T3 за 24 ч (09 R260).
+Канон: 12:00 и ноль активности сегодня (нажатие или сообщение); не слать активному или сдавшему (03 §3.18); гейт T3-NOON-NUDGE: has_open_step AND day_not_13P AND not_shadow; общий гейт T3: не ban, erased, refund_final, shadow_pause; не больше 1 T3 за 24 ч (09 tiers, R260).
 | Условие | Проверка | Источник |
 |---|---|---|
 | фаза onboarding или active | PHASES | life_ops.py |
-| пауза Автора, флаги | author_pause_reason IS NULL, нет BLOCKING_FLAGS | life_ops.py; 09 гейт T3 |
-| sleeping, muted | вне PHASES (У3) | life_ops.py; где хранится muted — не проверено |
+| пауза, блок | author_pause_reason IS NULL, нет BLOCKING_FLAGS | life_ops.py |
+| sleeping | вне PHASES | life_ops.py |
 | has_open_step | day_clock.window = open | day_clock.py |
-| нет активности, не сдан | нет day_marks по текущему day_started_at, нет day_done | life_ops _HAS_MARKS, day_keys |
+| нет активности, не сдан | нет day_marks по текущему day_started_at, нет day_done | life_ops, day_keys |
 | проектор догнал pid | как _PENDING_EVENT | life_ops.py |
-| day_not_13P | module_1: день 13 = 13-M → истина | 03 §3.13; контент не читал |
-| tombstone | «часы» не видят; бот: MARK без отправки | life_ops.py, outbox.py |
-| R260 | других T3 нет → хватит ключа по дате | 09 R260 |
-Активность в боте (сообщения) в БД не пишется — не проверено.
-Кандидаты D-* (не вношу):
-- D-a: 03 §3.18 «категория „отключаемые“» ↔ 09 R123-FINAL, NR-201, NR-215, Р-6. Правка канона: убрать слово.
-- D-b: 03 §3.18 «половина дня Участника» ↔ НП1 12:00 (день 04:00–00:00, середина 14:00). Уточнить канон; ШТАБу решить, нужна ли строка «перекрывающие канон» (К-7).
-- D-c: tombstone не виден «часам» → полуденное стёртому создаст строку outbox (бот закроет без отправки); NR-207 до GRANT (до 0-Б).
-- D-d: конверт 09 contracts_out.emit_envelope (must_deliver, drop_on_overload, coalesce_key, addressee) ↔ бот читает только text_id, payload_vars, tier.
+| day_not_13P | день 13 module_1 = 13-M → истина | 03 §3.13 |
+| tombstone | «часы» не видят; бот: MARK без отправки | outbox.py |
+Не проверено: где хранится muted; пишется ли в БД активность-сообщение в боте (сейчас активность = отметки).
 
 ## 4. НП3: когда и кто
-- После очереди: очередь = day_clock.queue_until(pid, started_at), 10–60 мин, не хранится (day_clock.py@8833b18; 03 §3.19). Outbox не умеет «не раньше»: бот берёт строку сразу (CLAIM по created_at; колонки времени отправки нет — outbox.py, 0001). Писать из транзакции сдачи нельзя — уйдёт до конца очереди. Писатель — «часы»: now ≥ queue_until, ключа нет → ключ tasks_open:{pid}:{dsa сданного дня} + outbox одной транзакцией. Ключ day_queue в day_keys описан для life-ops-b; сделан ли life-ops-b — не проверено.
-- После онбординга: «часы» или API в транзакции онбординга (миграция) → В1.
-- Конец очереди или онбординга между 00:00 и 04:00 — «завтра» неверно → В2.
-Окну КАРТОЧКИ взять:
-- day.py: kind и payload события сдачи (day_started_at сданного дня), где пишется day_done, когда появляется day_started_at дня N+1, использует ли GET /day/current queue_until.
-- onboarding.py: какое событие = «онбординг окончен»; ставится ли day_started_at.
-- projector.py: где run_forever вызывает life_ops.tick; PROJECTOR_VERSION.
+- После очереди. life-ops-b в main: сдача пишет ключ day_queue:{pid}:{dsa(next_started)}, GET /day/current сам считает queued_until (apps/api/app/routers/day.py@8833b18) [ШТАБ]. Outbox не умеет «не раньше»: бот берёт строку сразу (outbox.py). Писатель — «часы»: есть day_queue, now ≥ queued_until, нет ключа tasks_open → ключ tasks_open:{pid}:{dsa(next_started)} + outbox одной транзакцией.
+- После онбординга (В1 А): «часы» видят конец онбординга → тот же ключ tasks_open:{pid}:{dsa(started первого дня)}, если онбординг ставит day_started_at; иначе отдельный kind tasks_open_onb:{pid} — решит окно КАРТОЧКИ по коду.
+- Текст (В2 Б): местное время записи < 04:00 → B9.day_tasks_open_today, иначе B9.day_tasks_open_tomorrow.
+- Простой: если запись позже 04:00 следующего утра — задания уже открыты, «завтра» неверно → вопрос В4.
 
 ## 5. Как бот отрисует
-outbox.py@8833b18: aggregate_id = pid (UUID строкой); payload — dict: text_id (ключ text_registry), payload_vars (dict, по умолчанию {}), tier (в build_html_parts; T3 — усечение 900, 09). event_type — только в логах. Нет текста → DLQ text_not_found; нет переменной → missing_var. Бот не меняется.
-| event_type | text_id | tier | заглушка |
+outbox.py@8833b18: aggregate_id = pid строкой; payload: text_id (ключ text_registry), payload_vars (по умолчанию {}), tier. event_type — только в логах. Нет текста → DLQ text_not_found; нет переменной → missing_var. Бот не меняется.
+Домены схемы: только B2, B4, B5, B7, B9, B10, B14, B15, B16, legal (apps/api/config/text_registry.schema.json@8833b18) [ШТАБ]. Тексты дня — B9.day_* в apps/api/config/texts/day.json@8833b18 (например B9.day_queue_wait) [ШТАБ]. Схема не меняется.
+| event_type | text_id | tier | текст |
 |---|---|---|---|
-| noon_nudge | B3.noon_nudge | T3 | [заглушка] Полуденное напоминание |
-| tasks_open_notice | B3.tasks_open_0400 | T2 | [заглушка] Задания откроются завтра в 04:00 по Вашему времени |
-При В2 = Б ещё B3.tasks_open_0400_today. Лестница 3.17: B3.ladder_plus1h, B3.ladder_minus2h, B3.ladder_minus30m (T2). Раздел B3 — событие механики дня (03); шаблон ключа в text_registry.schema.json не читал — не проверено. После выката texts load: «загружено N» (сейчас норма «загружено 0, обновлено 33»).
+| noon_nudge | B9.day_noon_nudge | T3 | [ЗАГЛУШКА] Полуденное напоминание |
+| tasks_open_notice | B9.day_tasks_open_tomorrow | T2 | [ЗАГЛУШКА] Задания откроются завтра в 04:00 по Вашему времени |
+| tasks_open_notice | B9.day_tasks_open_today | T2 | [ЗАГЛУШКА] Задания откроются сегодня в 04:00 по Вашему времени |
+| ladder_reminder | B9.day_ladder_plus1h | T2 | [ЗАГЛУШКА] Лестница: +1 ч |
+| ladder_reminder | B9.day_ladder_minus2h | T2 | [ЗАГЛУШКА] Лестница: 22:00 |
+| ladder_reminder | B9.day_ladder_minus30m | T2 | [ЗАГЛУШКА] Лестница: 23:30 |
+Все — legal_status pre-legal-review, payload_vars пустые. После выката texts load: «загружено 3» (notify-1 и noon-1) и «загружено 3» (ladder-1).
 
-## 6. Карточки
-- pushi-db-1 (БД), только при В1 = Б или CHECK на kind: 0011, GRANT app_api INSERT (aggregate_id, event_type, payload, tx_id) на outbox + USAGE outbox_id_seq; первой. Агент 400–600. РЕВЬЮЕР да.
-- pushi-noon-1 (API+projector): модуль уведомлений (полуденное, НП3 после очереди, после онбординга при В1 = А), вызов из projector, ключи в day_keys.py, seed и схема. После ответов В1–В3. Около 8–10 файлов. Агент 700–1 000 + 60–100 за задетый тест. РЕВЬЮЕР нет.
-- pushi-ladder-1 (тот же модуль): 03 §3.17 участнику (+1 ч после первой отметки, 22:00, 23:30 по ТЗ), ключ ladder:{pid}:{dsa}:{шаг}. Нужна метка времени первой отметки в day_marks — не проверено. Алерт Автору «день 2» — позже (бот адресует только pid). После мержа pushi-noon-1. Агент 500–800. РЕВЬЮЕР нет.
-Задетые тесты — кандидаты по именам (apps/*/tests@8833b18), читать окну КАРТОЧКИ: apps/api/tests/test_projector_static.py, test_projector.py, test_projector_v3.py, test_life_ops.py, test_day_clock.py, test_day_queue.py, test_day_writers.py, test_texts.py; при миграции test_db_roles_0009.py, test_db_models.py; при В1 = Б test_first_launch.py, test_onboarding_status.py. Бот (test_outbox.py, test_render.py) — не ожидается.
+## 6. Лестница DM 3.17
+Шаги участнику: +1 ч после первой отметки, 22:00, 23:30 по ТЗ, если день не сдан. Ключ ladder:{pid}:{dsa}:{шаг}. Первая отметка = min(day_marks.at) по pid и day_started_at; SELECT у app_projector есть (0008@8833b18) [ШТАБ]. min(at) или перезапись at при UPDATE (value, at) — сверить окну КАРТОЧКИ по коду marks. Алерт Автору «день 2» — вне пачки (бот адресует только pid).
 
-## 7. Вопросы Автору
-- В1. Кто пишет «Задания откроются…» после онбординга. А — «часы» в проекторе (без миграции, задержка до 30 с). Б — API в транзакции онбординга (миграция 0011, РЕВЬЮЕР). Мнение: А. Канон: проверено 03 §3.19, 09 contracts_out, 0009 В4 — молчит, кто пишет; архитектурный выбор.
-- В2. Конец очереди или онбординга с 00:00 до 04:00. А — один текст «завтра» всегда. Б — второй текст «сегодня в 04:00» (ключ …_today). Мнение: Б. Канон: проверено 03 §3.1, 3.19, 09 R257 — молчит; текст курса.
-- В3. Сервер стоял в 12:00. А — догнать до 18:00 по ТЗ, позже пропустить. Б — до 22:00. В — не догонять. Мнение: А. Канон: проверено 03 §3.18, 09 tiers T3 — молчит.
+## 7. Карточки (одна область — API+projector; строго по порядку, один модуль)
+- 1) pushi-notify-1: модуль app/notify_ops.py + вызов из projector; НП3 после очереди и после онбординга; kind tasks_open в day_keys.py; 2 текста в day.json. Агент 600–900 + 60–100 за задетый тест. РЕВЬЮЕР нет.
+- 2) pushi-noon-1: полуденное, окно 12:00–18:00, kind noon, текст. После мержа 1. Агент 400–600. РЕВЬЮЕР нет.
+- 3) pushi-ladder-1: лестница 3.17, kind ladder, 3 текста. После мержа 2. Агент 500–800. РЕВЬЮЕР нет.
+Выкат каждой: пересборка projector + texts load; projector 88dc8d4 не трогать до живой проверки «C» (STATE).
+Тесты — кандидаты по именам (apps/*/tests@8833b18), читать окну КАРТОЧКИ: apps/api/tests/test_projector_static.py, test_projector_v3.py, test_projector_day_report.py, test_day_queue.py, test_day_marks.py, test_day_report_submit.py, test_life_ops_race.py, test_texts_load_errors.py, test_onb*.py; по маске сверить test_life_ops*.py, test_day_clock*.py, test_texts*.py. Бот (test_render.py, тест outbox) — не ожидается.
 
-## 8. Надо дочитать (решает ШТАБ)
-- apps/api/config/text_registry.schema.json — шаблон ключа B3.*.
-- apps/bot/bot/render.py — переменные и tier.
-- apps/api/app/projector.py — место шага, версия.
-- 0007 (idempotency_keys: CHECK на kind, права app_projector).
-- 0002–0008, 0010 или test_db_roles*.py — нет ли у app_api INSERT на outbox.
-- day.py, onboarding.py — окно КАРТОЧКИ (п. 4).
+## 8. Окну КАРТОЧКИ взять
+- apps/api/app/projector.py — место вызова шага, интервал, нужен ли подъём PROJECTOR_VERSION.
+- apps/bot/bot/render.py — как подставляются payload_vars и tier, усечение T3.
+- apps/api/app/routers/day.py — next_started, запись day_queue, расчёт queued_until (каким started_at), day_done.
+- apps/api/app/routers/onboarding.py — событие «онбординг окончен», ставится ли day_started_at.
+- код marks — min(at) против перезаписи at.
+- тесты из раздела 7 — правило «Т».
 
-## 9. Прочитано (КБ)
-- docs/process/DESIGNER.md 17,3 — правило «Т», файл исследования до 15 КБ.
-- docs/STATE.md 20,4 — НП1–НП3; Р-6, Р-8; projector 88dc8d4 не трогать до 26.10.
-- AGENT-BRIEF.md 17,1 — запреты, тексты — заглушки.
-- docs/process/README.md 8,7 — миграции по одной.
-- docs/process/CANON-CHECK.md 4,8 — К-4, К-6.
-- docs/process/CODER.md 11,3 — команды «Под пакетом З1».
-- docs/architecture/03-day-mechanics.md 26,2 — §3.1, 3.17–3.19.
-- docs/architecture/09-communications.md 38,2 — T3-NOON-NUDGE, R257, R260; хвост YAML около 1 КБ не открылся (ошибка gzip), R260 взят из выжимки.
-- apps/bot/bot/outbox.py 20,6 — конверт text_id, payload_vars, tier.
-- apps/api/app/life_ops.py 17,0 — фильтр, ключ + события одной транзакцией; outbox не пишет.
-- apps/api/app/day_clock.py 10,0 — window, queue_until, last_midnight.
-- 0009_app_bot 5,1 — INSERT outbox у app_projector.
-- сверх списка: 0001_init 9,6 — таблица outbox и роли outbox_writer, outbox_relay.
-- сверх списка: apps/api/app/day_keys.py 2,9 — образец ключей.
+## 9. Предложения D-* (в DEFECTS-FOUND не вносить)
+- D-a: 03 §3.18 «категория „отключаемые“» ↔ 09 R123-FINAL, NR-215, Р-6. Правка: убрать слово.
+- D-b: 03 §3.18 «половина дня Участника» ↔ НП1 12:00 (день 04:00–00:00, середина 14:00). Нужна ли строка «перекрывающие канон» — ШТАБ (К-7).
+- D-c: tombstone не виден «часам» → строка outbox стёртому (бот закроет без отправки); NR-207 до 0-Б.
+- D-d: конверт 09 emit_envelope (must_deliver, drop_on_overload, coalesce_key, addressee) ↔ бот читает только text_id, payload_vars, tier.
+- D-e: ключ по местной дате ↔ 09 R260 (1 T3 за 24 ч) при смене пояса.
+- D-f: тексты механики дня (блок 3) в каноне без домена; схема даёт B9.day_* — записать в канон.
+
+## 10. Вопрос Автору
+- В4. НП3 запоздал из-за простоя до времени после 04:00 (задания уже открыты). А — не отправлять, ключ записать. Б — отправить «завтра». Мнение: А. Канон: проверено 03 §3.1, 3.19; 09 R257, tiers — молчит; текст курса.
+
+## 11. Прочитано
+З1: DESIGNER, STATE, AGENT-BRIEF, README, CANON-CHECK, CODER, 03, 09 (хвост около 1 КБ не открылся, gzip), outbox.py, life_ops.py, day_clock.py, 0009; сверх списка 0001 (роли outbox), day_keys.py (образец ключей). З2: ничего (решение ШТАБа); факты ШТАБа помечены [ШТАБ].
