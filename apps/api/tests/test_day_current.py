@@ -87,6 +87,7 @@ def test_kinds_and_ttl():
         "day_report": "1 hour",
         "day_close": "3650 days",  # life-ops-a
         "day_queue": "3650 days",  # life-ops-a
+        "tasks_open": "3650 days",  # pushi-notify-1
     }
 
 
