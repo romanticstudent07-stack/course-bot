@@ -19,24 +19,26 @@
 - Ключи текстов — B9.day_* (домена B3 в схеме нет); тексты «[ЗАГЛУШКА] …», legal_status pre-legal-review [ШТАБ].
 - Новый kind tasks_open в idempotency_keys без миграции (CHECK на kind нет, 0007) [ШТАБ].
 - Ключ «после очереди» — к тому же next_started, что ключ day_queue:{pid}:{dsa(next_started)} life-ops-b [ШТАБ, по коду day.py@8833b18].
+- Аргумент очереди X = текущий participant_state.day_started_at [по коду: routers/day.py@cf920ef — submit пишет key_day_queue(pid, next_started), проектор ставит day_started_at = next_day_started_at, read_day_current проверяет key_day_queue(pid, started) и day_clock.queue_until(pid, started)].
 - Ключ «после онбординга» — тот же kind и формат tasks_open:{pid}:{dsa(day_started_at)}: первый день ставит событие day_entered (day_started_at = at события, только при day_no IS NULL) [по коду: app/projector.py@cf920ef, _SET_POSITION].
+- Триггер «после онбординга» — событие day_entered любого источника; сейчас его пишет только POST /day/test-enter (payload source test_flag) [по коду: day.py@cf920ef] — кто бы ни писал day_entered.
 - Фильтр участников — как у life_ops: фазы onboarding/active, author_pause_reason IS NULL, нет BLOCKING_FLAGS [ШТАБ-тех, образец life_ops; гейт T2 в каноне — не проверено].
-- Тон текстов neutral; версия day.json 0.2.0 → 0.3.0 (схема: «bump при любой правке текста») [ШТАБ-тех].
+- Тон текстов neutral; версия day.json 0.2.0 → 0.3.0 (схема: «bump при любой правке текста»; test_texts проверяет версии только у B4 и legal) [ШТАБ].
 
 ## 4. Выдержки (Агент docs/architecture/** не открывает)
 - 03 §3.19, 09 R257 (по docs/research/pushi.md §0, §4): после очереди и после онбординга — «Задания откроются … в 04:00 по Вашему времени».
 - 03 §3.1 (pushi.md §0, НП2): кнопки дня активны с 04:00 по поясу участника; отдельного пуша в 04:00 нет.
 - Бот (pushi.md §5, apps/bot/bot/outbox.py@8833b18): aggregate_id = pid строкой; payload {text_id, payload_vars (по умолчанию {}), tier}; event_type — только в логах; нет текста → DLQ text_not_found. Outbox не умеет «не раньше» — бот берёт строку сразу.
+- 0001_init@cf920ef: outbox.tx_id xid8 NOT NULL, DEFAULT нет. 0009: у app_projector есть INSERT на колонку tx_id.
 - В text_registry.schema.json домены ключей: B2, B4, B5, B7, B9, B10, B14, B15, B16, legal; формат «{домен}.{имя}», имя snake_case.
 
 ## 5. ЧТО ПРОЧИТАТЬ (Агент)
-- AGENT-BRIEF.md — 17,1; эта карточка — ≈ 11.
+- AGENT-BRIEF.md — 17,1; эта карточка — ≈ 12.
 - apps/api/app/projector.py — 30,8 (run_forever, _life_ops_step, EVENT_KIND_DAY_ENTERED).
 - apps/api/app/life_ops.py — 17,0 (образец: кандидаты, lock_participant, ключ ON CONFLICT, LOCK_TIMEOUT, логи).
 - apps/api/app/day_clock.py — 10,0; apps/api/app/day_keys.py — 2,9; apps/api/config/texts/day.json — 5,2.
 - apps/api/tests/test_life_ops.py — только импорты и фикстуры БД (образец для DB-тестов; размер не проверен).
-- apps/api/app/routers/day.py — только строки с queue_until и day_queue (аргумент queued_until).
-- Чтение Агента ≈ 100 КБ.
+- Чтение Агента ≈ 95 КБ.
 
 ## 6. Файлы
 - Создать: apps/api/app/notify_ops.py; apps/api/tests/test_notify_ops.py.
@@ -51,11 +53,10 @@ day_keys.py: KIND_TASKS_OPEN = "tasks_open", TTL_TASKS_OPEN = "3650 days", за�
 Чистые функции (без БД):
 - choose_text(now, tz) → TEXT_TODAY, если местное время now (day_clock.zone(tz)) < day_clock.ACTIVATION_TIME, иначе TEXT_TOMORROW.
 - is_late(started, tz, now) → day_clock.window(started, tz, now) != day_clock.WINDOW_NOT_ACTIVE (задания уже открыты — В4).
-- decide(pid, started, tz, now, has_queue_key, entered) → None | "send" | "late":
-  есть ключ day_queue:{pid}:{dsa(started)} → если now < day_clock.queue_until(pid, X) (сравнение в UTC) → None (ждём); иначе триггер;
+- decide(pid, started, tz, now, has_queue_key, entered) → None | "send" | "late"; started = текущий participant_state.day_started_at:
+  есть ключ day_queue:{pid}:{dsa(started)} → если now < day_clock.queue_until(pid, started) (сравнение в UTC) → None (ждём); иначе триггер;
   нет его, но entered (есть событие day_entered с at = started) → триггер; иначе None.
   Триггер → "late", если is_late, иначе "send".
-  X — тот же аргумент, что в day.py для queued_until [не проверено: ШТАБ сверяет до промпта; по ключу day_queue — next_started].
 tick(engine, now) → NotifyResult(sent, late, skipped); now aware, иначе ValueError (как life_ops._require_aware):
 1. Чтение, своя транзакция, rollback: строки participant_state с фильтром life_ops (_CANDIDATES тот же, флаги life_ops.BLOCKING_FLAGS); в Python ключи tasks_open и day_queue по dsa(day_started_at);
    одним запросом SELECT key FROM idempotency_keys WHERE key = ANY(:keys); одним запросом SELECT pid, at FROM participant_events WHERE kind = 'day_entered' AND pid = ANY(:pids).
@@ -63,9 +64,9 @@ tick(engine, now) → NotifyResult(sent, late, skipped); now aware, иначе V
 2. Каждый pid — своя транзакция: SET LOCAL lock_timeout, lock_participant(conn, pid), состояние заново, фильтр life_ops._eligible,
    «проектор догнал pid» (как life_ops._PENDING_EVENT) — нет → пропуск; ключи и day_entered заново; decide заново.
 3. Запись: INSERT INTO idempotency_keys (key, kind, ttl) VALUES (..., 'tasks_open', CAST(:ttl AS interval)) ON CONFLICT DO NOTHING RETURNING key; 0 строк → rollback.
-   "send" → INSERT INTO outbox (aggregate_id, event_type, payload) VALUES (:aggregate_id, 'tasks_open_notice', CAST(:payload AS jsonb)) — БЕЗ RETURNING;
+   "send" → INSERT INTO outbox (aggregate_id, event_type, payload, tx_id) VALUES (:aggregate_id, 'tasks_open_notice', CAST(:payload AS jsonb), pg_current_xact_id()) — БЕЗ RETURNING;
    aggregate_id = str(pid); payload = {"text_id": choose_text(now, tz), "payload_vars": {}, "tier": "T2"}.
-   tx_id [не проверено: ШТАБ сверяет 0001 до промпта — NOT NULL без DEFAULT → вписать значение сюда, иначе не передавать].
+   tx_id обязателен (xid8 NOT NULL, DEFAULT нет). pg_current_xact_id() — номер транзакции, не время: запрет «SQL now()» его не касается.
    "late" → только ключ. Один commit на pid.
 4. Ошибка на pid → rollback, WARNING с именем класса, другие pid идут дальше. Ошибка чтения кандидатов — наружу (ловит projector).
 Время — только аргумент now; datetime.now(), time.time(), SQL now() в логике нельзя. Сравнения моментов — в UTC или функциями day_clock.
@@ -87,14 +88,14 @@ notes у первой: «pushi-notify-1: НП3, пишет notify_ops. Загл�
 2. is_late и decide: старт 15:00, now 20:00 → send; now следующего дня 04:00 → late; есть day_queue, now < queue_until → None; now ≥ queue_until → send.
 3. decide: нет day_queue и нет day_entered (день после day_closed) → None.
 4. key_tasks_open: формат, naive → ValueError; TTL_BY_KIND содержит tasks_open.
-5. Статика: в notify_ops.py нет «RETURNING» в INSERT INTO outbox, нет INSERT INTO participant_events; EVENT_KIND_DAY_ENTERED == projector.EVENT_KIND_DAY_ENTERED.
+5. Статика: в notify_ops.py нет «RETURNING» в INSERT INTO outbox, есть pg_current_xact_id(), нет INSERT INTO participant_events; EVENT_KIND_DAY_ENTERED == projector.EVENT_KIND_DAY_ENTERED.
 6. tick с naive now → ValueError; _notify_ops_step: исключение tick → WARNING с именем класса, проектор живёт.
 С БД (фикстуры — как в test_life_ops.py; в CI обязательно):
-7. После очереди: ключ day_queue + now ≥ queue_until → 1 строка outbox (text_id, tier T2, payload_vars {}), ключ tasks_open; второй tick → ничего нового.
+7. После очереди: ключ day_queue по текущему day_started_at + now ≥ queue_until → 1 строка outbox (text_id, tier T2, payload_vars {}), ключ tasks_open; второй tick → ничего нового.
 8. После онбординга: событие day_entered + состояние с тем же day_started_at → 1 строка outbox.
 9. Опоздание (В4): now после active_from → ключ есть, outbox 0.
 10. Фильтры: пауза, флаг block_lives, sleeping, есть событие после checkpoint → ни ключа, ни outbox.
-11. Роль app_projector (как в тестах life_ops): INSERT в outbox без RETURNING проходит.
+11. Роль app_projector (как в тестах life_ops): INSERT в outbox без RETURNING проходит; у строки outbox tx_id не NULL.
 Цели: bash tools/check.sh api. CI: тесты с БД.
 
 ## 10. Задетые тесты (правило «Т»)
@@ -106,24 +107,25 @@ notes у первой: «pushi-notify-1: НП3, пишет notify_ops. Загл�
   Упал тест вне списка → Агент НЕ чинит, пишет «тест X вне списка» в ИТОГ и останавливается.
 
 ## 11. Живая проверка (после мержа и после закрытия «C»; команды пишет СЕРВЕРНЫЙ)
-Аккаунты: А1 (#000001, админ; тестовый день не трогать), А2 (#000026), А3 (#000027), А4 (новый, с ботом не взаимодействовал).
+Аккаунты: А1 (#000001, админ; его тестовый день идёт — не трогать), А2 (#000026), А3 (#000027), А4 (новый, с ботом не взаимодействовал).
 1. Сервер: DC --profile tools build migrate; build projector; texts load → «загружено 2, обновлено 33, лишних в БД 0»; up -d projector.
 2. Логи projector 2 мин: «notify_ops: tick sent=0 late=K skipped=S» раз в 30 с (K ≥ 0 — старые дни получают только ключ); Traceback 0, WARNING 0.
-3. После очереди: А2 (нет открытого дня — А3) сдаёт отчёт дня в Mini App между 04:00 и 23:00 местного. Через 10–60 мин бот пишет «[ЗАГЛУШКА] Задания откроются завтра в 04:00 по Вашему времени.»
-   SQL: idempotency_keys kind tasks_open +1; outbox event_type tasks_open_notice +1 с sent_at; outbox_dlq без новых строк.
-4. После онбординга: нужен аккаунт без позиции — day_entered применяется только при day_no IS NULL (projector.py). А4 — только если у А2 и А3 позиция уже есть.
-   А4: промокод → доступ → онбординг; ШТАБ временно включает DAY_TEST_ENTRY_ENABLED=true; тестовый вход → в течение ≈ 30 с сообщение «… завтра …» (до 04:00 местного — «… сегодня …»); флаг вернуть в false.
+3. После очереди: перед проверкой сервер запросом говорит, у кого из А2 и А3 открыт день. Этот аккаунт сдаёт отчёт дня в Mini App между 04:00 и 23:00 местного.
+   Через 10–60 мин бот пишет «[ЗАГЛУШКА] Задания откроются завтра в 04:00 по Вашему времени.»
+   SQL: idempotency_keys kind tasks_open +1; outbox event_type tasks_open_notice +1 с sent_at и непустым tx_id; outbox_dlq без новых строк.
+4. После онбординга — А4 (нужен аккаунт без позиции: day_entered применяется только при day_no IS NULL). Перед шагом ШТАБ спрашивает Автора и пишет причину «нет аккаунта без позиции».
+   А4: промокод → доступ → онбординг; сервер по заданию ШТАБа включает DAY_TEST_ENTRY_ENABLED=true; тестовый вход → в течение ≈ 30 с сообщение «… завтра …» (до 04:00 местного — «… сегодня …»); сервер возвращает флаг в false.
 5. Повтор: restart projector → новых сообщений нет (ключи). А1 сообщений не получил.
 
 ## 12. Запреты
 AGENT-BRIEF §3. Плюс: бот, миграции, схему text_registry, docs/architecture/** не трогать; не менять PROJECTOR_VERSION и life_ops.py;
-не писать participant_state и participant_events из notify_ops; RETURNING в INSERT outbox нельзя; datetime.now() в логике нельзя; CI не ждать.
+не писать participant_state и participant_events из notify_ops; RETURNING в INSERT outbox нельзя; datetime.now() и SQL now() в логике нельзя; CI не ждать.
 
 ## 13. Критерии готовности
 Тесты раздела 9 есть и зелёные в sandbox (без БД); tools/check.sh api зелёный; файлы PR = раздел 6; в ИТОГ — прочитанные файлы и вопросы ШТАБу.
 
 ## 14. Оценка
-Часы Автора ≈ 1 (PR + выкат + живая проверка). Агент 600–900 кредитов (5 файлов, ≈ 550 строк, из них тесты ≈ 250; правка задетых тестов из списка не нужна — 0 × 60–100).
+Часы Автора ≈ 1 (PR + выкат + живая проверка). Агент 600–900 кредитов (5 файлов, ≈ 550 строк, из них тесты ≈ 250; tx_id — одна колонка, оценка не меняется; правка задетых тестов из списка не нужна — 0 × 60–100).
 
 ## 15. РЕВЬЮЕР
 Нет (не трогает initData, 18+, согласия, rate-limit, GRANT, оплату).
