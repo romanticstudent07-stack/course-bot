@@ -52,6 +52,7 @@ Claude Opus 5.5 (Genspark AI Chat). Тесты — Codespaces (быстрые) �
   raw для main бывает старым. Hash main — в docs/STATE.md или в стартовом сообщении.
   → не открылось: https://api.github.com/repos/romanticstudent07-stack/course-bot/contents/<путь>?ref=<hash>
   → не открылось: попросить Автора вставить файл. По памяти не восстанавливать.
+- Канон правится в приватном DOCS-course-bot, не в docs/architecture (это зеркало); порядок — DESIGNER.md, раздел «DOCS-репо».
 
 ## Codespaces
 - Тип 2-core. После работы — Stop (github.com/codespaces → «…» → Stop codespace).
