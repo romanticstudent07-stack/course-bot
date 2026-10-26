@@ -52,6 +52,9 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
   life_op, day_closed и ключ day_close:{pid}:{dsa} в ОДНОЙ транзакции под замком
   participant:pid — тогда ни одно из трёх не появится без остальных.
 
+«Часы» в run_forever (once — без них): life_ops.tick (закрытие дня) и notify_ops.tick
+(pushi-notify-1, НП3 «Задания откроются … в 04:00» — ключ tasks_open и outbox, без participant_state).
+
 Курсор — по pid: события e с e.id > coalesce(c.last_event_id, 0) через LEFT JOIN
 participant_state_checkpoints c USING (pid), ORDER BY e.id, LIMIT 500. Глобальный
 max(last_event_id) не используется: коммиты разных pid идут не по порядку id.
@@ -91,7 +94,7 @@ from typing import Any
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
 
-from app import day_clock, life_ops
+from app import day_clock, life_ops, notify_ops
 from app.config import get_settings
 from app.db.models import EVENT_KIND_MINI_APP_FIRST_CONSENT
 from app.db.session import get_engine
@@ -627,6 +630,23 @@ def _life_ops_step(engine: Engine, last_tick: datetime | None) -> datetime | Non
     return now
 
 
+def _notify_ops_step(engine: Engine, last_tick: datetime | None) -> datetime | None:
+    """«Часы» НП3 (pushi-notify-1): tick раз в NOTIFY_OPS_INTERVAL_S по day_clock.utcnow().
+
+    Любая ошибка tick → WARNING с именем класса, цикл проектора живёт дальше.
+    Часы назад (now < last_tick) → tick сразу. Возвращает момент последнего tick.
+    """
+    now = day_clock.utcnow()
+    interval = timedelta(seconds=notify_ops.NOTIFY_OPS_INTERVAL_S)
+    if last_tick is not None and timedelta(0) <= now - last_tick < interval:
+        return last_tick
+    try:
+        notify_ops.tick(engine, now)
+    except Exception as exc:  # noqa: BLE001 — шаг «часов» не роняет проектор
+        logger.warning("projector: notify_ops tick failed (%s)", type(exc).__name__)
+    return now
+
+
 def run_forever(
     engine: Engine,
     *,
@@ -636,9 +656,11 @@ def run_forever(
 ) -> None:
     """Режим run: lock держится всё время; сбой БД → WARNING, пауза, повтор.
 
-    После прохода — шаг «часов» (_life_ops_step) под тем же lock проектора; once — без него.
+    После прохода — шаги «часов» (_life_ops_step, затем _notify_ops_step) под тем же lock
+    проектора; once — без них.
     """
     last_tick: datetime | None = None
+    last_notify: datetime | None = None
     while True:
         try:
             with _advisory_lock(engine) as lock_conn:
@@ -652,6 +674,7 @@ def run_forever(
                             result.skipped,
                         )
                     last_tick = _life_ops_step(engine, last_tick)
+                    last_notify = _notify_ops_step(engine, last_notify)
                     # Проверка, что соединение с lock живо (иначе — повтор с начала).
                     lock_conn.execute(_PING)
                     lock_conn.commit()

@@ -7,7 +7,10 @@
   day_close:{pid}:{dsa}       — день с этим day_started_at закрыт (kind day_close, ttl 3650 days,
                                 life-ops-a; пишет life-ops-c);
   day_queue:{pid}:{dsa}       — задания следующего дня после этого дня отправлены в очередь
-                                (kind day_queue, ttl 3650 days, life-ops-a; пишет life-ops-b).
+                                (kind day_queue, ttl 3650 days, life-ops-a; пишет life-ops-b);
+  tasks_open:{pid}:{dsa}      — НП3 «Задания откроются … в 04:00» к дню с этим day_started_at
+                                обработано (kind tasks_open, ttl 3650 days, pushi-notify-1;
+                                пишет notify_ops).
 
 dsa (Ш4) — day_started_at в UTC, ISO 8601: ts.astimezone(timezone.utc).isoformat().
 Один и тот же момент в любом поясе даёт один и тот же ключ; naive datetime → ValueError
@@ -26,12 +29,14 @@ KIND_DAY_DONE = "day_done"
 KIND_DAY_REPORT = "day_report"
 KIND_DAY_CLOSE = "day_close"
 KIND_DAY_QUEUE = "day_queue"
+KIND_TASKS_OPEN = "tasks_open"
 
 TTL_DAY_ENTER = "3650 days"
 TTL_DAY_DONE = "3650 days"
 TTL_DAY_REPORT = "1 hour"
 TTL_DAY_CLOSE = "3650 days"
 TTL_DAY_QUEUE = "3650 days"
+TTL_TASKS_OPEN = "3650 days"
 
 TTL_BY_KIND: dict[str, str] = {
     KIND_DAY_ENTER: TTL_DAY_ENTER,
@@ -39,6 +44,7 @@ TTL_BY_KIND: dict[str, str] = {
     KIND_DAY_REPORT: TTL_DAY_REPORT,
     KIND_DAY_CLOSE: TTL_DAY_CLOSE,
     KIND_DAY_QUEUE: TTL_DAY_QUEUE,
+    KIND_TASKS_OPEN: TTL_TASKS_OPEN,
 }
 
 
@@ -67,3 +73,7 @@ def key_day_close(pid: uuid.UUID | str, ts: datetime) -> str:
 
 def key_day_queue(pid: uuid.UUID | str, ts: datetime) -> str:
     return f"{KIND_DAY_QUEUE}:{pid}:{dsa(ts)}"
+
+
+def key_tasks_open(pid: uuid.UUID | str, ts: datetime) -> str:
+    return f"{KIND_TASKS_OPEN}:{pid}:{dsa(ts)}"
