@@ -16,7 +16,7 @@ contains: [4 уровня сборки, 6 итераций Mini App-first, boot-
 1. PostgreSQL (основная БД) + PITR-настройка.
 2. S3-совместимое хранилище (`{s3-domain-ru}` — до решения Автора: Yandex Cloud / Timeweb Cloud).
 3. Redis (только буфер аналитики, критичные события — синхронно в PG, см. `critical_writes: synchronous_postgres`).
-4. Object Lock отключён на бакетах фото; `COMPLIANCE`/WORM на бакетах аудита.
+4. `COMPLIANCE`/WORM на бакетах аудита. Бакетов фото нет (решение Автора Р-3, 17.10.2026: фото участников не собираются).
 
 ### Локальный старт на сервере Автора (IRONCLAD) — до первого прода
 
@@ -47,8 +47,8 @@ contains: [4 уровня сборки, 6 итераций Mini App-first, boot-
 ## Уровень 2 — проекторы и саги
 
 1. `participant_state_projector` (владелец Б10) — читает журнал `participant_events` (И2, append-only), пишет `participant_state`.
-2. Refund Saga (Б16 + И3).
-3. Photo Ingest Saga (Б15 + И3).
+2. Refund Saga (Б16 + И3) — **на потом** (решение Автора Р-4, 17.10.2026): автоматика возвратов через PSP не строится; возвраты — вручную, переводом в личной переписке; `/refund` — учётная операция возврата без PSP.
+3. Photo Ingest Saga (Б15 + И3) — **убрана** (решения Автора Р-3, Р-5, 17.10.2026: фото участников нет).
 4. **Red Flags Protocol** (Б5 + И3, авто-эскалация за 60 сек в `sleeping` + `author_pause(reason_class=red_flag)`
    + шаблон экстренных контактов). **Не нарушает NR-17.14** («бот никогда не банит»),
    потому что переводит участника в `sleeping`, а не в `banned_*` — состояния `banned_*` вообще
@@ -57,7 +57,7 @@ contains: [4 уровня сборки, 6 итераций Mini App-first, boot-
 
 ## Уровень 3 — API и клиенты
 
-1. Telegram Bot API — реализация 35 UI-команд из [bot-commands-registry.yaml](bot-commands-registry.yaml).
+1. Telegram Bot API — реализация 34 (было 35; −/view_photos, Р-3) UI-команд из [bot-commands-registry.yaml](bot-commands-registry.yaml).
    Маппинг «UI-команда → backend capability» — [commands-mapping.md](commands-mapping.md).
    Backend-контракт `block_17.commands` (25 внутренних операций) — [../17/17-99-yaml-full.md](../17/17-99-yaml-full.md).
 2. Mini App API — [miniapp-api-contract.yaml](miniapp-api-contract.yaml), 8+ эндпоинтов, CSP `default-src 'self'` (E2).
@@ -113,7 +113,6 @@ contains: [4 уровня сборки, 6 итераций Mini App-first, boot-
 ### Итерация 0-Б — переезд на облако (после Итерации 0-А, 1 неделя)
 
 Запускается только после успешных локальных тестов Итераций 0-А … 3.
-Параллельно с Итерацией 4 (оплата).
 
 1. Yandex Cloud аккаунт + Managed PostgreSQL + Object Storage.
 2. Telegram Bot регистрация в BotFather: `/newbot`. Menu Button бот ставит сам через Bot API из URL Mini App (`WEBAPP_URL` в course-bot) — `/setmenubutton` не нужен; `/newapp` — только для прямой ссылки `t.me/<бот>/<app>`; `/setdomain` — только для Login Widget.
@@ -123,7 +122,7 @@ contains: [4 уровня сборки, 6 итераций Mini App-first, boot-
 ### Итерация 1 — онбординг (SEAM-1) (2 недели)
 
 **Mini App:**
-- Экраны `onb.welcome` → `onb.age-gate` → `onb.consent-152fz` → `onb.offer` → `onb.payment` → `onb.form` → `onb.checkup` → `onb.rules`.
+- Экраны `onb.welcome` → `onb.age-gate` → `onb.consent-152fz` → `onb.offer` → `onb.form` → `onb.checkup` → `onb.rules`.
 - Валидация `initData` на сервере (эндпоинт `/miniapp/v1/onboarding/first-launch`).
 - IndexedDB для черновиков анкеты.
 
@@ -149,21 +148,21 @@ contains: [4 уровня сборки, 6 итераций Mini App-first, boot-
 **Bot:** `/card <@user>` для владельца в Рабочей группе.
 **Backend:** генерация Карточки на лету, аудит `privacy_audit_log`.
 
-### Итерация 4 — оплата и refund (2 недели)
+### Итерация 4 — оплата и refund — на потом (решения Автора Р-1, Р-4, 17.10.2026)
 
-**Mini App:** `payment.pay`, `payment.refund`, `payment.act`.
-**Bot:** reply-команда `/refund` с hard-confirm.
-**Backend:** Refund Saga (И3), интеграция с PSP (YooKassa/CloudPayments), retention `refund_details`.
+**Mini App:** платёжных экранов нет и не будет (Р-1): `payment.pay`, `payment.refund`, `payment.act` не делать; виджет PSP внутри Mini App не делать никогда.
+**Bot:** reply-команда `/refund` с hard-confirm — учётная операция возврата без PSP (Р-4).
+**Backend:** Refund Saga (И3), интеграция с PSP (YooKassa — основной кандидат, CloudPayments — запасной; только на внешнем сайте, вне Telegram), retention `refund_details` — на потом (Р-4). Оплата — в личной переписке с Автором, доступ Автор выдаёт лично (Р-1).
 
-### Итерация 5 — фото и хранение (2 недели)
+### Итерация 5 — хранение и доставка (без фото — Р-3) (2 недели)
 
-**Mini App:** `content.photo-submit` + деконструкция pre-signed URL.
-**Bot:** deep-link «Открыть материал».
-**Backend:** Photo Ingest Saga, S3 bucket без Object Lock (для стирания), WORM на аудите.
+**Mini App:** — (фото участников нет — Р-3; pre-signed URL для материалов не делаем — Р-5).
+**Bot:** deep-link «Открыть материал» — ведёт на пост внешнего Telegram-канала (Р-5).
+**Backend:** WORM на аудите. Photo Ingest Saga и S3-бакет фото не нужны (Р-3).
 
 ### Итерация 6 — Панель Автора (2 недели)
 
-**Bot целиком:** реестр 35 UI-команд из [bot-commands-registry.yaml](bot-commands-registry.yaml),
+**Bot целиком:** реестр 34 (было 35; −/view_photos, Р-3) UI-команд из [bot-commands-registry.yaml](bot-commands-registry.yaml),
 маппинг на backend capabilities из [commands-mapping.md](commands-mapping.md),
 hard-confirm (E3), whitelist admin-ID, дашборд владельца, palette.
 **Backend:** `admin_action_log`, `role_capability_matrix`, `hard_confirm_phrases`.
@@ -175,11 +174,11 @@ hard-confirm (E3), whitelist admin-ID, дашборд владельца, palett
 2) DDL (db-schema.sql — 8 таблиц + alembic для остальных) + seed text_registry
 3) participant_state_projector
 4) один stub-эндпоинт Mini App + ручной онбординг из бот-диалога (для тестов)
-5) refund saga в dry-run режиме
+5) refund saga в dry-run режиме — на потом (Р-4)
 6) панель Автора (только whitelist из feature flags)
 ```
 
-`ready_for_synthetic_launch: yes` — при выполнении всех шести пунктов выше.
+`ready_for_synthetic_launch: yes` — при выполнении пунктов 1–4 и 6 выше (пункт 5 — на потом, Р-4).
 
 ## Переменные окружения (минимум)
 

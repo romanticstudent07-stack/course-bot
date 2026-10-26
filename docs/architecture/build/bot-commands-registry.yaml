@@ -1,15 +1,18 @@
 # ============================================================
-# build/bot-commands-registry.yaml — реестр 35 команд бота (Б17)
+# build/bot-commands-registry.yaml — реестр 34 команд бота (Б17; было 35, −/view_photos — Р-3)
 # Источник истины: architecture/normative/B17-admin-panel-patch.md
-# Каноническое число — 35 (см. appendix/C-registries.md, раздел 5).
+# Каноническое число — 34 (было 35; −/view_photos, Р-3) (см. appendix/C-registries.md, раздел 5).
 # Патч Б17 в двух местах пишет 25 — RISK-L-22, ждёт решения Автора.
 # ============================================================
 
 version: "1.0-skeleton"
 source: "Б17 + appendix/C-registries.md#5"
-total_declared: 35
+total_declared: 34   # было 35; −/view_photos, Р-3 (17.10.2026)
 total_declared_conflict: 25   # RISK-L-22
 
+# ЗАКРЫТО решением Автора Р-3 (17.10.2026): /view_photos убрана, фото участников нет,
+# /grant_photos_access не реализуется. Блок сохранён как историческая запись
+# (его требует проверка tools/checks.sh).
 # Скрытая команда, упомянутая в примечании к /view_photos,
 # но записи в каталоге не имеющая — висячая 36-я.
 dangling_command:
@@ -68,7 +71,7 @@ groups:
       surface: work_group_reply
       open_incompatibility: "противоречит отсрочке стирания И3 (14 дн.)"
 
-  # ---------------- 5.2. Данные (6) ----------------
+  # ---------------- 5.2. Данные (5) ----------------
   data:
     - name: "/card"
       role: [owner, moderator]
@@ -81,13 +84,6 @@ groups:
       audit_layer: privacy
       surface: work_group_reply
       note: "CSV на аудите запрещён"
-    - name: "/view_photos"
-      role: owner
-      hard_confirm: true
-      hard_confirm_phrase: true
-      audit_layer: privacy
-      surface: work_group_reply
-      note: "→ /grant_photos_access (см. dangling_command выше)"
     - name: "/override_baseline"
       role: owner
       hard_confirm: true
@@ -115,6 +111,7 @@ groups:
       audit_layer: base
       surface: work_group_reply
       saga: refund_saga
+      note: "учётная операция возврата без PSP (Р-4, 17.10.2026); refund_saga — на потом"
     - name: "/refund_rollback"
       role: owner
       hard_confirm: true
@@ -127,6 +124,7 @@ groups:
       audit_layer: base
       surface: work_group_reply
       schedule: hourly
+      note: "на потом — вместе с PSP на внешнем сайте (Р-4, 17.10.2026)"
 
   # ---------------- 5.4. Модерация и группа (6) ----------------
   moderation:
@@ -232,4 +230,4 @@ groups:
       audit_layer: base
       surface: work_group_reply
 
-# Итого: 8 + 6 + 3 + 6 + 3 + 9 = 35
+# Итого: 8 + 5 + 3 + 6 + 3 + 9 = 34 (было 35; −/view_photos, Р-3)
