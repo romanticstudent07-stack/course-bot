@@ -1,5 +1,5 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "owner_block": "B9",
   "durability_block": "B14",
   "entries": [
@@ -130,6 +130,19 @@
       "tone": "neutral",
       "legal_status": "pre-legal-review",
       "text": "[ЗАГЛУШКА] Приём отчёта за этот день завершён. Задания этого дня откроются снова."
+    },
+    {
+      "key": "B9.day_tasks_open_today",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Задания откроются сегодня в 04:00 по Вашему времени.",
+      "notes": "pushi-notify-1: НП3, пишет notify_ops. Заглушки до 0-Б."
+    },
+    {
+      "key": "B9.day_tasks_open_tomorrow",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Задания откроются завтра в 04:00 по Вашему времени."
     }
   ]
 }
