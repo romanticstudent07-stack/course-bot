@@ -17,11 +17,12 @@ doc_version: "скелет v0"
 | `onb.welcome` | `/` | Приветствие + первичный дисклеймер | first-launch | `onb.welcome.title`, `onb.welcome.disclaimer` | → `onb.age-gate` |
 | `onb.age-gate` | `/onboarding/age` | Ввод даты рождения (жёсткая проверка ≥ 18) | onb.welcome | `onb.age.title`, `onb.age.error_under18` | → `onb.consent-152fz` |
 | `onb.consent-152fz` | `/onboarding/consent/152fz` | Согласие 152-ФЗ (C1) | onb.age-gate | `legal.consent.152fz` | → `onb.offer` |
-| `onb.offer` | `/onboarding/offer` | Оферта + галочка «согласен» (C2) | onb.consent-152fz | `legal.offer` | → `onb.payment` |
-| `onb.payment` | `/onboarding/payment` | Оплата первого этапа | onb.offer | `payment.first_stage_title` | → `onb.form` (после confirm) |
-| `onb.form` | `/onboarding/form` | Анкета (ФИО, телефон, ТЗ, стартовые замеры, фото 4 стороны) | onb.payment | `onb.form.*` | → `onb.checkup` |
+| `onb.offer` | `/onboarding/offer` | Оферта + галочка «согласен» (C2) | onb.consent-152fz | `legal.offer` | → `onb.form` |
+| `onb.form` | `/onboarding/form` | Анкета (ФИО, телефон, ТЗ, стартовые замеры; фото нет — Р-3) | onb.offer | `onb.form.*` | → `onb.checkup` |
 | `onb.checkup` | `/onboarding/checkup` | Чек-Ап (Блок 5) | onb.form | `checkup.*` | → `onb.rules` |
 | `onb.rules` | `/onboarding/rules` | Правила + «Ознакомлен/Принимаю» | onb.checkup | `onb.rules` | → `day.current` (день 1.1) |
+
+Экрана оплаты в онбординге нет (решение Автора Р-1, 17.10.2026): оплата — в личной переписке с Автором, доступ Автор выдаёт лично.
 
 ## Дневной модуль (Блок 3)
 
@@ -37,8 +38,8 @@ doc_version: "скелет v0"
 | id | Путь | Что |
 |---|---|---|
 | `me.card` | `/me` | Моя карточка (данные, замеры, позиция, жизни) |
-| `me.consents` | `/me/consents` | Мои согласия C0–C6, отзыв C5 (фото) |
-| `me.change-map` | `/me/change-map` | Полная Карта изменений (антропометрия / фото / самочувствие / функциональные) |
+| `me.consents` | `/me/consents` | Мои согласия C0–C6 (фото-согласия нет — Р-3) |
+| `me.change-map` | `/me/change-map` | Полная Карта изменений (антропометрия / самочувствие / функциональные; слоя «фото» нет — Р-3) |
 | `me.legal-data` | `/me/legal` | Юр.данные, экспорт (`/miniapp/v1/export/request`) |
 | `me.settings-notifications` | `/me/notifications` | Настройки уведомлений (чекбоксы reminders / motivational, P-5) |
 
@@ -46,24 +47,17 @@ doc_version: "скелет v0"
 
 | id | Путь | Что |
 |---|---|---|
-| `lifecycle.start` | `/start-btn` | Кнопка [Старт] (порядок гейтов: возраст → правовое → оплата) |
+| `lifecycle.start` | `/start-btn` | Кнопка [Старт] (порядок гейтов: возраст → правовое; оплаты нет — Р-1) |
 | `lifecycle.paused` | `/paused` | Экран паузы (три полосы паузы, ETA) |
 | `lifecycle.returned` | `/returned` | Экран возвращения после долгой паузы |
 
 ## Хранение и доставка (Блок 15)
 
-| id | Путь | Что |
-|---|---|---|
-| `content.material` | `/content/:id` | Просмотр материала (deep-link из бота), pre-signed URL, порог 10 МБ (И4) |
-| `content.photo-submit` | `/content/photo` | Отправка фото 4 сторон (multipart + `client_op_id`) |
+Экранов нет. `content.material` убран (решение Автора Р-5 и ответ В-2, 17.10.2026 / 26.10.2026): кнопка «Открыть материал» ведёт сразу на пост внешнего Telegram-канала, текст задания — в `day.current`. `content.photo-submit` убран (решение Автора Р-3: фото участников нет).
 
 ## Оплата и возврат (Блок 16)
 
-| id | Путь | Что |
-|---|---|---|
-| `payment.pay` | `/payment/pay` | Форма оплаты (виджет PSP) |
-| `payment.refund` | `/payment/refund` | Заявка на возврат |
-| `payment.act` | `/payment/act/:id` | Акт об оказании услуг (после Refund Saga) |
+Экранов нет (решение Автора Р-1, 17.10.2026): оплата — в личной переписке с Автором. PSP — позже, только на внешнем сайте вне Telegram (решение Автора Р-4).
 
 ## Служебные экраны
 
