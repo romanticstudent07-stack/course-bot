@@ -129,7 +129,7 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
 
 **Порядок выката миграции:**
 1. Ручной бэкап `pg_dump -Fc` (см. раздел «Автобэкап»).
-2. Пересобрать образ: `DC build migrate` — без пересборки образ не видит новые миграции и тексты.
+2. Пересобрать образ: `DC --profile tools build migrate` — без пересборки образ не видит новые миграции и тексты.
 3. Миграции — ДО пересоздания api: `DC --profile tools run --rm --no-deps migrate` (выполнит `alembic upgrade head`).
 4. Если менялись тексты: `DC --profile tools run --rm --no-deps migrate python -m app.texts load`.
 5. Затем пересоздать сервисы: `DC up -d --force-recreate <сервисы>`

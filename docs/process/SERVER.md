@@ -17,7 +17,7 @@
   Funnel 8443 в tailscale serve status — maxmover.
 - Запрещено: docker system prune, удаление volumes, правка чужого, вывод .env и секретов.
 - Перед миграцией БД — бэкап pg_dump -Fc в ~/backups-coursebot/ (автобэкап — 03:30 MSK).
-- Миграции и загрузка текстов — только одноразовый сервис migrate: build migrate → run --rm migrate
+- Миграции и загрузка текстов — только одноразовый сервис migrate: DC --profile tools build migrate → DC --profile tools run --rm --no-deps migrate
   (infra/SERVER-IRONCLAD.md, «Миграции и тексты (B-3d)»). У api пароля владельца БД нет (B-3d).
 - Сравнивать с прошлым hash main (git diff --stat <старый hash> HEAD), а не с HEAD~1.
 
