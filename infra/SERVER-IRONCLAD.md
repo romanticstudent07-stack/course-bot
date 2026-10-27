@@ -15,7 +15,7 @@
   `cloudflared` на сервере — чужая, maxmover). `CLOUDFLARE-TUNNEL.md` — архив,
   на IRONCLAD не применять.
 - Прод / внешние тестировщики — позже: российский VPS как вход, туннель дом→VPS
-  через autossh или WireGuard (решение Автора, провайдер не выбран).
+  через autossh или WireGuard (провайдер — Timeweb Cloud, Р-9).
 
 ## Занятые порты (не использовать)
 
@@ -47,7 +47,7 @@
 и бинарники community-версии — только исходники, issue minio/minio #21647;
 25.04.2026 репозиторий minio/minio архивирован).
 
-**prod:** Yandex Object Storage (или Timeweb / VK Cloud — решение Автора).
+**prod:** Timeweb Object Storage — только бэкапы и WORM-аудит (Р-10).
 Object Lock (WORM) для бакета аудита — только в prod (Garage single-node
 не поддерживает WORM). В dev auditing идёт в обычный бакет `audit` без WORM.
 
@@ -130,8 +130,8 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
 **Порядок выката миграции:**
 1. Ручной бэкап `pg_dump -Fc` (см. раздел «Автобэкап»).
 2. Пересобрать образ: `DC build migrate` — без пересборки образ не видит новые миграции и тексты.
-3. Миграции — ДО пересоздания api: `DC run --rm migrate` (выполнит `alembic upgrade head`).
-4. Если менялись тексты: `DC run --rm migrate python -m app.texts load`.
+3. Миграции — ДО пересоздания api: `DC --profile tools run --rm --no-deps migrate` (выполнит `alembic upgrade head`).
+4. Если менялись тексты: `DC --profile tools run --rm --no-deps migrate python -m app.texts load`.
 5. Затем пересоздать сервисы: `DC up -d --force-recreate <сервисы>`
    (если менялся код — `DC up -d --build <сервисы>`).
 
@@ -141,6 +141,7 @@ Object Lock (WORM) для бакета аудита — только в prod (Ga
   миграции — только через `migrate`.
 - `migrate` не стартует при `DC up -d` и после перезагрузки сервера (`profiles: ["tools"]`);
   в `DC ps` его нет — это норма. Контейнер удаляется сам после работы (`--rm`).
+  `--no-deps` — чтобы run не трогал db и другие сервисы.
 - Пустой `MIGRATIONS_DATABASE_URL` в `.env` → `alembic` в `migrate` падает с KeyError, а `python -m app.texts load` — с «ОШИБКА БД: OperationalError» и кодом 1; пароля
   в тексте ошибки нет.
 

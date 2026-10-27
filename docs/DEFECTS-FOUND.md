@@ -32,7 +32,7 @@
 
 ---
 
-- **D-1** (медиа Б15) — решено Р-5; правка канона (DIVISION.md) — в DOCS — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 24.10).
+- Целиком в docs/DEFECTS-ARCHIVE.md: D-1, D-6, D-10, D-11, D-13–D-24, D-28. Открытый остаток D-22: первая задача, которая пишет revoke, берёт замок строки участника (FOR UPDATE), порядок событий — по id, не по at.
 
 ## D-5. Публичный вход: Cloudflare Tunnel неприменим
 
@@ -54,8 +54,6 @@
 - **Предлагаемое решение:** в DOCS-course-bot поправить `build/build-order.md`
   (вход Итерации 0-А и ссылку на `infra/CLOUDFLARE-TUNNEL.md`).
 - **Ждём решения Автора:** нет — провайдер Timeweb Cloud (Р-9, 18.10); правка build-order — в DOCS.
-
-- **D-6** (Telegram в РФ) — решено Р-11; правки канона (build-order 0-Б, 99-legal) — в DOCS — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 24.10).
 
 ## D-7. initData без проверки подписи
 
@@ -114,34 +112,6 @@
   (в) добавить в контракт `503` (`SERVICE_MISCONFIGURED`) в `components.responses` — **сделано:** DOCS PR #11 (`ServiceUnavailable`), sync PR #51.
 - **Ждём решения Автора:** да — механизм продления `session_jwt` к проду (Р-12); правки зеркала — в DOCS-course-bot.
 
-- **D-10** (порядок first-launch) — согласия до pid сделаны; оплата вне продукта (Р-1, Р-2); правка канона (ADD3, checklist §3) — в DOCS — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 24.10).
-
-- **D-11** (`lifecycle_phase` ≠ FSM И2) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 06.10).
-
-- **D-13** (роли и GRANT БД, блокер B-3) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 14.10).
-
-- **D-14** (text_registry: ключ, seed, тоны) — решено Р-8 + «ОК А»; правки — в каноне — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 24.10).
-
-- **D-15** (ревью #38: отложенное) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 04.10).
-
-- **D-16** (`participant_events` ≠ `state_transition_log`) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 06.10).
-
-- **D-17** (`X-Client-Op-Id`) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 04.10).
-
-- **D-18** (формат 422/500 → B-3b) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 04.10).
-
-- **D-19** (хранилища на устройстве) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 04.10).
-
-- **D-20** (CSP `font-src` без `data:`) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 06.10).
-
-- **D-21** (`MINIAPP_URL` → `WEBAPP_URL`) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 06.10).
-
-- **D-22** (status / reconsent) — решено 06.10, DOCS PR #13. ОТКРЫТО: первая задача, которая пишет revoke, берёт замок строки участника (FOR UPDATE), порядок событий — по id, не по at — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 24.10).
-
-- **D-23** (черновик на устройстве: IndexedDB, гонка записи, ErrorBoundary) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 15.10).
-
-- **D-24** (пароль владельца БД в контейнере api, env_file) — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 14.10).
-
 ## D-25. Ключ замка дня: I2B 'life:' vs код 'participant:'
 - **Файл архитектуры (зеркало):** I2B — ключ замка 'life:' || pid.
 - **Файл реализации:** `apps/api/app/participant_lock.py` — 'participant:' || pid (В20, `docs/tasks/iter2-api-2a.md`).
@@ -170,8 +140,6 @@
   транзакции, которая сначала берёт этот замок (`lock_participant`), и приносит тест гонки
   «писатель дня + tombstone» (второй ждёт замок, записи для удалённого pid нет).
 - **Ждём решения Автора:** нет.
-
-- **D-28** (квота пауз) — решено Р-6а (патч И2); П.8 привести в DOCS — целиком в `docs/DEFECTS-ARCHIVE.md` (правило А, 24.10).
 
 ## D-29. life-ops-c Н1: WARNING day_clock о плохом поясе каждые 30 с
 - **Файл архитектуры (зеркало):** решение #111 Н9.
@@ -265,4 +233,12 @@
 - **Предлагаемое решение:** в DOCS-course-bot добавить экран и ключ; ключ в реестр и перенос текста — вместе с настоящими текстами до 0-Б.
 - **Ждём решения Автора:** нет.
 
-<!-- следующие записи: новые — с D-40 -->
+## D-40. access_grants не хранит chat_id заявки
+- **Файл архитектуры (зеркало):** —
+- **Файл реализации:** access_grants (миграция 0010); apps/bot/bot/access.py.
+- **Статус:** открыт. Источник: bot-access-2, 26.10.
+- **Суть расхождения:** admin_message_id уникален глобально, а номера сообщений свои в каждом чате. При смене WORK_GROUP_ID UPSERT новой заявки может упасть на UNIQUE admin_message_id (→ TRY_LATER). Ложное решение закрыто Т3 bot-access-2 (reply только на сообщение бота).
+- **Предлагаемое решение:** колонка chat_id миграцией, позже.
+- **Ждём решения Автора:** нет.
+
+<!-- следующие записи: новые — с D-41 -->
