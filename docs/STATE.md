@@ -1,16 +1,16 @@
 # STATE — живое состояние course-bot
-Обновлено: 27.10.2026 (main 3e95900; сервер ✅ 3e95900). Снимок до сжатия 24.10 (дословно: «Сейчас» Р-2 по строкам, «Смержено» #101–#121, учёт кредитов 21–22.10, В БД 22.10) — docs/history/STATE-6966838.md. Решения 21.10 (Р-А1…Р-А4, Ш-1…Ш-4, правила А-CI, А-КАНОН, А-МЕРЖ) — Issue #109. ПРАВИЛО К (22.10) — docs/process/CANON-CHECK.md: сначала канон, потом ответ; для всех ролей. До 90 строк и 20 КБ. Секретов, реальных ID и IP здесь нет.
+Обновлено: 27.10.2026 (main — после #139; сервер ✅ 3e95900). Снимок до сжатия 24.10 (дословно: «Сейчас» Р-2 по строкам, «Смержено» #101–#121, учёт кредитов 21–22.10, В БД 22.10) — docs/history/STATE-6966838.md. Решения 21.10 (Р-А1…Р-А4, Ш-1…Ш-4, правила А-CI, А-КАНОН, А-МЕРЖ) — Issue #109. ПРАВИЛО К (22.10) — docs/process/CANON-CHECK.md: сначала канон, потом ответ; для всех ролей. До 90 строк и 20 КБ. Секретов, реальных ID и IP здесь нет.
 Кто обновляет: ШТАБ даёт строки → они идут первым файлом пакета следующей задачи.
 Подробности закрытых задач — docs/HISTORY.md. Снимки STATE (дословно): docs/history/STATE-a5ef1d7.md (до 18.10: выкаты до 0008, #49–#96), STATE-20a21c4.md (до 22.10: #97–#113, send-1), STATE-6966838.md (до 24.10), STATE-3e95900.md (до 27.10: «Сейчас» 25.10, учёт кредитов 23–25.10). КОДЕРАМ HISTORY и снимки не давать.
 Правила ШТАБа — docs/process/SHTAB.md (часть 1) + docs/process/SHTAB-2.md (часть 2), читать ОБА.
 Процессные решения (роли, РЕВЬЮЕР, окна чатов, терминал, rulesets main, форки, LF, expected_tables.txt, миграции по одной) — в SHTAB.md, SHTAB-2.md, DESIGNER.md, README.md.
 ## Сейчас
-- main = 3e95900 (#135 pushi-notify-1; docs #136 rules-2610, #137 sync DOCS). Сервер ✅ 3e95900 (27.10): alembic 0010_access_grants, 16 таблиц, 7/7 Up, 5 healthy; образы api, projector, migrate — 3e95900 (27.10); bot — выкат bot-access-2 26.10 (hash образа — «не проверено»); miniapp — без изменений; DAY_TEST_ENTRY_ENABLED = false (явная строка в .env); PROJECTOR_VERSION = 3; в projector «часы» life_ops и notify_ops (НП3), tick 30 с; text_registry 35. Бот ходит в БД под coursebot_bot (роль app_bot), доставляет outbox. Сервер IRONCLAD работает только с main.
+- main = после #139 (#138, #139 — только docs; до них 3e95900: #135 pushi-notify-1, docs #136 rules-2610, #137 sync DOCS). Сервер ✅ 3e95900 (27.10): alembic 0010_access_grants, 16 таблиц, 7/7 Up, 5 healthy; образы api, projector, migrate — 3e95900 (27.10); bot — выкат bot-access-2 26.10 (hash образа — «не проверено»); miniapp — без изменений; DAY_TEST_ENTRY_ENABLED = false (явная строка в .env); PROJECTOR_VERSION = 3; в projector «часы» life_ops и notify_ops (НП3), tick 30 с; text_registry 35. Бот ходит в БД под coursebot_bot (роль app_bot), доставляет outbox. Сервер IRONCLAD работает только с main.
 - до 27.10 — снимок docs/history/STATE-3e95900.md
 - Норма сервера: 7/7 Up, 5 healthy (db, redis, garage, api, miniapp), healthcheck нет у bot и projector; curl / 200, /healthz 200, /miniapp/v1/onboarding/status 401; проектор проверяется по логам (Traceback 0, WARNING 0), projector once рядом с run запрещён (infra/SERVER-IRONCLAD.md:146). Роли: api — coursebot_api, projector — coursebot_projector, alembic и texts load — владелец (только DC --profile tools run --rm --no-deps migrate); env_file нет ни у одного сервиса; repr/str Settings без DSN. Перед каждой миграцией — бэкап before-000N и DC --profile tools build migrate. Новые тексты — build migrate до texts load.
 - 27.10 ✅ живое закрытие дня и счётчик (проверка «C»): lives 2, missed_streak 1; после сдачи дня 2 — missed_streak 0. Тестовые строки send-1b (outbox 3, dlq 2) — не удалять.
 - 27.10 ✅ НП3 «после очереди» живьём (А1): 1 запись outbox tasks_open_notice, 1 доставка, dlq без новых; очередь 27 мин = day_clock.queue_delay (10–60 мин). НП3 «после онбординга» — не проверен (нужен свежий аккаунт).
-- Р-2 доступ по промокоду ✅ выкачен 25.10 (#124–#127; бэкап before-0010): backfill granted|backfill_0010|2; env бота WORK_GROUP_ID, ACCESS_ADMIN_TOPIC_ID, ACCESS_ADMIN_IDS (только Автор), MAX_DENIES 5, LOCK_HOURS 24. Не живьём: экран no_access (тесты #127). Мелочи ревью #124–#126 — docs/reviews/R2-2510.md.
+- Р-2 ✅ 25.10 (#124–#127) и бэкапы before-0004…before-0010 ✅ — снимок docs/history/STATE-3e95900.md; не живьём — экран no_access (тесты #127). Downgrade ниже 0004 запрещён (стирает журнал согласий).
 - bot-access-2: мелочи ревью Р-2 (бот) — reply только на бота, кнопки снимаются при ALREADY_*, lock_timeout 10s; долги #87/#83 закрыты выкатом 170808e.
 - S3_* у api: S3_ENDPOINT/REGION/BUCKET_PHOTOS, ключей нет. ALEMBIC_CONFIG в api/projector — норма.
 - Р-1, Р-3, Р-4, Р-5 внесены в канон (DOCS #15 → sync #137, 26.10). Трекер правок канона — docs/decisions/DOCS-CANON.md.
@@ -19,12 +19,13 @@
 - Кредиты: 9 651 (27.10), резерв 1 500. Факты: docs-pack-2510 229, bot-access-2 288, бонус +196, pushi-notify-1 667. Новый месяц — 25.11.
 - ЗАКРЫТО: И1, projector, returning, B-3, miniapp-fix, melochi-2, И2 БД (0007–0009), И2 API (iter2-api-1/2a/2b) — подробно снимки.
 - Лимиты: STATE ≤ 20 480 Б, DEFECTS-FOUND < 25 000 Б (правило А) — перед каждой записью «сейчас + добавляю». DEFECTS-ARCHIVE.md КОДЕРАМ кода не давать.
-- Бэкапы before-0004…before-0010 — снимок; последний before-0010 ✅ (25.10, 46647 Б). Downgrade ниже 0004 запрещён (стирает журнал согласий).
 - Процесс: лимиты чтения — КОДЕР ≈ 130–140 КБ; ПРОЕКТИРОВЩИК ПОЛНОЕ/КАРТОЧКИ 170 КБ, ИССЛЕДОВАНИЕ 200 КБ (решение Автора 19.10). SHTAB.md 3-Б: одна карточка = одна область, задачу режем, чтение не урезаем; DESIGNER.md «Бюджет окна». Файл восстановления ШТАБа — SHTAB-CONTEXT-CHAT.txt.
 - Mini App после пересборки — закрыть и открыть заново (кэш Telegram). Живые проверки 02.10 — DEFECTS-ARCHIVE.md (D-7, D-10).
 - Репо ПУБЛИЧНЫЙ до 0-Б (обычный AI Chat приватные репо не читает); после 0-Б — приватный, файлы в чаты вставлять вручную.
 ## Смержено (подробно — docs/HISTORY.md и снимок docs/history/STATE-a5ef1d7.md)
-- #101–#121 — выкачено 19–22.10 (кроме docs: только pull); #122–#129 — выкачено 25.10 (docs — только pull); #130–#137 — сервер ✅ 3e95900 (27.10; docs — только pull). Подробно — снимки docs/history/STATE-20a21c4.md, STATE-6966838.md, STATE-3e95900.md.
+- до #129 — снимок docs/history/STATE-3e95900.md
+- #130–#137 — сервер ✅ 3e95900 (27.10; docs — только pull).
+- #138 docs-pack-2710a (STATE 27.10, D-40, DOCS-CANON, AGENTS, SERVER-IRONCLAD); #139 docs-pack-2710b (SHTAB-2 §8, DESIGNER «Команды Codespaces», флаги migrate).
 ## Решения Автора (процессные — в правилах, см. шапку)
 - Бот — long polling. Cloudflare Tunnel — нет. Прод — Timeweb Cloud (Р-9), туннель дом→VPS autossh/WireGuard.
 - Память: сумма лимитов ≤ 2 ГБ; сейчас 1920 МБ (api 384, db 384, bot 512, garage 192, miniapp 128, projector 128, redis 64; migrate 128 одноразово), реально ~362 МБ (06.10).
@@ -80,7 +81,7 @@
 - 0-Б: после перевода репо в приватный форки и кэши ИИ останутся публичными (Р-14: риск принят Автором; закрыть в день 0-Б).
 - Прод — новая БД (compose: dev ≠ прод): тестовых участников нет, номера с #000001; пропуски номеров (#000027) — вероятно sequence при откатах (не проверено).
 ## Дефекты и блокеры
-- D-1…D-40: открытые и решённые, ждущие правки канона — docs/DEFECTS-FOUND.md; перенесённые целиком по правилу А — docs/DEFECTS-ARCHIVE.md (D-1, D-6, D-10, D-11, D-13, D-14, D-15…D-24, D-28). B-1, B-2, B-3 закрыты.
+- D-1…D-41: открытые и решённые, ждущие правки канона — docs/DEFECTS-FOUND.md; перенесённые целиком по правилу А — docs/DEFECTS-ARCHIVE.md (D-1, D-6, D-10, D-11, D-13, D-14, D-15…D-24, D-28). B-1, B-2, B-3 закрыты.
 - D-15 в (сверка ver_of_text) — проверено 02.10 (0.1.0 = 0.1.0); полная проверка — после первой смены версии текста (условие к 0-Б).
 ## Открытые решения Автора
 - Закрыто решениями 17–19.10: оплата и ПРОТИВОРЕЧИЕ ПО ОПЛАТЕ (Р-1), PSP (Р-4), хостинг (Р-9), S3 (Р-10), медиа D-1 (Р-5), ротация бэкапов (Р-13), настройки уведомлений (Р-6), тоны текстов (Р-8, «ОК А»), C5 (Р-3), Telegram в РФ — основной план (Р-11), авторизация до прода (Р-12).
