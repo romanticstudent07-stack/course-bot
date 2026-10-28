@@ -36,8 +36,11 @@ tick_noon(engine, now) → NotifyResult(sent, 0, skipped): кандидаты �
 day_marks; под замком — всё заново; ключ noon + outbox noon_nudge (T3) — один commit.
 Гейт: день открыт (day_clock.window = open), нет отметок, не сдан, не 13-P (канон 03 §3.13).
 
-tick(engine, now) → NotifyTick(tasks_open, noon): единственный вход для projector; правила идут
-по очереди, каждое в своём try/except: сбой правила → WARNING с именем класса и NotifyResult(0,0,0),
+Лестница «пришёл, но не отправил» (ladder-1, DM 3.17) — модуль app/notify_ladder.py
+(tick_ladder); вход — только этот tick.
+
+tick(engine, now) → NotifyTick(tasks_open, noon, ladder): единственный вход для projector; правила
+идут по очереди (tasks_open → noon → ladder), каждое в своём try/except: сбой правила → WARNING с именем класса и NotifyResult(0,0,0),
 следующее правило идёт.
 
 Время: now — только аргумент (в run_forever — day_clock.utcnow()); сравнения — в UTC или
@@ -178,6 +181,7 @@ class NotifyResult:
 class NotifyTick:
     tasks_open: NotifyResult
     noon: NotifyResult
+    ladder: NotifyResult = NotifyResult(0, 0, 0)  # ladder-1; по умолчанию — совместимость
 
 
 def _require_aware(now: datetime) -> None:
@@ -520,9 +524,13 @@ def _safe_rule(
 
 
 def tick(engine: Engine, now: datetime) -> NotifyTick:
-    """Вход для projector: правила tasks_open (НП3), затем noon (НП1). naive now → ValueError."""
+    """Вход для projector: tasks_open (НП3), noon (НП1), ladder (DM 3.17). naive now → ValueError."""
     _require_aware(now)
+    # notify_ladder импортирует notify_ops — поэтому импорт здесь, а не на уровне модуля.
+    from app import notify_ladder
+
     # Через имена модуля — подмена в тестах (monkeypatch) действует.
     tasks_open = _safe_rule("tasks_open", lambda e, n: tick_tasks_open(e, n), engine, now)
     noon = _safe_rule("noon", lambda e, n: tick_noon(e, n), engine, now)
-    return NotifyTick(tasks_open, noon)
+    ladder = _safe_rule("ladder", lambda e, n: notify_ladder.tick_ladder(e, n), engine, now)
+    return NotifyTick(tasks_open, noon, ladder)
