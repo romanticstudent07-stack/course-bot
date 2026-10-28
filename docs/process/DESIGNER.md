@@ -144,6 +144,16 @@ cd /workspaces/course-bot → git checkout main && git pull → git checkout -b 
 - Команды Codespaces — блок CODER.md «Под пакетом З1» дословно, но: Codespace репо DOCS-course-bot (стандартный образ), cd /workspaces/DOCS-course-bot; раскладка python3 tools/unpack.py (DOCS PR #14: разрешены architecture/, tools/ и корневые файлы как в course-bot; запрещены .github/, .githooks/); проверка bash tools/checks.sh — без цели, 18/18 зелёных. Первый старт Codespace: python3 tools/unpack.py --selftest | tail -3 → «САМОПРОВЕРКА ПРОЙДЕНА».
 - Цикл: пакет → unpack → checks 18/18 → PR в DOCS → мерж с комментарием ШТАБа → course-bot: Actions → «Sync architecture from DOCS-course-bot» → Run workflow → PR chore/sync-architecture → ШТАБ проверяет diff → мерж с комментарием. Ошибка в diff → сначала правка в DOCS, потом мерж синхронизации. Сама синхронизация — раз в сутки 03:00 UTC.
 
+## Канон и решения (решение Автора 27.10)
+План «6 кругов» отменён: канон DOCS правится по частям — только места, задетые очередной задачей, перед ней. Решения Автора — docs/decisions/DECISIONS.md.
+В каждой карточке — раздел «Канон и решения»:
+(а) какие места канона задача использует (файл §);
+(б) какие из них противоречат DECISIONS.md;
+(в) для каждого — точная правка DOCS «файл · найди точный текст · замени на»; normative (I1–I4, B17, errata, seam) — врезка в шапку + запись OVERRIDES.yaml с id AD-xx, тело не переписывать;
+(г) противоречий нет — строка «правок канона нет».
+Правка DOCS идёт маленьким PR и sync ДО промпта Агенту (цикл — раздел «DOCS-репо»).
+Файлы DOCS > 20 КБ — Автор вставляет кусками из Codespace, по ссылке не давать.
+
 ## Правила
 - Правило К (22.10) — docs/process/CANON-CHECK.md: канон по К-2 до вопроса; вопросы Автору — только по К-4 со строкой «Канон: проверено <файлы §>»; у решений в карточке — метка К-6.
 - Открытые решения Автора (docs/STATE.md) не решай — вопрос Автору.
