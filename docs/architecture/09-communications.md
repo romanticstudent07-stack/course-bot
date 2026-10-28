@@ -47,7 +47,7 @@ pause_shadow (Ф-Б7.2, 7.7 Фаза C) маскируется тремя раз
 
 Тон-регламент расширен принципом гендерно-нейтральной формулировки: в шаблонах используются безличные, пассивные и инфинитивные конструкции («Задание выполнено», «Попытка использована», «Требуется подтвердить»); хранение пола ради грамматики уведомлений запрещено — противоречит минимизации ПДн (Р258, NR-237). Эмодзи не может выступать маркером списка: булеты — • или <b>1.</b> (Р259, NR-238); Р152/Р207 в силе.
 
-Мотивационные сообщения получают жёсткую крышу: не более одного T3-сообщения на участника за 24 часа, независимо от количества триггеров; при конкуренции выигрывает более ранний по расписанию, остальные подавляются (Р260, NR-239). Это правило — продюсерский rate-limit, не пользовательский тумблер, NR-231 не нарушен. Профилактика 152-ФЗ/GDPR-давления.
+Мотивационные сообщения получают жёсткую крышу: не более одного полуденного T3-сообщения (T3-NOON-NUDGE) на участника в местные сутки (DECISIONS НП, В5 А), независимо от количества триггеров; при конкуренции выигрывает более ранний по расписанию, остальные подавляются (Р260, NR-239). Это правило — продюсерский rate-limit, не пользовательский тумблер, NR-231 не нарушен. Профилактика 152-ФЗ/GDPR-давления.
 
 ### Добавлены/заменены формулировки
 
@@ -407,8 +407,8 @@ added_rules:
       emoji_as_list_marker: forbidden
       allowed_bullets: ["•", "<b>1.</b>", "<b>—</b>"]
   - R260:
-      T3_global_rate_limit_per_participant:
-        window_hours: 24
+      T3_noon_rate_limit_per_participant:   # DECISIONS НП (В5 А): только полуденное T3-NOON-NUDGE
+        window: participant_local_day
         max_messages: 1
         conflict_resolution: earliest_scheduled_wins
         others_in_window: suppressed_silently
@@ -420,7 +420,7 @@ added_nr:
   - NR-236: no_slash_command_as_sole_participant_action
   - NR-237: no_gender_storage_for_notification_grammar
   - NR-238: no_emoji_as_list_marker
-  - NR-239: no_more_than_one_T3_per_24h_per_participant
+  - NR-239: no_more_than_one_noon_T3_per_local_day_per_participant   # DECISIONS НП (В5 А)
   - NR-240: no_link_loss_on_plain_text_fallback  # ссылки должны сохраняться как text (URL)
 
 text_catalog_delta:
