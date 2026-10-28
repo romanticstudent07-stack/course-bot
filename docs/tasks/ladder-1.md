@@ -42,12 +42,12 @@
 ## 6. notify_ladder: что сделать
 - Импорт без цикла: notify_ladder делает «from app import notify_ops» и берёт его помощники (_run_rule, _INSERT_KEY, _INSERT_OUTBOX, проверку «проектор догнал») только при вызове; notify_ops импортирует notify_ladder ВНУТРИ tick (комментарий: «notify_ladder импортирует notify_ops»). Своего SQL INSERT в outbox в notify_ladder нет.
 - Константы: EVENT_TYPE = "ladder_reminder", TIER = "T2", PLUS1H = 1 ч, MINUS2H = 2 ч, MINUS30M = 30 мин, TEXT_BY_STEP: plus1h → B9.day_ladder_plus1h, minus2h → B9.day_ladder_minus2h, minus30m → B9.day_ladder_minus30m.
-- step_times(first_mark_at, deadline) → [(plus1h, first+1 ч), (minus2h, deadline−2 ч), (minus30m, deadline−30 мин)] — в UTC. Дедлайн — функция day_clock (та, что даёт deadline_at в GET /day/current; имя по коду).
+- step_times(first_mark_at, deadline) → [(plus1h, min(first+1 ч, deadline−2 ч)), (minus2h, deadline−2 ч), (minus30m, deadline−30 мин)] — в UTC. Дедлайн — функция day_clock (та, что даёт deadline_at в GET /day/current; имя по коду).
 - decide_ladder(now, window_open, first_mark_at, deadline, done, keyed) → LadderPlan(send: step, late: tuple) | None:
   - None, если не window_open, нет first_mark_at, done;
   - due = шаги в порядке LADDER_STEPS с временем ≤ now и без ключа; due пуст → None;
   - send = последний из due по порядку шагов; late = остальные due;
-  - если время plus1h ≥ времени minus2h — plus1h никогда не send (он попадёт в late, когда наступит minus2h).
+  - время plus1h в step_times уже ограничено «−2 ч» (min): если first+1 ч ≥ deadline−2 ч, plus1h наступает вместе с minus2h и по правилу «send = последний» всегда уходит в late (В7 А).
 - tick_ladder(engine, now) → NotifyResult(sent = pid с отправкой, late = записанных ключей без отправки, skipped):
   1. Кандидаты — одна транзакция, только чтение: тот же фильтр, что у tick_noon; окно дня open; батчем: «SELECT pid, day_started_at, min(at) FROM day_marks WHERE pid = ANY(…) GROUP BY pid, day_started_at» (сравнение day_started_at в UTC), ключи day_done и ladder трёх шагов; decide_ladder; не больше MAX_PER_TICK.
   2. Каждый pid — своя транзакция как в notify_one (lock_timeout, lock_participant, _STATE, _eligible, проектор догнал, данные и решение заново).
@@ -68,9 +68,9 @@
 
 ## 9. Новые тесты — apps/api/tests/test_notify_ladder.py
 Без БД (MSK и VVO; день: активация 04:00, дедлайн 00:00):
-1. step_times: отметка 15:00 → 16:00, 22:00, 23:30.
+1. step_times: отметка 15:00 → 16:00, 22:00, 23:30; отметка 21:30 → plus1h = 22:00 (ограничено «−2 ч»).
 2. decide: 15:59 → None; 16:00 → send plus1h; 22:00 и plus1h с ключом → send minus2h; 22:00 без ключей (простой) → send minus2h, late (plus1h); 23:30 без ключей → send minus30m, late (plus1h, minus2h).
-3. Отметка 21:30 → plus1h = 22:30: в 21:45 → None; в 22:00 → send minus2h, late (plus1h).
+3. Отметка 21:30 → first+1 ч = 22:30, plus1h = 22:00 (min): в 21:45 → None; в 22:00 → send minus2h, late (plus1h).
 4. done → None; окно закрыто (после дедлайна) → None; отметок нет → None.
 5. key_ladder: формат, тот же момент в UTC — тот же ключ, неизвестный шаг → ValueError; TTL_BY_KIND["ladder"].
 6. Импорт в обоих порядках: subprocess sys.executable -c «import app.notify_ladder, app.notify_ops» и обратный, cwd apps/api — код возврата 0.
@@ -100,6 +100,7 @@
 - Подтвердить после мержа noon-1 строку §8 про test_notify_noon.py.
 - Алерт Автору «день 2 проблемы» (03 §3.17, yaml day_2_problem) — отдельная задача; нужен признак «пришёл, но не отправил» вчера.
 - Строка STATE после выката: text_registry 39; notify_ops — НП3, НП1, лестница.
+- Настоящие тексты лестницы (к 0-Б, юрист): 09 R257 — якорь «по Вашему времени» в ladder_texts; NR-224 — без нарастания угроз. Заглушки сейчас — не блокер.
 
 ## 14. РЕВЬЮЕР
 Не нужен: нет initData, 18+, оплаты, прав БД.
