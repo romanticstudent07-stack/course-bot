@@ -1,5 +1,5 @@
 {
-  "version": "0.4.0",
+  "version": "0.5.0",
   "owner_block": "B9",
   "durability_block": "B14",
   "entries": [
@@ -150,6 +150,25 @@
       "legal_status": "pre-legal-review",
       "text": "[ЗАГЛУШКА] Задания сегодняшнего дня ждут Вас. Загляните, когда будет минутка.",
       "notes": "noon-1: НП1, пишет notify_ops (T3). Заглушки до 0-Б."
+    },
+    {
+      "key": "B9.day_ladder_plus1h",
+      "tone": "soft",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Вы отметили задания, но отчёт ещё не отправлен. Всё в порядке? Нажмите «Отправить отчёт».",
+      "notes": "ladder-1: лестница DM 3.17, пишет notify_ladder (T2). Заглушки до 0-Б."
+    },
+    {
+      "key": "B9.day_ladder_minus2h",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] До конца приёма отчёта около 2 часов. Не забудьте отправить отчёт."
+    },
+    {
+      "key": "B9.day_ladder_minus30m",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] До конца приёма отчёта 30 минут. Отправьте отчёт, чтобы день засчитался."
     }
   ]
 }
