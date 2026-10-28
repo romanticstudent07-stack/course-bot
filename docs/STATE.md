@@ -5,6 +5,7 @@
 Правила ШТАБа — docs/process/SHTAB.md (часть 1) + docs/process/SHTAB-2.md (часть 2), читать ОБА.
 Процессные решения (роли, РЕВЬЮЕР, окна чатов, терминал, rulesets main, форки, LF, expected_tables.txt, миграции по одной) — в SHTAB.md, SHTAB-2.md, DESIGNER.md, README.md.
 ## Сейчас
+- 27.10 решение Автора: «6 кругов» отменены → страница решений docs/decisions/DECISIONS.md в каждом промпте + правка канона DOCS по частям перед задачей (DESIGNER «Канон и решения»). main = 4f4ef2a (#141 canon-1b-1, docs). Сервер 3e95900 (дальше только docs).
 - main = после #139 (#138, #139 — только docs; до них 3e95900: #135 pushi-notify-1, docs #136 rules-2610, #137 sync DOCS). Сервер ✅ 3e95900 (27.10): alembic 0010_access_grants, 16 таблиц, 7/7 Up, 5 healthy; образы api, projector, migrate — 3e95900 (27.10); bot — выкат bot-access-2 26.10 (hash образа — «не проверено»); miniapp — без изменений; DAY_TEST_ENTRY_ENABLED = false (явная строка в .env); PROJECTOR_VERSION = 3; в projector «часы» life_ops и notify_ops (НП3), tick 30 с; text_registry 35. Бот ходит в БД под coursebot_bot (роль app_bot), доставляет outbox. Сервер IRONCLAD работает только с main.
 - до 27.10 — снимок docs/history/STATE-3e95900.md
 - Норма сервера: 7/7 Up, 5 healthy (db, redis, garage, api, miniapp), healthcheck нет у bot и projector; curl / 200, /healthz 200, /miniapp/v1/onboarding/status 401; проектор проверяется по логам (Traceback 0, WARNING 0), projector once рядом с run запрещён (infra/SERVER-IRONCLAD.md:146). Роли: api — coursebot_api, projector — coursebot_projector, alembic и texts load — владелец (только DC --profile tools run --rm --no-deps migrate); env_file нет ни у одного сервиса; repr/str Settings без DSN. Перед каждой миграцией — бэкап before-000N и DC --profile tools build migrate. Новые тексты — build migrate до texts load.
@@ -39,24 +40,7 @@
 - 03.10–04.10: TTL 24 ч для finished — оставить; D-19 (sessionStorage) — пересмотр на 0-Б; D-20 = А; D-21 = А.
 - 16–18.10 В1–В22 — в карточках iter2-db-*, iter2-api-*; подробно — снимок.
 - 24.10 напоминания (Канон: 03 §3.1, 3.17–3.19; 09 R256–R260; Р-6): НП1 А — полуденное сообщение §3.18 в 12:00 по ТЗ участника; НП2 А — пуша «задания открылись» в 04:00 нет; НП3 А — после очереди и после онбординга «Задания откроются завтра в 04:00 по Вашему времени» (заглушка до 0-Б). Заявки Р-2 решает только Автор.
-## Решения, перекрывающие канон (до правки DOCS-course-bot)
-Источник — docs/decisions/R-2026-10-1.md (Р-1…Р-8) и -2.md (Р-9…Р-14). Расходится с docs/architecture/** — прав этот раздел.
-- Р-1: оплаты в Mini App нет совсем (onb.payment, payment.* не делать); оплата — в личке с Автором.
-- Р-2: доступ — промокод в боте → админ-тема [Выдать доступ]/[Запретить] → флажок по tg_user_id → онбординг; до прода обязательно (миграция + РЕВЬЮЕР), после send-1.
-- Р-2 (дополнение 23.10, api-access-1): first-launch при отсутствии активного участника и access_grants.status ≠ granted → 403 ACCESS_NOT_GRANTED, pid не создаётся; GET /onboarding/status → 200 {"status":"no_access"}. Перекрывает запрет «403 для неизвестного tg_user_id» (D-9 п.2, R327). Существующих участников гейт не трогает.
-- Р-3: фото участников нет: C5, слой «фото» Карты, /view_photos, /grant_photos_access, photo_view_log, S3_BUCKET_PHOTOS — не делать.
-- Р-4: PSP на потом (YooKassa — основной, CloudPayments — запасной, только внешний сайт); Refund Saga на потом; /refund — учётная операция.
-- Р-5: медиа — только внешний Telegram-канал; S3 pre-signed не делать; D-1 закрыт.
-- Р-6: настроек уведомлений нет (me.settings-notifications не делать).
-- Р-6а: паузы — 14 дн./год, одна ≤ 7 дн., между ≥ 24 ч; пока не построены (D-28).
-- Р-7: конфиг Чек-Апа — обычные правки вперёд через эпохи; критичные для безопасности — задним числом с «ПРИМЕНИТЬ ЗАДНИМ ЧИСЛОМ».
-- Р-8: ключ текста — раздел B2…B16/legal с большой буквы + имя маленькими; seed — JSON; тоны soft/neutral/dry + strict (юр-тексты).
-- Р-9: прод — Timeweb Cloud (VPS + managed PostgreSQL); Yandex Cloud — запасной.
-- Р-10: S3 прода — Timeweb Object Storage, только бэкапы и WORM-аудит.
-- Р-11: данные в РФ; исходящий трафик к api.telegram.org — прокси на зарубежном VPS; план Б — позже.
-- Р-12: initData TTL 24 ч до прода; к проду — session_jwt 60 мин (пересмотр Б14).
-- Р-13: full_backup_rotation_cycle = 30 дней; PITR у Timeweb не описан (к 0-Б и юристу).
-- Р-14: репо публичный до 0-Б; при 0-Б — приватный (чек-лист — R-2026-10-2.md).
+Решения, перекрывающие канон, — docs/decisions/DECISIONS.md (источник №1 по Правилу К).
 ## Очередь
 0. ПЛАН (25.10, ШТАБ): 1) Р-2 ✅; 2) docs-pack-2510; 3) ПРОЕКТИРОВЩИК (бесплатно) — карточка «мелочи ревью Р-2» + кандидаты miniapp-fix-2 (правило «Т») → Агент; 4) ПРОЕКТИРОВЩИК — пуши и лестница напоминаний (НП1–НП3); 5) правки канона в DOCS-course-bot по Р-1…Р-14 и D-35…D-39 (onb.payment, фото/C5, экран «доступ не открыт» D-39) — бесплатно, пакетом ПРОЕКТИРОВЩИКА, команды Codespaces по CODER.md «Под пакетом З1»; 6) iter2-api-3 (ревью #103) + Issues #13 #14 #15 #17 #18; 7) 01.11 пересмотр плана (до 0-Б). Открытые пункты audit-2 Н-1…Н-5 — у ШТАБа.
 1. Итерации 2–6 по build-order.md (с поправками Р-1…Р-14), затем 0-Б.
