@@ -29,7 +29,7 @@ from app.notify_ops import (
     choose_text,
     decide,
     is_late,
-    tick,
+    tick_tasks_open,
 )
 from app.projector import ProjectorResult, run_once
 from app.routers.day import enter_day_by_test_flag
@@ -110,7 +110,7 @@ def test_static_outbox_insert_and_kinds():
 # 6. tick с naive now; _notify_ops_step и run_forever переживают ошибку tick.
 def test_tick_naive_now_value_error():
     with pytest.raises(ValueError):
-        tick(object(), datetime(2026, 10, 21, 12, 0))  # type: ignore[arg-type]
+        tick_tasks_open(object(), datetime(2026, 10, 21, 12, 0))  # type: ignore[arg-type]
 
 
 class _Stop(Exception):
@@ -241,7 +241,7 @@ def _payload(raw) -> dict:
 def test_after_queue_one_outbox_then_nothing(db_engine):
     pid, started, tz = _queued_day(db_engine, 9801)
     now = _u(day_clock.queue_until(pid, started)) + timedelta(seconds=1)
-    assert tick(db_engine, now) == NotifyResult(sent=1, late=0, skipped=0)
+    assert tick_tasks_open(db_engine, now) == NotifyResult(sent=1, late=0, skipped=0)
     rows = _outbox(db_engine, pid)
     assert len(rows) == 1
     assert rows[0].event_type == "tasks_open_notice"
@@ -253,7 +253,7 @@ def test_after_queue_one_outbox_then_nothing(db_engine):
     assert _payload(rows[0].payload)["text_id"] == TEXT_TOMORROW  # 15:10–16:01 местного
     assert rows[0].tx_id is not None
     assert _tasks_open_keys(db_engine, pid) == [key_tasks_open(pid, started)]
-    assert tick(db_engine, now + timedelta(seconds=30)) == NotifyResult(0, 0, 0)
+    assert tick_tasks_open(db_engine, now + timedelta(seconds=30)) == NotifyResult(0, 0, 0)
     assert len(_outbox(db_engine, pid)) == 1
 
 
@@ -261,7 +261,7 @@ def test_after_queue_one_outbox_then_nothing(db_engine):
 def test_after_onboarding_day_entered_one_outbox(db_engine):
     pid, started = _open_day(db_engine, 9802)
     # now = старт дня: задания ещё не открыты (active_from ≥ started).
-    assert tick(db_engine, _u(started)) == NotifyResult(sent=1, late=0, skipped=0)
+    assert tick_tasks_open(db_engine, _u(started)) == NotifyResult(sent=1, late=0, skipped=0)
     rows = _outbox(db_engine, pid)
     assert len(rows) == 1
     assert _payload(rows[0].payload)["tier"] == "T2"
@@ -272,7 +272,7 @@ def test_after_onboarding_day_entered_one_outbox(db_engine):
 def test_late_after_active_from_key_only(db_engine):
     pid, started, tz = _queued_day(db_engine, 9803)
     now = _u(day_clock.active_from(started, tz)) + timedelta(seconds=1)
-    assert tick(db_engine, now) == NotifyResult(sent=0, late=1, skipped=0)
+    assert tick_tasks_open(db_engine, now) == NotifyResult(sent=0, late=1, skipped=0)
     assert _tasks_open_keys(db_engine, pid) == [key_tasks_open(pid, started)]
     assert _outbox(db_engine, pid) == []
 
@@ -311,7 +311,7 @@ def test_filters_nothing_written(db_engine, tg, case):
                 {"p": pid, "pl": json.dumps({})},
             )
     now = _u(day_clock.queue_until(pid, started)) + timedelta(seconds=1)
-    result = tick(db_engine, now)
+    result = tick_tasks_open(db_engine, now)
     assert result.sent == 0 and result.late == 0
     assert _tasks_open_keys(db_engine, pid) == []
     assert _outbox(db_engine, pid) == []

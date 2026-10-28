@@ -1,5 +1,5 @@
 {
-  "version": "0.3.0",
+  "version": "0.4.0",
   "owner_block": "B9",
   "durability_block": "B14",
   "entries": [
@@ -143,6 +143,13 @@
       "tone": "neutral",
       "legal_status": "pre-legal-review",
       "text": "[ЗАГЛУШКА] Задания откроются завтра в 04:00 по Вашему времени."
+    },
+    {
+      "key": "B9.day_noon_nudge",
+      "tone": "soft",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Задания сегодняшнего дня ждут Вас. Загляните, когда будет минутка.",
+      "notes": "noon-1: НП1, пишет notify_ops (T3). Заглушки до 0-Б."
     }
   ]
 }

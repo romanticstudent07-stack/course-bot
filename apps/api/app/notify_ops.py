@@ -15,7 +15,7 @@
   - после онбординга: ключа очереди нет, но есть событие day_entered с at = D (любой источник).
 Ключ tasks_open:{pid}:{dsa(D)} — один на день: есть → участник не кандидат.
 
-tick(engine, now) → NotifyResult(sent, late, skipped):
+tick_tasks_open(engine, now) → NotifyResult(sent, late, skipped):
   1. Кандидаты — своя транзакция, только чтение: фильтр life_ops (_CANDIDATES, BLOCKING_FLAGS);
      ключи и события day_entered — двумя запросами на всех; decide; не больше MAX_PER_TICK.
   2. Каждый pid — своя транзакция под lock_participant (lock_timeout LOCK_TIMEOUT): состояние
@@ -27,6 +27,19 @@ tick(engine, now) → NotifyResult(sent, late, skipped):
   Ошибка на pid → rollback, WARNING с именем класса, другие pid идут дальше.
   Ошибка чтения кандидатов — наружу (ловит projector).
 
+Полуденное НП1 (noon-1, docs/tasks/noon-1.md): НП1 А — в 12:00 по ТЗ участника; В3 А — пропущенное
+из-за простоя догоняется до 18:00 по ТЗ, с 18:00 не отправляется, ключ пишется только при
+отправке; В5 А — одно полуденное в местные сутки (ключ noon:{pid}:{местная дата}); В6 А —
+активность = только строки day_marks текущего day_started_at.
+tick_noon(engine, now) → NotifyResult(sent, 0, skipped): кандидаты — фильтр life_ops (свой SELECT
+с тем же WHERE: нужны module_no и day_no), окно 12:00–18:00, ключи noon и day_done, отметки
+day_marks; под замком — всё заново; ключ noon + outbox noon_nudge (T3) — один commit.
+Гейт: день открыт (day_clock.window = open), нет отметок, не сдан, не 13-P (канон 03 §3.13).
+
+tick(engine, now) → NotifyTick(tasks_open, noon): единственный вход для projector; правила идут
+по очереди, каждое в своём try/except: сбой правила → WARNING с именем класса и NotifyResult(0,0,0),
+следующее правило идёт.
+
 Время: now — только аргумент (в run_forever — day_clock.utcnow()); сравнения — в UTC или
 функциями day_clock. Лог: без pid, tz, payload и ПДн; итог тика — одной строкой INFO.
 """
@@ -36,13 +49,23 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import date, datetime, time, timezone
 from typing import Any
 
 from sqlalchemy import Connection, Engine, text
 
 from app import day_clock, life_ops
-from app.day_keys import KIND_TASKS_OPEN, TTL_TASKS_OPEN, key_day_queue, key_tasks_open
+from app.day_keys import (
+    KIND_NOON,
+    KIND_TASKS_OPEN,
+    TTL_NOON,
+    TTL_TASKS_OPEN,
+    key_day_done,
+    key_day_queue,
+    key_noon,
+    key_tasks_open,
+)
 from app.participant_lock import lock_participant
 
 logger = logging.getLogger("app.notify_ops")
@@ -60,6 +83,50 @@ EVENT_KIND_DAY_ENTERED = "day_entered"
 
 DECISION_SEND = "send"
 DECISION_LATE = "late"
+
+# НП1 (noon-1): время пушей, а не границы дня — поэтому здесь, а не в day_clock (Т2).
+NOON_FROM = time(12, 0)
+NOON_UNTIL = time(18, 0)
+NOON_EVENT_TYPE = "noon_nudge"
+NOON_TIER = "T3"
+TEXT_NOON = "B9.day_noon_nudge"
+
+# Тот же WHERE, что life_ops._CANDIDATES; плюс module_no и day_no (life_ops не меняется).
+_NOON_CANDIDATES = text(
+    """
+    SELECT pid, tz, day_started_at, module_no, day_no
+    FROM participant_state
+    WHERE lifecycle_phase IN ('onboarding', 'active')
+      AND author_pause_reason IS NULL
+      AND day_no IS NOT NULL
+      AND day_started_at IS NOT NULL
+      AND NOT (status_flags && CAST(:flags AS text[]))
+    ORDER BY day_started_at, pid
+    """
+)
+
+# Колонки life_ops._STATE (для life_ops._eligible) плюс module_no.
+_NOON_STATE = text(
+    """
+    SELECT lifecycle_phase, author_pause_reason, day_no, day_started_at, lives,
+           missed_streak, tz, status_flags, module_no
+    FROM participant_state
+    WHERE pid = :pid
+    """
+)
+
+_MARKS_ALL = text(
+    """
+    SELECT pid, day_started_at
+    FROM day_marks
+    WHERE pid = ANY(CAST(:pids AS uuid[]))
+    GROUP BY pid, day_started_at
+    """
+)
+
+_HAS_MARKS = text(
+    "SELECT 1 FROM day_marks WHERE pid = :pid AND day_started_at = :started LIMIT 1"
+)
 
 _EXISTING_KEYS = text(
     "SELECT key FROM idempotency_keys WHERE key = ANY(CAST(:keys AS text[]))"
@@ -105,6 +172,12 @@ class NotifyResult:
     sent: int
     late: int
     skipped: int
+
+
+@dataclass(frozen=True)
+class NotifyTick:
+    tasks_open: NotifyResult
+    noon: NotifyResult
 
 
 def _require_aware(now: datetime) -> None:
@@ -247,18 +320,23 @@ def notify_one(engine: Engine, pid: uuid.UUID, now: datetime) -> str | None:
     return decision
 
 
-def tick(engine: Engine, now: datetime) -> NotifyResult:
-    """НП3 на момент now (aware). Ошибка чтения кандидатов — наружу."""
-    _require_aware(now)
+def _run_rule(
+    engine: Engine,
+    now: datetime,
+    label: str,
+    candidates: Callable[[Engine, datetime], list[uuid.UUID]],
+    one: Callable[[Engine, uuid.UUID, datetime], str | None],
+) -> tuple[int, int, int]:
+    """Общий цикл правила: каждый pid — try/except; (sent, late, skipped)."""
     sent = 0
     late = 0
     skipped = 0
-    for pid in _candidates(engine, now):
+    for pid in candidates(engine, now):
         try:
-            decision = notify_one(engine, pid, now)
+            decision = one(engine, pid, now)
         except Exception as exc:  # сбой одного pid не роняет тик
             # Без pid и текста исключения: только имя класса.
-            logger.warning("notify_ops: error on notify (%s)", type(exc).__name__)
+            logger.warning("notify_ops: error on %s (%s)", label, type(exc).__name__)
             decision = None
         if decision == DECISION_SEND:
             sent += 1
@@ -266,5 +344,185 @@ def tick(engine: Engine, now: datetime) -> NotifyResult:
             late += 1
         else:
             skipped += 1
+    return sent, late, skipped
+
+
+def tick_tasks_open(engine: Engine, now: datetime) -> NotifyResult:
+    """НП3 на момент now (aware). Ошибка чтения кандидатов — наружу."""
+    _require_aware(now)
+    sent, late, skipped = _run_rule(engine, now, "notify", _candidates, notify_one)
     logger.info("notify_ops: tick sent=%s late=%s skipped=%s", sent, late, skipped)
     return NotifyResult(sent, late, skipped)
+
+
+# ------------------------------- НП1 (noon-1) -------------------------------
+
+
+def _local(now: datetime, tz: str | None) -> datetime:
+    _require_aware(now)
+    return _utc(now).astimezone(day_clock.zone(tz))
+
+
+def noon_window(now: datetime, tz: str | None) -> bool:
+    """NOON_FROM ≤ местное время < NOON_UNTIL (НП1 А, В3 А)."""
+    return NOON_FROM <= _local(now, tz).time() < NOON_UNTIL
+
+
+def noon_local_date(now: datetime, tz: str | None) -> date:
+    """Местная дата участника — для ключа noon (В5 А)."""
+    return _local(now, tz).date()
+
+
+def is_13p(module_no: int | None, day_no: int | None) -> bool:
+    """13-P: день 13 чётного модуля (канон 03 §3.13; module_no сквозной по курсу)."""
+    return day_no == 13 and module_no is not None and module_no % 2 == 0
+
+
+def decide_noon(
+    now: datetime,
+    tz: str | None,
+    started_at: datetime,
+    module_no: int | None,
+    day_no: int | None,
+    marked: bool,
+    done: bool,
+    has_key: bool,
+) -> str | None:
+    """"send" | None. marked — есть отметки за started_at; done — ключ day_done; has_key — ключ noon."""
+    if not noon_window(now, tz):
+        return None
+    if day_clock.window(started_at, tz, now) != day_clock.WINDOW_OPEN:
+        return None
+    if marked or done or has_key:
+        return None
+    if is_13p(module_no, day_no):
+        return None
+    return DECISION_SEND
+
+
+def _noon_candidates(engine: Engine, now: datetime) -> list[uuid.UUID]:
+    """Своя транзакция, только чтение; не больше MAX_PER_TICK."""
+    with engine.connect() as conn:
+        rows = conn.execute(
+            _NOON_CANDIDATES, {"flags": list(life_ops.BLOCKING_FLAGS)}
+        ).all()
+        rows = [r for r in rows if noon_window(now, r.tz)]
+        if not rows:
+            conn.rollback()
+            return []
+        keys: list[str] = []
+        for r in rows:
+            keys.append(key_noon(r.pid, noon_local_date(now, r.tz)))
+            keys.append(key_day_done(r.pid, r.day_started_at))
+        existing = {k[0] for k in conn.execute(_EXISTING_KEYS, {"keys": keys}).all()}
+        mark_rows = conn.execute(_MARKS_ALL, {"pids": [r.pid for r in rows]}).all()
+        conn.rollback()
+    marked: dict[uuid.UUID, set[datetime]] = {}
+    for pid, started in mark_rows:
+        marked.setdefault(pid, set()).add(_utc(started))
+    found: list[uuid.UUID] = []
+    for r in rows:
+        decision = decide_noon(
+            now,
+            r.tz,
+            r.day_started_at,
+            r.module_no,
+            r.day_no,
+            _utc(r.day_started_at) in marked.get(r.pid, set()),
+            key_day_done(r.pid, r.day_started_at) in existing,
+            key_noon(r.pid, noon_local_date(now, r.tz)) in existing,
+        )
+        if decision is None:
+            continue
+        found.append(r.pid)
+        if len(found) >= MAX_PER_TICK:
+            break
+    return found
+
+
+def _plan_noon(conn: Connection, pid: uuid.UUID, row: Any, now: datetime) -> str | None:
+    """Шаг 2 под замком: None — пропуск (ничего не писать)."""
+    if not life_ops._eligible(row):
+        return None
+    if conn.execute(life_ops._PENDING_EVENT, {"pid": pid}).first() is not None:
+        return None  # проектор не догнал pid — следующий тик
+    started: datetime = row.day_started_at
+    has_key = (
+        conn.execute(_HAS_KEY, {"key": key_noon(pid, noon_local_date(now, row.tz))}).first()
+        is not None
+    )
+    done = conn.execute(_HAS_KEY, {"key": key_day_done(pid, started)}).first() is not None
+    marked = (
+        conn.execute(_HAS_MARKS, {"pid": pid, "started": started}).first() is not None
+    )
+    return decide_noon(
+        now, row.tz, started, row.module_no, row.day_no, marked, done, has_key
+    )
+
+
+def _write_noon(conn: Connection, pid: uuid.UUID, row: Any, now: datetime) -> bool:
+    """Шаг 3: ключ noon, затем строка outbox. Commit делает вызывающий."""
+    inserted = conn.execute(
+        _INSERT_KEY,
+        {
+            "key": key_noon(pid, noon_local_date(now, row.tz)),
+            "kind": KIND_NOON,
+            "ttl": TTL_NOON,
+        },
+    ).first()
+    if inserted is None:
+        return False  # ключ уже есть — ничего не пишем
+    payload = {"text_id": TEXT_NOON, "payload_vars": {}, "tier": NOON_TIER}
+    conn.execute(
+        _INSERT_OUTBOX,
+        {
+            "aggregate_id": str(pid),
+            "event_type": NOON_EVENT_TYPE,
+            "payload": json.dumps(payload),
+        },
+    )
+    return True
+
+
+def noon_one(engine: Engine, pid: uuid.UUID, now: datetime) -> str | None:
+    """Один pid — одна транзакция под замком participant:pid. "send" — отправлено."""
+    with engine.connect() as conn:
+        conn.execute(_LOCK_TIMEOUT)  # SET LOCAL — только эта транзакция
+        lock_participant(conn, pid)
+        row = conn.execute(_NOON_STATE, {"pid": pid}).first()
+        decision = None if row is None else _plan_noon(conn, pid, row, now)
+        if decision is None or not _write_noon(conn, pid, row, now):
+            conn.rollback()
+            return None
+        conn.commit()  # ключ + outbox — один commit
+    return decision
+
+
+def tick_noon(engine: Engine, now: datetime) -> NotifyResult:
+    """НП1 на момент now (aware). late всегда 0. Ошибка чтения кандидатов — наружу."""
+    _require_aware(now)
+    sent, _late, skipped = _run_rule(engine, now, "noon", _noon_candidates, noon_one)
+    logger.info("notify_ops: noon sent=%s skipped=%s", sent, skipped)
+    return NotifyResult(sent, 0, skipped)
+
+
+_EMPTY = NotifyResult(0, 0, 0)
+
+
+def _safe_rule(
+    name: str, rule: Callable[[Engine, datetime], NotifyResult], engine: Engine, now: datetime
+) -> NotifyResult:
+    try:
+        return rule(engine, now)
+    except Exception as exc:  # сбой правила не роняет другие правила
+        logger.warning("notify_ops: rule %s failed (%s)", name, type(exc).__name__)
+        return _EMPTY
+
+
+def tick(engine: Engine, now: datetime) -> NotifyTick:
+    """Вход для projector: правила tasks_open (НП3), затем noon (НП1). naive now → ValueError."""
+    _require_aware(now)
+    # Через имена модуля — подмена в тестах (monkeypatch) действует.
+    tasks_open = _safe_rule("tasks_open", lambda e, n: tick_tasks_open(e, n), engine, now)
+    noon = _safe_rule("noon", lambda e, n: tick_noon(e, n), engine, now)
+    return NotifyTick(tasks_open, noon)
