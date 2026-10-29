@@ -8,7 +8,6 @@ interface Route {
 }
 
 // '/' занят onb.welcome (miniapp-screens.md); экран текущего дня — /day (day.current).
-// HomePage.tsx оставлен в репозитории, но в маршрутах не используется.
 export const routes: Route[] = [
   { path: '/day', Component: DayPage },
 ];

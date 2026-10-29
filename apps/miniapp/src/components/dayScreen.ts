@@ -3,6 +3,7 @@
 // «Какой экран» — только status ответа GET /miniapp/v1/day/current; «можно ли нажать» — только
 // buttons_active. Окно 04:00–00:00 клиент не считает. Дату и время для показа берём из строки
 // сервера (wallClock), не через new Date() в поясе телефона. «Сейчас» приходит аргументом nowMs.
+// miniapp-fix-2: dayRetryDelayMs — повтор GET /day/current только после 503 SERVICE_UNAVAILABLE.
 import { ApiError, type DayCurrent } from '../api/client.ts';
 import { errorMessage } from './OnboardingFlow.tsx';
 
@@ -138,4 +139,16 @@ export function testEnterAction(err: unknown): TestEnterAction {
   if (err.status === 409 && err.code === 'DAY_STATE_SYNCING') return 'retry_1s';
   if (err.status === 409 && err.code === 'RECONSENT_REQUIRED') return 'reopen';
   return 'error';
+}
+
+export const DAY_RETRY_DELAYS_MS = [2000, 4000] as const;
+
+/** Повтор GET /day/current после ошибки: мс или null. Только 503 SERVICE_UNAVAILABLE;
+ *  attempt — сколько повторов уже сделано (0 → 2000, 1 → 4000, 2 и больше → null). */
+export function dayRetryDelayMs(err: unknown, attempt: number): number | null {
+  if (!(err instanceof ApiError)) return null;
+  if (err.status !== 503 || err.code !== 'SERVICE_UNAVAILABLE') return null;
+  if (!Number.isInteger(attempt) || attempt < 0) return null;
+  if (attempt >= DAY_RETRY_DELAYS_MS.length) return null;
+  return DAY_RETRY_DELAYS_MS[attempt] ?? null;
 }

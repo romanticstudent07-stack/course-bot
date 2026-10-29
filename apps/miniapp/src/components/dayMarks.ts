@@ -4,7 +4,7 @@
 // DM 3.10: после первого нажатия гаснет. DM 3.11: ложного успеха нет.
 // «Можно ли нажать» — только view и buttons_active; окно 04:00–00:00 клиент не считает (коды 409 — от сервера).
 import { ApiError, type DayBlock, type DayCurrent, type DayMarkValue, type DayReportIn } from '../api/client.ts';
-import type { DayView } from './dayScreen.ts';
+import { PARTICIPANT_NOT_FOUND_MESSAGE, type DayView } from './dayScreen.ts';
 import { errorMessage } from './OnboardingFlow.tsx';
 
 export type LocalMarks = Record<string, DayMarkValue>;
@@ -97,6 +97,7 @@ const DAY_CHANGED_CODES = new Set(['DAY_NOT_STARTED', 'BLOCK_NOT_IN_DAY', 'MARKS
 
 export function actionMessage(err: unknown, kind: 'mark' | 'report'): string {
   if (err instanceof ApiError) {
+    if (err.status === 404 && err.code === 'PARTICIPANT_NOT_FOUND') return PARTICIPANT_NOT_FOUND_MESSAGE;
     if (err.code === 'DAY_CLOSED') return DAY_CLOSED_MESSAGE;
     if (err.code === 'DAY_NOT_ACTIVE') return DAY_NOT_ACTIVE_MESSAGE;
     if (err.code === 'DAY_ALREADY_SUBMITTED') return DAY_ALREADY_SUBMITTED_MESSAGE;
