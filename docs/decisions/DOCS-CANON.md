@@ -6,3 +6,12 @@
 - ⏳ Пакет 2: D-39/Р-2 (Панель — новая команда доступа; экран «доступ не открыт»; гейт lifecycle.start; 04 §4.7 Q-95 «Заплатил, но не прошёл»). Р-6 (me.settings-notifications убрать из И3 и miniapp-screens; парковка Б9 → «экрана нет»; DM 3.18 «отключаемые» = категория доставки; DIVISION Б9). Р-6а (02 П.8 → патч И2: 14 дн./год, ≤ 7 дн., ≥ 24 ч; D-28). Р-7 (D-20 в appendix закрыть — ложный конфликт; фраза hard-confirm «ПРИМЕНИТЬ ЗАДНИМ ЧИСЛОМ»). Р-8 (контракт ключей: разделы B2…B16/legal; И4 seed — JSON config/texts/*.json; тонов 4: soft/neutral/dry + strict — «ОК А» 19.10; формат {домен}.{имя} в miniapp-screens; CONTEXT «три тона»). Р-9 (Yandex → Timeweb: build-order 0-Б, 99-legal, AGENTS, CONTEXT). Р-10 (S3 = Timeweb Object Storage, только бэкапы + WORM-аудит: 14-data, DIVISION 15, Уровень 0 / И0-Б). Р-11 (прокси к api.telegram.org в build-order 0-Б; мониторинг; D-6). Р-12 (R327 отменён SEAM-1 → OVERRIDES; D-9 частично; AGENTS TTL 1 ч /refund). Р-13 (30 дней: boot-gate п.6, RET-2, D-18 и D-12 appendix, full_backup_rotation_cycle в build-order). D-35…D-38. Вопрос Автору (деньги): 13p «(с оплатой)» в miniapp-screens и «компенсирующий отзыв из refund saga» в DIVISION Б13.
 - — Р-14 в канон не идёт: чек-лист в R-2026-10-2.md, исполнить в день 0-Б.
 - Цикл: Codespace DOCS (cd /workspaces/DOCS-course-bot) → unpack → checks 18/18 → PR DOCS → мерж с комментарием → course-bot Actions «Sync architecture from DOCS-course-bot» → Run workflow → PR chore/sync-architecture → ШТАБ читает diff построчно → мерж с комментарием. DOCS приватный: PR DOCS ШТАБ не видит — проверка по ответу окна + Files changed у Автора.
+
+## Решения ШТАБа по решениям Автора (27.10) — перенесено из DECISIONS.md 28.10
+В-1: снять фото-риски L-13, L-15 (в Р-3 «L-11» — ошибка номера).
+В-2: PSP и авто-возвраты на потом, ручной /refund — учёт, сроки возврата — юристу.
+В-3: экспорт данных участнику — только файлом в боте.
+В-7: bot_never_serves — из 15-content-antipiracy.
+В-8: sh14 и banned не трогать.
+В-9: запрет «вне РФ» — на бакеты бэкапов и аудита.
+OVERRIDES: новые id — AD-xx (N-xx заняты E-yaml-normalizations); E4 остаётся 22 + пометка «L-13, L-15 сняты по Р-3».
