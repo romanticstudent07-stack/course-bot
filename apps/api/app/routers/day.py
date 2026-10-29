@@ -57,12 +57,17 @@ PUT /day/marks (iter2-api-2a), тело {block_id ^[a-z0-9_]{1,32}$, value done 
   INSERT day_marks (pid и day_started_at — с сервера) ON CONFLICT DO UPDATE SET value:
   at не меняется — время первой отметки блока («пришёл» = min(at), В19) → commit → 200.
 
-POST /day/report/submit (iter2-api-2b; П-31, В15, В18, В22), заголовок X-Client-Op-Id (uuid,
-обязателен; нет или не uuid → 422 VALIDATION_ERROR), тело {marks: [{block_id, value}]}.
+POST /day/report/submit (iter2-api-2b; П-31, В15, В18, В22), заголовок X-Client-Op-Id (UUID v4,
+обязателен; нет, не UUID или не v4 → 422 VALIDATION_ERROR), тело {marks: [{block_id, value}]}.
 Одна транзакция, порядок:
   1) нет активного pid под замком → 404 PARTICIPANT_NOT_FOUND;
-  2) есть ключ day_report:{pid}:{op_id}: params_hash тот же → 200 {verdict: result_ref,
-     queued: true} без записи (В15); другой → 409 IDEMPOTENCY_CONFLICT;
+  2) есть ключ day_report:{pid}:{op_id} (api-3; срок — в SQL: created_at + ttl < now):
+     2.1) срок истёк → 409 IDEMPOTENCY_CONFLICT (то же message, что в 2.2);
+     2.2) params_hash другой → 409 IDEMPOTENCY_CONFLICT;
+     2.3) result_ref не из VERDICTS (в том числе NULL) → WARNING без pid, op_id и result_ref,
+          503 SERVICE_UNAVAILABLE;
+     2.4) иначе → 200 {verdict: result_ref, queued: true} без записи (В15);
+     во всех ветках шага 2 — rollback;
   3) позиции нет → 409 DAY_NOT_STARTED; контента нет → 503 DAY_CONTENT_MISSING;
      окно not_active → 409 DAY_NOT_ACTIVE, closed → 409 DAY_CLOSED (повтор op_id — раньше);
   4) набор block_id ≠ блоки дня (лишний, недостающий, повтор) → 422 MARKS_INCOMPLETE;
@@ -70,7 +75,7 @@ POST /day/report/submit (iter2-api-2b; П-31, В15, В18, В22), заголов�
   6) UPSERT day_marks, как PUT (at не меняется);
   7) вердикт — app/day_report.py; жизни не меняются (Ш1);
   8) INSERT idempotency_keys: day_done (result_ref = verdict) и day_report (result_ref,
-     params_hash) — без ON CONFLICT: под замком дубля нет, а если будет — ошибка БД → 503;
+     params_hash; day_report с created_at = now запроса (api-3)) — без ON CONFLICT: под замком дубля нет, а если будет — ошибка БД → 503;
   8а) INSERT idempotency_keys day_queue:{pid}:{dsa(next_started)} (kind day_queue) — тоже без
      ON CONFLICT, как day_done: конфликт → IntegrityError → rollback → 503;
   9) INSERT participant_events kind day_report_submitted, payload {day_started_at (dsa),
@@ -91,10 +96,10 @@ import uuid
 from collections.abc import Mapping
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
-from pydantic import BaseModel, Field
+from pydantic import UUID4, BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
@@ -122,7 +127,7 @@ from app.day_keys import (
     key_day_queue,
     key_day_report,
 )
-from app.day_report import VERDICT_PASSED, marks_complete, params_hash, verdict
+from app.day_report import VERDICT_PASSED, VERDICTS, marks_complete, params_hash, verdict
 from app.db.models import ACTOR_SYSTEM, DayMark, IdempotencyKey, ParticipantEvent
 from app.db.session import get_db_session
 from app.participant_lock import active_pid_locked
@@ -181,6 +186,19 @@ _INSERT_KEY_SQL = text(
 _INSERT_RESULT_KEY_SQL = text(
     "INSERT INTO idempotency_keys (key, kind, ttl, result_ref, params_hash) "
     "VALUES (:key, :kind, CAST(:ttl AS interval), :result_ref, :params_hash)"
+)
+
+# api-3: ключ day_report — с created_at = now запроса (day_clock), а не DEFAULT now():
+# время в логике — только day_clock (У1); срок ключа считается от того же «сейчас».
+_INSERT_REPORT_KEY_SQL = text(
+    "INSERT INTO idempotency_keys (key, kind, ttl, result_ref, params_hash, created_at) "
+    "VALUES (:key, :kind, CAST(:ttl AS interval), :result_ref, :params_hash, :created_at)"
+)
+
+# api-3: повтор op_id — срок ключа сравнивается в SQL с :now запроса.
+_REPORT_KEY_SQL = text(
+    "SELECT result_ref, params_hash, (created_at + ttl < :now) AS expired "
+    "FROM idempotency_keys WHERE key = :key"
 )
 
 
@@ -377,18 +395,25 @@ def insert_idempotency_key(session: Session, key: str, kind: str) -> None:
 
 
 def _insert_result_key(
-    session: Session, key: str, kind: str, result_ref: str | None, p_hash: str | None
+    session: Session,
+    key: str,
+    kind: str,
+    result_ref: str | None,
+    p_hash: str | None,
+    created_at: datetime | None = None,
 ) -> None:
-    session.execute(
-        _INSERT_RESULT_KEY_SQL,
-        {
-            "key": key,
-            "kind": kind,
-            "ttl": TTL_BY_KIND[kind],
-            "result_ref": result_ref,
-            "params_hash": p_hash,
-        },
-    )
+    """created_at задаётся только для day_report (api-3); остальные ключи — DEFAULT колонки."""
+    params: dict[str, Any] = {
+        "key": key,
+        "kind": kind,
+        "ttl": TTL_BY_KIND[kind],
+        "result_ref": result_ref,
+        "params_hash": p_hash,
+    }
+    if created_at is None:
+        session.execute(_INSERT_RESULT_KEY_SQL, params)
+    else:
+        session.execute(_INSERT_REPORT_KEY_SQL, {**params, "created_at": created_at})
 
 
 def _upsert_mark(
@@ -638,23 +663,26 @@ def submit_day_report(
     pairs = [(mark.block_id, mark.value) for mark in body.marks]
     p_hash = params_hash(pairs)
     report_key = key_day_report(pid, str(op_id))
-    previous = session.execute(
-        select(IdempotencyKey.result_ref, IdempotencyKey.params_hash).where(
-            IdempotencyKey.key == report_key
-        )
-    ).first()
+    previous = session.execute(_REPORT_KEY_SQL, {"key": report_key, "now": now}).first()
     if previous is not None:
-        if previous.params_hash == p_hash:
+        # 2.1 срок ключа истёк и 2.2 другой params_hash — один ответ: клиенту различать не нужно.
+        if previous.expired or previous.params_hash != p_hash:
+            raise _released(
+                session,
+                _error(
+                    status.HTTP_409_CONFLICT,
+                    "IDEMPOTENCY_CONFLICT",
+                    "Этот X-Client-Op-Id уже использован с другим отчётом.",
+                ),
+            )
+        # 2.3 битый result_ref (в том числе NULL) → 503; pid, op_id и result_ref в лог не идут.
+        if previous.result_ref not in VERDICTS:
             _rollback(session)
-            return DayReportOut(verdict=previous.result_ref, queued=True)
-        raise _released(
-            session,
-            _error(
-                status.HTTP_409_CONFLICT,
-                "IDEMPOTENCY_CONFLICT",
-                "Этот X-Client-Op-Id уже использован с другим отчётом.",
-            ),
-        )
+            logger.warning("day/report/submit: ключ day_report с result_ref вне VERDICTS — 503")
+            raise _service_unavailable()
+        # 2.4
+        _rollback(session)
+        return DayReportOut(verdict=previous.result_ref, queued=True)
 
     row = session.execute(_STATE_SQL, {"pid": pid}).first()
     if row is None or not _has_position(row) or row.day_started_at is None:
@@ -684,7 +712,7 @@ def submit_day_report(
         _upsert_mark(session, pid, started, block_id, is_done)
     result = verdict(day, done)
     _insert_result_key(session, done_key, KIND_DAY_DONE, result, None)
-    _insert_result_key(session, report_key, KIND_DAY_REPORT, result, p_hash)
+    _insert_result_key(session, report_key, KIND_DAY_REPORT, result, p_hash, created_at=now)
     # Один и тот же next_started — в ключ очереди и в payload (У4).
     next_started = next_day_started(now, row.tz)
     next_stage_no, next_module_no, next_day_no = next_position(content, row, result)
@@ -848,7 +876,9 @@ def put_day_marks(
 )
 def post_day_report_submit(
     body: DayReportIn,
-    client_op_id: uuid.UUID = Header(alias=CLIENT_OP_ID_HEADER),
+    # Annotated, а не «= Header(...)»: в форме с default FastAPI 0.141 теряет проверку версии
+    # UUID4 (uuid1 проходит); в Annotated — 422 на не-v4 (api-3).
+    client_op_id: Annotated[UUID4, Header(alias=CLIENT_OP_ID_HEADER)],
     ctx: InitDataContext = Depends(require_init_data),
     session: Session = Depends(get_db_session),
     content: DayContent = Depends(get_day_content),

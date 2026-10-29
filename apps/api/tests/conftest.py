@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import pytest
+from sqlalchemy import text
 
 # apps/api в sys.path — тесты запускаются из корня репо или из apps/api.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -172,6 +173,26 @@ def grant_access(engine_or_url, tg_user_id: int, status: str = "granted") -> Non
     finally:
         if isinstance(engine_or_url, str):
             engine.dispose()
+
+
+_LOCK_WAITER_SQL = text(
+    "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' "
+    "AND NOT granted AND :h = ANY(pg_blocking_pids(pid))"
+)
+
+
+def wait_for_lock_waiter(engine, holder_pid: int, timeout: float = 10.0) -> bool:
+    """True, когда кто-то ждёт advisory-замок, который держит holder_pid (iter2-api-3).
+
+    Фильтр pg_blocking_pids — чужие ожидания в кластере не считаются. Опрос каждые 0.05 с.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with engine.connect() as conn:
+            if conn.execute(_LOCK_WAITER_SQL, {"h": holder_pid}).scalar_one() > 0:
+                return True
+        time.sleep(0.05)
+    return False
 
 
 def count_registry_rows(engine, tg_user_id: int | None = None) -> int:

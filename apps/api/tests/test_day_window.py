@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import threading
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -33,6 +32,7 @@ from app.routers.day import (
     submit_day_report,
 )
 from app.routers.onboarding import register_with_consents
+from tests.conftest import wait_for_lock_waiter
 
 MSK = "Europe/Moscow"
 SECOND = timedelta(seconds=1)
@@ -273,6 +273,7 @@ def test_race_on_midnight_now_taken_after_lock(db_engine, monkeypatch):
     ready = threading.Event()
     release = threading.Event()
     out: dict[str, object] = {}
+    holder: dict[str, int] = {}
 
     def run(name: str, hold: bool):
         with Session(db_engine) as session:
@@ -280,6 +281,7 @@ def test_race_on_midnight_now_taken_after_lock(db_engine, monkeypatch):
                 real_commit = session.commit
 
                 def held_commit():
+                    holder["pid"] = session.execute(text("SELECT pg_backend_pid()")).scalar_one()
                     ready.set()
                     release.wait(WAIT_SECONDS)
                     real_commit()
@@ -298,7 +300,7 @@ def test_race_on_midnight_now_taken_after_lock(db_engine, monkeypatch):
     try:
         assert ready.wait(WAIT_SECONDS)
         t2.start()
-        time.sleep(0.3)  # второй успевает упереться в замок participant:pid
+        assert wait_for_lock_waiter(db_engine, holder["pid"])  # второй ждёт замок participant:pid
         assert len(calls) == 1  # «сейчас» второго ещё не взято: он ждёт замок
     finally:
         release.set()

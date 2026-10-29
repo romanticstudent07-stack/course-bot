@@ -21,8 +21,8 @@ dsa (Ш4) — day_started_at в UTC, ISO 8601: ts.astimezone(timezone.utc).isofo
 Один и тот же момент в любом поясе даёт один и тот же ключ; naive datetime → ValueError
 (момент без пояса неоднозначен).
 
-Срок ttl в логике не проверяется: UPDATE и DELETE ключей нет ни у кого,
-строка есть → ключ есть. Здесь только построение ключей; пишут их iter2-api-2a/2b.
+Срок ttl в логике не проверяется, кроме day_report: submit отвечает 409
+на повтор после created_at + ttl (api-3). UPDATE и DELETE ключей нет ни у кого. Здесь только построение ключей; пишут их iter2-api-2a/2b.
 """
 from __future__ import annotations
 
