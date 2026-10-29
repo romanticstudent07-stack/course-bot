@@ -1,6 +1,6 @@
 # AGENT-BRIEF.md — шпаргалка для AI-агента (читать ПЕРВОЙ)
 
-Версия 2.3 · 19.10.2026. Актуальный hash main — в промпте или в `docs/STATE.md`.
+Версия 2.4 · 28.10.2026. Актуальный hash main — в промпте или в `docs/STATE.md`.
 Заменяет обязательное чтение 9 файлов. Если промпт задачи противоречит этому
 файлу — прав промпт. Если этот файл противоречит AGENTS.md / CONTEXT.md в части
 «что читать» и «как тестировать» — прав этот файл.
@@ -73,7 +73,7 @@ Telegram-курс личной трансформации: Mini App + бот + b
 
 ## 6. Что уже есть в коде
 
-Сводка по коду (main 9f3746a). Подробности — docstring модулей: их читать, если файл в «ЧТО ПРОЧИТАТЬ».
+Сводка по коду (main 4995a06; обновлены PROJECTOR_VERSION, app_bot, миграции). Подробности — docstring модулей: их читать, если файл в «ЧТО ПРОЧИТАТЬ».
 
 - `apps/api/main.py` — сборка приложения. Все `/miniapp/v1/**` идут ТОЛЬКО через общий роутер
   `build_miniapp_v1_router`: сначала `require_init_data`, затем `rate_limit` (401 раньше 429).
@@ -114,11 +114,10 @@ Telegram-курс личной трансформации: Mini App + бот + b
 - `app/projector.py` — единственный писатель `participant_state` (E1 / INV-1):
   `python -m app.projector run | once`; битый DSN или нет драйвера → WARNING с именем класса, код 1.
   API в `participant_state` не пишет никогда.
-- Проектор: `PROJECTOR_VERSION = 2`; знает kinds `mini_app_first_consent`, `day_entered`,
-  `day_report_submitted`.
-- Роль БД `app_bot` создана миграцией 0009, но кода БД в `apps/bot` пока нет.
-- Миграции: от `0001_init` до `0009_app_bot` (последняя — в `docs/STATE.md`).
-  Таблиц в public (без alembic_version): 15; полный список — `apps/api/tests/expected_tables.txt`.
+- Проектор: `PROJECTOR_VERSION = 3`; список kinds — docstring `app/projector.py`.
+- Бот ходит в БД под ролью `app_bot` (миграция 0009): outbox (доставка), access_grants (заявки Р-2).
+- Миграции: от `0001_init` до `0010_access_grants` (последняя — в `docs/STATE.md`).
+  Таблиц в public (без alembic_version): 16; полный список — `apps/api/tests/expected_tables.txt`.
   `tg_user_registry`: pid uuid PK, tg_user_id bigint (>0), short_no bigint identity UNIQUE,
   created_via text (= 'mini_app_first_launch'), created_at timestamptz, tombstoned_at timestamptz;
   UNIQUE (tg_user_id) WHERE tombstoned_at IS NULL.
@@ -149,7 +148,7 @@ Telegram-курс личной трансформации: Mini App + бот + b
 
 ## 9. Открытые решения Автора — агент их НЕ решает
 
-Решённое — docs/STATE.md, «Решения, перекрывающие канон», и docs/decisions/R-2026-10-*.md; они главнее docs/architecture/**.
+Решённое — docs/decisions/DECISIONS.md (перекрывает docs/architecture/**; полный текст — R-2026-10-*.md).
 Открыто: план Б по Telegram в РФ (Р-11: зарубежный бот-слой + уведомление РКН, 152-ФЗ — юристу);
 модель авторизации к проду — механизм продления `session_jwt` (D-9, Р-12); PITR у Timeweb
 и достаточность 30 дней хранения бэкапов — к 0-Б и юристу (Р-13); три несовместимости Б17;
