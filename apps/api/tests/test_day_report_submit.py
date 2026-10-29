@@ -3,6 +3,7 @@
 С БД — только CI. Проверки заголовка X-Client-Op-Id (422) — без БД, через TestClient
 (api_client: фейковый BOT_TOKEN, недоступная БД; rate_limit подменён).
 """
+import logging
 import threading
 import time
 import uuid
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 from app import day_clock
 from app.day_content import get_day_content
 from app.day_keys import dsa, key_day_done, key_day_queue, key_day_report
+from app.day_report import params_hash
 from app.projector import run_once
 from app.rate_limit import rate_limit
 from app.routers.day import (
@@ -28,7 +30,7 @@ from app.routers.day import (
 )
 from app.routers.onboarding import register_with_consents
 from app.telegram_init_data import INIT_DATA_HEADER, InitDataContext, TelegramUser
-from tests.conftest import valid_init_data
+from tests.conftest import valid_init_data, wait_for_lock_waiter
 
 
 # life-ops-b: «сейчас» — от фактического day_started_at после открытия дня (ревью #112, Н1):
@@ -78,6 +80,14 @@ def test_without_op_id_422(api_client):
 
 def test_op_id_not_uuid_422(api_client):
     r = _post(api_client, {"X-Client-Op-Id": "not-a-uuid"})
+    assert r.status_code == 422
+    assert r.json()["code"] == "VALIDATION_ERROR"
+    assert _header_error(r)
+
+
+def test_op_id_v1_422(api_client):
+    # api-3: заголовок — только UUID v4; uuid1 → 422.
+    r = _post(api_client, {"X-Client-Op-Id": str(uuid.uuid1())})
     assert r.status_code == 422
     assert r.json()["code"] == "VALIDATION_ERROR"
     assert _header_error(r)
@@ -387,18 +397,21 @@ def test_queue_key_conflict_503_nothing_written(db_engine, _inside_day_window):
     ) == 0
 
 
-def test_parallel_submits_one_200_one_409(db_engine):
-    pid, _ = _open_day(db_engine, 9310)
+def _race_submits(engine, tg_user_id: int, op_ids, bodies) -> dict[str, object]:
+    """Два submit одного pid: commit первого придержан, пока второй не ждёт замок participant:pid
+    (pg_locks + pg_blocking_pids держателя, api-3). Возвращает {"first": …, "second": …}."""
     ready = threading.Event()
     release = threading.Event()
     out: dict[str, object] = {}
+    holder: dict[str, int] = {}
 
-    def run(name: str, hold: bool):
-        with Session(db_engine) as session:
+    def run(name: str, hold: bool, op_id, body: DayReportIn):
+        with Session(engine) as session:
             if hold:
                 real_commit = session.commit
 
                 def held_commit():
+                    holder["pid"] = session.execute(text("SELECT pg_backend_pid()")).scalar_one()
                     ready.set()
                     release.wait(WAIT_SECONDS)
                     real_commit()
@@ -406,27 +419,128 @@ def test_parallel_submits_one_200_one_409(db_engine):
                 session.commit = held_commit
             try:
                 out[name] = submit_day_report(
-                    session, 9310, uuid.uuid4(), _body(_all("done")), get_day_content()
+                    session, tg_user_id, op_id, body, get_day_content()
                 )
             except Exception as exc:
                 out[name] = exc
 
-    t1 = threading.Thread(target=run, args=("first", True))
-    t2 = threading.Thread(target=run, args=("second", False))
+    t1 = threading.Thread(target=run, args=("first", True, op_ids[0], bodies[0]))
+    t2 = threading.Thread(target=run, args=("second", False, op_ids[1], bodies[1]))
     t1.start()
     try:
         assert ready.wait(WAIT_SECONDS)
         t2.start()
-        time.sleep(0.3)  # второй успевает упереться в замок participant:pid
+        assert wait_for_lock_waiter(engine, holder["pid"])  # второй ждёт замок participant:pid
     finally:
         release.set()
     t1.join(WAIT_SECONDS)
     t2.join(WAIT_SECONDS)
+    return out
+
+
+def test_parallel_submits_one_200_one_409(db_engine):
+    pid, _ = _open_day(db_engine, 9310)
+    out = _race_submits(
+        db_engine, 9310, (uuid.uuid4(), uuid.uuid4()), (_body(_all("done")), _body(_all("done")))
+    )
     assert out["first"].verdict == "passed"
     second = out["second"]
     assert isinstance(second, HTTPException)
     assert (second.status_code, second.detail["code"]) == (409, "DAY_ALREADY_SUBMITTED")
     assert _events(db_engine, pid) == 1
+
+
+def test_double_tap_same_op_id_both_200(db_engine):
+    # api-3: двойной тап — один op_id и одно тело в обоих потоках → оба 200 passed.
+    pid, _ = _open_day(db_engine, 9315)
+    op_id = uuid.uuid4()
+    out = _race_submits(db_engine, 9315, (op_id, op_id), (_body(_all("done")), _body(_all("done"))))
+    assert out["first"].verdict == "passed"
+    assert out["second"].verdict == "passed"
+    assert _events(db_engine, pid) == 1
+    assert _keys(db_engine, pid) == 3  # day_done, day_report, day_queue — по одному
+
+
+def _set_report_created_at(engine, pid, op_id, created_at: datetime) -> None:
+    # Только в тесте, через db_engine (владелец БД); в коде приложения UPDATE ключей нет.
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE idempotency_keys SET created_at = :t WHERE key = :k"),
+            {"t": created_at, "k": key_day_report(pid, str(op_id))},
+        )
+
+
+def _state_started(engine, pid):
+    return _scalar(engine, "SELECT day_started_at FROM participant_state WHERE pid = :p", p=pid)
+
+
+def test_repeat_within_ttl_after_projector_200(db_engine):
+    # В15: повтор в пределах 1 ч — 200 тем же телом, даже после сдвига дня проектором.
+    pid, started = _open_day(db_engine, 9316)
+    op_id = uuid.uuid4()
+    first = _submit(db_engine, 9316, op_id, _body(_all("done")))
+    run_once(db_engine)
+    assert dsa(_state_started(db_engine, pid)) != dsa(started)
+    _set_report_created_at(db_engine, pid, op_id, _CLOCK["now"] - timedelta(minutes=30))
+    assert _submit(db_engine, 9316, op_id, _body(_all("done"))) == first
+    assert _events(db_engine, pid) == 1
+
+
+def test_repeat_after_ttl_409(db_engine):
+    # api-3: срок ключа day_report (1 ч) истёк → 409 IDEMPOTENCY_CONFLICT.
+    pid, started = _open_day(db_engine, 9317)
+    op_id = uuid.uuid4()
+    _submit(db_engine, 9317, op_id, _body(_all("done")))
+    run_once(db_engine)
+    assert dsa(_state_started(db_engine, pid)) != dsa(started)
+    _set_report_created_at(db_engine, pid, op_id, _CLOCK["now"] - timedelta(hours=2))
+    err = _http_error(db_engine, 9317, op_id, _body(_all("done")))
+    assert (err.status_code, err.detail["code"]) == (409, "IDEMPOTENCY_CONFLICT")
+    assert _events(db_engine, pid) == 1
+    assert _keys(db_engine, pid) == 3
+
+
+def test_result_ref_outside_verdicts_503(db_engine, caplog):
+    # ревью #103 п.5: битый result_ref → 503, WARNING без pid и op_id, ничего не записано.
+    pid, _ = _open_day(db_engine, 9318)
+    op_id = uuid.uuid4()
+    with db_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO idempotency_keys (key, kind, ttl, result_ref, params_hash, created_at) "
+                "VALUES (:k, 'day_report', CAST('1 hour' AS interval), 'bogus', :h, :t)"
+            ),
+            {
+                "k": key_day_report(pid, str(op_id)),
+                "h": params_hash(list(_all("done").items())),
+                "t": _CLOCK["now"],
+            },
+        )
+    with caplog.at_level(logging.WARNING, logger="app.routers.day"):
+        err = _http_error(db_engine, 9318, op_id, _body(_all("done")))
+    assert (err.status_code, err.detail["code"]) == (503, "SERVICE_UNAVAILABLE")
+    warnings = [
+        r for r in caplog.records if r.name == "app.routers.day" and r.levelno == logging.WARNING
+    ]
+    assert warnings
+    for record in warnings:
+        message = record.getMessage()
+        assert str(pid) not in message and str(op_id) not in message
+    assert _events(db_engine, pid) == 0
+    assert _marks(db_engine, pid) == {}
+
+
+def test_report_key_created_at_is_request_now(db_engine):
+    # api-3: created_at ключа day_report = «сейчас» запроса (day_clock), а не DEFAULT now().
+    pid, _ = _open_day(db_engine, 9319)
+    op_id = uuid.uuid4()
+    _submit(db_engine, 9319, op_id, _body(_all("done")))
+    created_at = _scalar(
+        db_engine,
+        "SELECT created_at FROM idempotency_keys WHERE key = :k",
+        k=key_day_report(pid, str(op_id)),
+    )
+    assert _u(created_at) == _u(_CLOCK["now"])
 
 
 def test_lives_unchanged_and_get_submitted(db_engine):

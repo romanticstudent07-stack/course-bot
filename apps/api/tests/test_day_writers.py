@@ -33,7 +33,7 @@ from app.routers.day import (
 )
 from app.routers.onboarding import register_with_consents
 from app.telegram_init_data import InitDataContext, TelegramUser, require_init_data
-from tests.conftest import FAKE_BOT_TOKEN, UNREACHABLE_DSN
+from tests.conftest import FAKE_BOT_TOKEN, UNREACHABLE_DSN, wait_for_lock_waiter
 
 
 # life-ops-b: «сейчас» — внутри окна дня из test-enter (ближайшая 04:00 + 1 ч, пояс по умолчанию).
@@ -50,7 +50,6 @@ def _inside_day_window(monkeypatch):
 
 WAIT_SECONDS = 10
 TEST_ENTER = "/miniapp/v1/day/test-enter"
-_WAITERS_SQL = text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted")
 
 
 # ---------------------------- Д1: гонка писателей ----------------------------
@@ -63,16 +62,6 @@ def _call(fn, session):
         return exc
 
 
-def _wait_for_lock_waiter(engine) -> bool:
-    deadline = time.monotonic() + WAIT_SECONDS
-    while time.monotonic() < deadline:
-        with engine.connect() as conn:
-            if conn.execute(_WAITERS_SQL).scalar_one() > 0:
-                return True
-        time.sleep(0.05)
-    return False
-
-
 def _race(engine, first, second):
     """first(session): commit придержан, пока second(session) не ждёт замок.
 
@@ -81,12 +70,14 @@ def _race(engine, first, second):
     ready = threading.Event()
     release = threading.Event()
     out: dict[str, object] = {}
+    holder: dict[str, int] = {}
 
     def run_first():
         with Session(engine) as session:
             real_commit = session.commit
 
             def held_commit():
+                holder["pid"] = session.execute(text("SELECT pg_backend_pid()")).scalar_one()
                 ready.set()
                 release.wait(WAIT_SECONDS)
                 real_commit()
@@ -104,7 +95,7 @@ def _race(engine, first, second):
     try:
         assert ready.wait(WAIT_SECONDS), "первый писатель не дошёл до commit"
         t2.start()
-        waited = _wait_for_lock_waiter(engine)
+        waited = wait_for_lock_waiter(engine, holder["pid"], WAIT_SECONDS)
     finally:
         release.set()
     t1.join(WAIT_SECONDS)
