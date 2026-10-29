@@ -1,6 +1,7 @@
 // apps/miniapp/src/components/dayMarks.test.ts — vitest, environment node.
 // Отметки и отчёт дня (day-screen-b): подписи, «все отмечены», можно ли нажать / отправить,
 // тело отчёта, тот же X-Client-Op-Id при повторе, действия и сообщения после ошибок.
+// miniapp-fix-2: 404 PARTICIPANT_NOT_FOUND на отметке и отчёте — текст без префикса.
 import { describe, expect, it, vi } from 'vitest';
 
 import { ApiError, type DayBlock, type DayCurrent } from '../api/client.ts';
@@ -20,6 +21,7 @@ import {
   reuseOpId,
   submitErrorAction,
 } from './dayMarks.ts';
+import { PARTICIPANT_NOT_FOUND_MESSAGE } from './dayScreen.ts';
 import { errorMessage } from './OnboardingFlow.tsx';
 
 const block = (n: number, extra: Partial<DayBlock> = {}): DayBlock => ({
@@ -197,5 +199,14 @@ describe('actionMessage', () => {
     expect(actionMessage(e503, 'mark')).toBe(`Отметка не сохранилась. ${errorMessage(e503)}`);
     const net = new TypeError('Failed to fetch');
     expect(actionMessage(net, 'report')).toBe(`Отчёт не отправлен. ${errorMessage(net)}`);
+  });
+  it('404 PARTICIPANT_NOT_FOUND → участник не найден, без префикса', () => {
+    const e = new ApiError(404, 'PARTICIPANT_NOT_FOUND', '');
+    expect(actionMessage(e, 'mark')).toBe(PARTICIPANT_NOT_FOUND_MESSAGE);
+    expect(actionMessage(e, 'report')).toBe(PARTICIPANT_NOT_FOUND_MESSAGE);
+  });
+  it('404 NOT_FOUND — с префиксом', () => {
+    const e = new ApiError(404, 'NOT_FOUND', '');
+    expect(actionMessage(e, 'mark')).toBe(`Отметка не сохранилась. ${errorMessage(e)}`);
   });
 });

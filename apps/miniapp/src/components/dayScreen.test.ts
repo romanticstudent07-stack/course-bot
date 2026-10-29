@@ -1,13 +1,16 @@
 // apps/miniapp/src/components/dayScreen.test.ts — vitest, environment node.
 // Экран /day (day-screen-a): view по status, дата из строки сервера, ключи текстов,
 // задержки повторного GET, сообщения ошибок и действия после ошибки тестового входа.
+// miniapp-fix-2: повтор GET /day/current после 503 SERVICE_UNAVAILABLE (dayRetryDelayMs).
 import { describe, expect, it } from 'vitest';
 
 import { ApiError, type DayBlock, type DayCurrent } from '../api/client.ts';
 import {
+  DAY_RETRY_DELAYS_MS,
   DAY_TEXT_KEYS,
   PARTICIPANT_NOT_FOUND_MESSAGE,
   dayErrorMessage,
+  dayRetryDelayMs,
   dayTextKeys,
   dayView,
   refetchDelayMs,
@@ -193,5 +196,32 @@ describe('testEnterAction', () => {
     expect(testEnterAction(new ApiError(404, 'PARTICIPANT_NOT_FOUND', 'x'))).toBe('error');
     expect(testEnterAction(new ApiError(503, 'SERVICE_UNAVAILABLE', 'x'))).toBe('error');
     expect(testEnterAction(new TypeError('Failed to fetch'))).toBe('error');
+  });
+});
+
+describe('dayRetryDelayMs', () => {
+  const e503 = new ApiError(503, 'SERVICE_UNAVAILABLE', 'x');
+
+  it('DAY_RETRY_DELAYS_MS = [2000, 4000]', () => {
+    expect(DAY_RETRY_DELAYS_MS).toEqual([2000, 4000]);
+  });
+
+  it('503 SERVICE_UNAVAILABLE: attempt 0 → 2000, 1 → 4000, 2 → null', () => {
+    expect(dayRetryDelayMs(e503, 0)).toBe(2000);
+    expect(dayRetryDelayMs(e503, 1)).toBe(4000);
+    expect(dayRetryDelayMs(e503, 2)).toBeNull();
+    expect(dayRetryDelayMs(e503, 3)).toBeNull();
+  });
+
+  it('без повтора: DAY_CONTENT_MISSING, 404, 401, сеть', () => {
+    expect(dayRetryDelayMs(new ApiError(503, 'DAY_CONTENT_MISSING', 'x'), 0)).toBeNull();
+    expect(dayRetryDelayMs(new ApiError(404, 'PARTICIPANT_NOT_FOUND', 'x'), 0)).toBeNull();
+    expect(dayRetryDelayMs(new ApiError(401, 'TG_INIT_INVALID', 'x'), 0)).toBeNull();
+    expect(dayRetryDelayMs(new TypeError('Failed to fetch'), 0)).toBeNull();
+  });
+
+  it('attempt −1 или не целое → null', () => {
+    expect(dayRetryDelayMs(e503, -1)).toBeNull();
+    expect(dayRetryDelayMs(e503, 0.5)).toBeNull();
   });
 });

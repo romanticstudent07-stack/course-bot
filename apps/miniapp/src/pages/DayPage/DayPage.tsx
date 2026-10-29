@@ -9,6 +9,8 @@
 // «Отправить отчёт» (POST /day/report/submit) — когда отмечены все блоки (DM 3.3). Один X-Client-Op-Id
 // на то же тело: повтор после ошибки — с ним же (D-17). «Отправлено» — только после 200 (DM 3.11);
 // после первого нажатия кнопка гаснет (DM 3.10). Вердикт экран не показывает (DM 3.19).
+// miniapp-fix-2: «Обновить» — без «Загрузка…», экран остаётся, кнопка гаснет и пишет «Обновляем…».
+// miniapp-fix-2: 503 SERVICE_UNAVAILABLE — 2 повтора GET (2 с, 4 с) тем же timerRef (dayRetryDelayMs).
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import {
@@ -39,6 +41,7 @@ import {
   DAY_TEXT_KEYS,
   REOPEN_MESSAGE,
   dayErrorMessage,
+  dayRetryDelayMs,
   dayTextKeys,
   dayView,
   refetchDelayMs,
@@ -54,6 +57,11 @@ const noticeStyle: CSSProperties = { fontWeight: 600 };
 const rowStyle: CSSProperties = { display: 'flex', gap: 8 };
 
 type LoadStatus = 'loading' | 'ready' | 'error';
+
+// full — «Загрузка…» (монтирование, «Повторить», тестовый вход);
+// refresh — «Обновить»: экран на месте, кнопка «Обновляем…»;
+// silent — таймер и после отметки / отчёта: экран как был.
+type LoadMode = 'full' | 'refresh' | 'silent';
 
 interface BlockViewProps {
   block: DayBlock;
@@ -110,10 +118,15 @@ export function DayPage() {
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+  // «Обновить» нажата и GET (с повторами) ещё идёт: кнопка гаснет и пишет «Обновляем…».
+  const [refreshing, setRefreshing] = useState(false);
 
   const mountedRef = useRef(true);
   const requestIdRef = useRef(0);
+  // Один таймер на всё: и повтор после 503, и refetchDelayMs пишут сюда; load() начинается с clearTimer().
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Сколько повторов GET после 503 SERVICE_UNAVAILABLE уже сделано; сбрасывают успех и новый load не-повтор.
+  const retryRef = useRef(0);
   const lastViewRef = useRef<DayView | null>(null);
   const sameViewTriesRef = useRef(0);
   const requestedKeysRef = useRef<Set<string>>(new Set());
@@ -151,15 +164,19 @@ export function DayPage() {
       });
   }, []);
 
-  // Один GET. showLoading — только при монтировании, «Обновить» и «Повторить»; по таймеру — тихо.
+  // Один GET. mode — см. LoadMode; isRetry — повтор после 503 SERVICE_UNAVAILABLE (счётчик не сбрасывать).
   const load = useCallback(
-    (showLoading: boolean) => {
+    (mode: LoadMode, isRetry = false) => {
       clearTimer();
+      if (!isRetry) retryRef.current = 0;
       const id = ++requestIdRef.current;
-      if (showLoading) setStatus('loading');
+      if (mode === 'full') setStatus('loading');
+      setRefreshing(mode === 'refresh');
       getDayCurrent()
         .then((resp: DayCurrent) => {
           if (!mountedRef.current || id !== requestIdRef.current) return;
+          retryRef.current = 0;
+          setRefreshing(false);
           const next = dayView(resp);
           sameViewTriesRef.current = lastViewRef.current === next ? sameViewTriesRef.current + 1 : 0;
           lastViewRef.current = next;
@@ -175,10 +192,19 @@ export function DayPage() {
           setStatus('ready');
           if (next !== 'unknown') loadTexts(resp);
           const delay = refetchDelayMs(resp, Date.now(), sameViewTriesRef.current);
-          if (delay !== null) timerRef.current = setTimeout(() => load(false), delay);
+          if (delay !== null) timerRef.current = setTimeout(() => load('silent'), delay);
         })
         .catch((err: unknown) => {
           if (!mountedRef.current || id !== requestIdRef.current) return;
+          const retryDelay = dayRetryDelayMs(err, retryRef.current);
+          if (retryDelay !== null) {
+            // Между попытками экран прежний: full — «Загрузка…», refresh — «Обновляем…», silent — как был.
+            retryRef.current += 1;
+            timerRef.current = setTimeout(() => load(mode, true), retryDelay);
+            return;
+          }
+          retryRef.current = 0;
+          setRefreshing(false);
           setLoadError(err);
           setStatus('error');
         });
@@ -188,16 +214,24 @@ export function DayPage() {
 
   useEffect(() => {
     mountedRef.current = true;
-    load(true);
+    load('full');
     return () => {
       mountedRef.current = false;
       clearTimer();
     };
   }, [load]);
 
-  const refresh = () => {
+  // «Повторить» на экране ошибки и в view 'unknown' — с «Загрузка…», как раньше.
+  const retryLoad = () => {
     setNotice('');
-    load(true);
+    load('full');
+  };
+
+  // «Обновить» — экран остаётся на месте, кнопка гаснет и пишет «Обновляем…».
+  const refresh = () => {
+    if (refreshing) return;
+    setNotice('');
+    load('refresh');
   };
 
   const testEnter = () => {
@@ -213,7 +247,7 @@ export function DayPage() {
       postDayTestEnter()
         .then(() => {
           finish();
-          if (mountedRef.current) load(true);
+          if (mountedRef.current) load('full');
         })
         .catch((err: unknown) => {
           if (!mountedRef.current) return;
@@ -225,7 +259,7 @@ export function DayPage() {
             return;
           }
           finish();
-          if (action === 'refetch') load(true);
+          if (action === 'refetch') load('full');
           else if (action === 'reopen') setNotice(REOPEN_MESSAGE);
           else setNotice(errorMessage(err));
         });
@@ -248,7 +282,7 @@ export function DayPage() {
         if (!mountedRef.current) return;
         // Отметка остаётся прежней: ложного успеха нет (DM 3.11).
         setNotice(actionMessage(err, 'mark'));
-        if (markErrorAction(err) === 'refetch') load(false);
+        if (markErrorAction(err) === 'refetch') load('silent');
       })
       .finally(() => {
         pendingRef.current.delete(blockId);
@@ -274,7 +308,7 @@ export function DayPage() {
         if (!mountedRef.current) return;
         sentFromRef.current = sentFrom;
         setSent(true);
-        load(false);
+        load('silent');
       })
       .catch((err: unknown) => {
         if (!mountedRef.current) return;
@@ -282,9 +316,9 @@ export function DayPage() {
         const action = submitErrorAction(err);
         if (action === 'new_op_refetch') {
           opRef.current = null;
-          load(false);
+          load('silent');
         } else if (action === 'refetch') {
-          load(false);
+          load('silent');
         }
         // 'retry' — кнопка снова активна, повтор уйдёт с тем же opId.
       })
@@ -308,7 +342,7 @@ export function DayPage() {
     return (
       <div className="page" style={pageStyle}>
         <p>{dayErrorMessage(loadError)}</p>
-        <button type="button" onClick={refresh}>
+        <button type="button" onClick={retryLoad}>
           Повторить
         </button>
       </div>
@@ -319,7 +353,7 @@ export function DayPage() {
     return (
       <div className="page" style={pageStyle}>
         <p>Что-то пошло не так.</p>
-        <button type="button" onClick={refresh}>
+        <button type="button" onClick={retryLoad}>
           Повторить
         </button>
       </div>
@@ -419,8 +453,8 @@ export function DayPage() {
     <div className="page" style={pageStyle}>
       {body}
       {notice ? <p role="alert" style={noticeStyle}>{notice}</p> : null}
-      <button type="button" onClick={refresh}>
-        Обновить
+      <button type="button" disabled={refreshing} onClick={refresh}>
+        {refreshing ? 'Обновляем…' : 'Обновить'}
       </button>
     </div>
   );
