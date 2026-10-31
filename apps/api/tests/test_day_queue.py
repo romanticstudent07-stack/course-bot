@@ -8,6 +8,7 @@ active_from / deadline_at у дня из test-enter.
 """
 from __future__ import annotations
 
+import shutil
 import uuid
 from datetime import datetime, time, timedelta, timezone
 from types import SimpleNamespace
@@ -17,7 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app import day_clock
-from app.day_content import get_day_content
+from app.day_content import CONTENT_DIR, DayContent, get_day_content, load_day_content
 from app.day_keys import dsa, key_day_queue
 from app.projector import run_once
 from app.routers.day import (
@@ -59,14 +60,15 @@ def _row(day_no: int):
     ("day_no", "result", "expected"),
     [
         (1, "passed", (1, 1, 2)),
-        (2, "passed", (1, 1, 2)),  # последний день контента-заглушки → та же позиция
+        (2, "passed", (1, 1, 3)),
+        (6, "passed", (1, 1, 6)),  # последний день контента → та же позиция
         (1, "not_passed", (1, 1, 1)),
         (1, "all_not_done", (1, 1, 1)),
     ],
 )
 def test_next_position(day_no, result, expected):
     content = get_day_content()
-    assert content.get(1, 1, 3) is None  # заглушка: дней 1 и 2
+    assert content.get(1, 1, 7) is None  # заглушка: дни 1–6
     assert next_position(content, _row(day_no), result) == expected
 
 
@@ -98,9 +100,11 @@ def _body(values: dict[str, str]) -> DayReportIn:
     )
 
 
-def _submit(engine, tg_user_id: int, values: dict[str, str]):
+def _submit(engine, tg_user_id: int, values: dict[str, str], content: DayContent | None = None):
+    if content is None:
+        content = get_day_content()
     with Session(engine) as session:
-        return submit_day_report(session, tg_user_id, uuid.uuid4(), _body(values), get_day_content())
+        return submit_day_report(session, tg_user_id, uuid.uuid4(), _body(values), content)
 
 
 def _payload(engine, pid) -> dict:
@@ -156,18 +160,26 @@ def test_payload_next_and_queue_key(db_engine, monkeypatch, tg_user_id, values, 
     assert _key_kind(db_engine, key_day_queue(pid, new_started)) == "day_queue"
 
 
-def test_passed_on_last_content_day_same_position(db_engine, monkeypatch):
+def test_passed_on_last_content_day_same_position(db_engine, monkeypatch, tmp_path):
+    # content-1: в репо дни 1–6; здесь контент только из копий дней 1 и 2 (день 2 последний).
+    folder = tmp_path / "module_1"
+    folder.mkdir()
+    for name in ("day_01.json", "day_02.json"):
+        shutil.copyfile(CONTENT_DIR / "module_1" / name, folder / name)
+    content = load_day_content(tmp_path)
+    assert content.get(1, 1, 3) is None
+
     pid, started, tz, _ = _open_day(db_engine, 9504)
     now = _in_window(started, tz)
     _set_now(monkeypatch, now)
-    _submit(db_engine, 9504, PASSED)
+    _submit(db_engine, 9504, PASSED, content)
     run_once(db_engine)
     day2_started, tz, day_no = _state(db_engine, pid)
     assert day_no == 2
     now2 = _in_window(day2_started, tz)
     _set_now(monkeypatch, now2)
-    day2 = get_day_content().get(1, 1, 2)
-    _submit(db_engine, 9504, {b.block_id: "done" for b in day2.blocks})
+    day2 = content.get(1, 1, 2)
+    _submit(db_engine, 9504, {b.block_id: "done" for b in day2.blocks}, content)
     payload = _payload(db_engine, pid)
     assert (payload["next_stage_no"], payload["next_module_no"], payload["next_day_no"]) == (1, 1, 2)
     assert payload["next_day_started_at"] == dsa(now2)

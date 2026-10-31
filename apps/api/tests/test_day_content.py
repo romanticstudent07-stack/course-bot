@@ -1,5 +1,6 @@
 """Контент дня (iter2-api-1, карточка §9): заглушки валидны, по одному отказу на правило,
-ключи title/help есть в заглушках текстов, битый контент роняет create_app. Без БД."""
+ключи title/help есть в заглушках текстов, битый контент роняет create_app. Без БД.
+content-1: дни 3–6 модуля 1 есть, дней 7 и 13 нет."""
 from __future__ import annotations
 
 import json
@@ -44,6 +45,13 @@ def test_stub_content_is_valid():
     day2 = content.get(1, 1, 2)
     assert day1 is not None and len(day1.blocks) == 4
     assert day2 is not None and len(day2.blocks) == 5
+    # content-1: дни 3–6 модуля 1 — заглушки по образцу дня 2.
+    for d in (3, 4, 5, 6):
+        stub = content.get(1, 1, d)
+        assert stub is not None and len(stub.blocks) == 5
+    assert content.get(1, 1, 7) is None
+    # Страж research §4: дня 13 в контенте нет до модерации (авто-прохода нет).
+    assert content.get(1, 1, 13) is None
     for day in content.days():
         assert any(b.critical for b in day.blocks)
         assert day.min_optional <= sum(1 for b in day.blocks if not b.critical)

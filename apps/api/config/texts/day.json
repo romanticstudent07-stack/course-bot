@@ -1,5 +1,5 @@
 {
-  "version": "0.5.0",
+  "version": "0.6.0",
   "owner_block": "B9",
   "durability_block": "B14",
   "entries": [
@@ -111,6 +111,247 @@
       "tone": "neutral",
       "legal_status": "pre-legal-review",
       "text": "[ЗАГЛУШКА] Модуль 1, день 2: справка к заданию 5."
+    },
+    {
+      "key": "B9.day_m1_d03_task_1_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 3: название задания 1.",
+      "notes": "content-1: дни 3–6 модуля 1. Заглушки до 0-Б."
+    },
+    {
+      "key": "B9.day_m1_d03_task_1_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 3: справка к заданию 1."
+    },
+    {
+      "key": "B9.day_m1_d03_task_2_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 3: название задания 2."
+    },
+    {
+      "key": "B9.day_m1_d03_task_2_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 3: справка к заданию 2."
+    },
+    {
+      "key": "B9.day_m1_d03_task_3_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 3: название задания 3."
+    },
+    {
+      "key": "B9.day_m1_d03_task_3_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 3: справка к заданию 3."
+    },
+    {
+      "key": "B9.day_m1_d03_task_4_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 3: название задания 4."
+    },
+    {
+      "key": "B9.day_m1_d03_task_4_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 3: справка к заданию 4."
+    },
+    {
+      "key": "B9.day_m1_d03_task_5_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 3: название задания 5."
+    },
+    {
+      "key": "B9.day_m1_d03_task_5_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 3: справка к заданию 5."
+    },
+    {
+      "key": "B9.day_m1_d04_task_1_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 4: название задания 1."
+    },
+    {
+      "key": "B9.day_m1_d04_task_1_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 4: справка к заданию 1."
+    },
+    {
+      "key": "B9.day_m1_d04_task_2_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 4: название задания 2."
+    },
+    {
+      "key": "B9.day_m1_d04_task_2_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 4: справка к заданию 2."
+    },
+    {
+      "key": "B9.day_m1_d04_task_3_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 4: название задания 3."
+    },
+    {
+      "key": "B9.day_m1_d04_task_3_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 4: справка к заданию 3."
+    },
+    {
+      "key": "B9.day_m1_d04_task_4_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 4: название задания 4."
+    },
+    {
+      "key": "B9.day_m1_d04_task_4_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 4: справка к заданию 4."
+    },
+    {
+      "key": "B9.day_m1_d04_task_5_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 4: название задания 5."
+    },
+    {
+      "key": "B9.day_m1_d04_task_5_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 4: справка к заданию 5."
+    },
+    {
+      "key": "B9.day_m1_d05_task_1_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 5: название задания 1."
+    },
+    {
+      "key": "B9.day_m1_d05_task_1_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 5: справка к заданию 1."
+    },
+    {
+      "key": "B9.day_m1_d05_task_2_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 5: название задания 2."
+    },
+    {
+      "key": "B9.day_m1_d05_task_2_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 5: справка к заданию 2."
+    },
+    {
+      "key": "B9.day_m1_d05_task_3_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 5: название задания 3."
+    },
+    {
+      "key": "B9.day_m1_d05_task_3_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 5: справка к заданию 3."
+    },
+    {
+      "key": "B9.day_m1_d05_task_4_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 5: название задания 4."
+    },
+    {
+      "key": "B9.day_m1_d05_task_4_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 5: справка к заданию 4."
+    },
+    {
+      "key": "B9.day_m1_d05_task_5_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 5: название задания 5."
+    },
+    {
+      "key": "B9.day_m1_d05_task_5_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 5: справка к заданию 5."
+    },
+    {
+      "key": "B9.day_m1_d06_task_1_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 6: название задания 1."
+    },
+    {
+      "key": "B9.day_m1_d06_task_1_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 6: справка к заданию 1."
+    },
+    {
+      "key": "B9.day_m1_d06_task_2_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 6: название задания 2."
+    },
+    {
+      "key": "B9.day_m1_d06_task_2_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 6: справка к заданию 2."
+    },
+    {
+      "key": "B9.day_m1_d06_task_3_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 6: название задания 3."
+    },
+    {
+      "key": "B9.day_m1_d06_task_3_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 6: справка к заданию 3."
+    },
+    {
+      "key": "B9.day_m1_d06_task_4_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 6: название задания 4."
+    },
+    {
+      "key": "B9.day_m1_d06_task_4_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 6: справка к заданию 4."
+    },
+    {
+      "key": "B9.day_m1_d06_task_5_title",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 6: название задания 5."
+    },
+    {
+      "key": "B9.day_m1_d06_task_5_help",
+      "tone": "neutral",
+      "legal_status": "pre-legal-review",
+      "text": "[ЗАГЛУШКА] Модуль 1, день 6: справка к заданию 5."
     },
     {
       "key": "B9.day_active_from_hint",
