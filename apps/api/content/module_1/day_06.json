@@ -1,0 +1,38 @@
+{
+  "stage_no": 1,
+  "module_no": 1,
+  "day_no": 6,
+  "min_optional": 2,
+  "blocks": [
+    {
+      "block_id": "task_1",
+      "critical": true,
+      "title_key": "B9.day_m1_d06_task_1_title",
+      "help_key": "B9.day_m1_d06_task_1_help"
+    },
+    {
+      "block_id": "task_2",
+      "critical": false,
+      "title_key": "B9.day_m1_d06_task_2_title",
+      "help_key": "B9.day_m1_d06_task_2_help"
+    },
+    {
+      "block_id": "task_3",
+      "critical": false,
+      "title_key": "B9.day_m1_d06_task_3_title",
+      "help_key": "B9.day_m1_d06_task_3_help"
+    },
+    {
+      "block_id": "task_4",
+      "critical": false,
+      "title_key": "B9.day_m1_d06_task_4_title",
+      "help_key": "B9.day_m1_d06_task_4_help"
+    },
+    {
+      "block_id": "task_5",
+      "critical": false,
+      "title_key": "B9.day_m1_d06_task_5_title",
+      "help_key": "B9.day_m1_d06_task_5_help"
+    }
+  ]
+}
