@@ -89,7 +89,6 @@ COLUMN_PRIVILEGES_0009: tuple[tuple[str, str, str, str, bool], ...] = (
     ("app_bot", "outbox", "payload", "UPDATE", False),
     ("app_bot", "outbox", "tx_id", "SELECT", False),
     ("app_bot", "tg_user_registry", "tg_user_id", "SELECT", True),
-    ("app_bot", "tg_user_registry", "short_no", "SELECT", False),
     ("app_bot", "outbox_dlq", "replayed_by", "INSERT", False),
     ("app_projector", "outbox", "tx_id", "INSERT", True),
     ("app_projector", "outbox", "sent_at", "INSERT", False),

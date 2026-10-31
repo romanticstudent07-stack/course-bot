@@ -57,6 +57,19 @@ access_grants — флажок доступа по промокоду (мигр�
   - app_bot: SELECT / INSERT / UPDATE по колонкам; app_api читает только (tg_user_id, status);
     DELETE нет ни у кого; backfill 0010 — granted активным строкам tg_user_registry.
 
+reflections_log (0011, db-1) — неизменяемый лог рефлексий дней 6 / 13-M / 13-P (03 §3.12):
+  - id bigint (reflections_log_id_seq), pid → tg_user_registry (reflections_log_pid_fkey),
+    позиция дня stage_no / module_no / day_no, day_started_at (попытка дня, как в day_marks),
+    body, created_at; индекс reflections_log_pid_day_idx — не уникальный;
+  - каждая сдача и ревёрт — новая строка, действующая — последняя по created_at;
+    UNIQUE и updated_at нет (повтор гасит idempotency_keys);
+  - CHECK ck_reflections_log_position_positive и ck_reflections_log_body_len
+    (после btrim не короче REFLECTION_MIN_LEN, всего не длиннее REFLECTION_MAX_LEN) —
+    в миграции 0011; 422 REFLECTION_REQUIRED отдаёт API (api-refl-1), CHECK — страховка;
+  - app_api: INSERT по 6 колонкам, SELECT, USAGE последовательности; app_bot: SELECT
+    и SELECT (short_no) на tg_user_registry; UPDATE / DELETE / TRUNCATE нет ни у кого;
+    app_projector прав нет.
+
 participant_state (0001) здесь НЕ моделируется: единственный писатель — проектор
 (E1/INV-1), колонка last_seen_publish_epoch — xid8 (SQLAlchemy его не знает).
 CHECK lifecycle_phase (FSM I2, D-11 «6А») добавлен миграцией 0005.
@@ -109,6 +122,11 @@ ACCESS_STATUSES: tuple[str, ...] = (
 )
 ACCESS_CREATED_VIA_BOT_PROMO = "bot_promo"
 ACCESS_CREATED_VIA_BACKFILL = "backfill_0010"
+
+# reflections_log (0011, db-1): длина текста рефлексии (для api-refl-1).
+# Те же числа — в CHECK ck_reflections_log_body_len миграции 0011.
+REFLECTION_MIN_LEN = 2
+REFLECTION_MAX_LEN = 2000
 
 
 def _in_list(column: str, values: tuple[str, ...]) -> str:
@@ -318,5 +336,46 @@ class AccessGrant(Base):
             "admin_message_id",
             unique=True,
             postgresql_where=text("admin_message_id IS NOT NULL"),
+        ),
+    )
+
+
+class ReflectionLog(Base):
+    __tablename__ = "reflections_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    pid: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tg_user_registry.pid", name="reflections_log_pid_fkey"),
+        nullable=False,
+    )
+    stage_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    module_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    day_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    day_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "stage_no > 0 AND module_no > 0 AND day_no > 0",
+            name="ck_reflections_log_position_positive",
+        ),
+        CheckConstraint(
+            f"char_length(btrim(body)) >= {REFLECTION_MIN_LEN} "
+            f"AND char_length(body) <= {REFLECTION_MAX_LEN}",
+            name="ck_reflections_log_body_len",
+        ),
+        Index(
+            "reflections_log_pid_day_idx",
+            "pid",
+            "stage_no",
+            "module_no",
+            "day_no",
+            "created_at",
         ),
     )
