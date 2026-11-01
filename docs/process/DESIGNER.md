@@ -141,7 +141,8 @@
 Блок 1: cd /workspaces/course-bot · git checkout main && git pull · git checkout -b <ветка> ·
 mkdir -p .tmp && code .tmp/bundle.txt → Автор вставляет все части подряд, Ctrl+S.
 Блок 2: python3 tools/unpack.py .tmp/bundle.txt · wc -c <файлы с лимитом размера> (нет таких —
-строки нет) · bash tools/check.sh <цели; для docs — без целей> · git add -A && git status.
+строки нет) · chmod +x <новый файл *.sh> (нет такого — строки нет) · bash tools/check.sh <цели;
+для docs — без целей> · git add -A && git status.
 Блок 3 (после успешной проверки): git commit -m "<текст>" · git push -u origin <ветка> →
 PR на сайте GitHub по ссылке из терминала.
 Правки (З2/З3): те же 3 блока, только Блок 1 = одна строка code .tmp/bundle.txt (заменить всё, Ctrl+S).
