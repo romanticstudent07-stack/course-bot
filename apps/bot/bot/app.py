@@ -12,6 +12,8 @@ backend (apps/api), а контракт передачи апдейтов api �
 Воркер outbox (send-1b, bot/outbox.py): фоновая задача asyncio в том же процессе, тот же Bot
 (своей сессии и прокси нет, Р-11). Стартует до wait_until_no_webhook — доставке webhook не мешает.
 BOT_DATABASE_URL пуст → воркер не запускается (WARNING), бот работает как раньше.
+Темы Рабочей группы (bot-group-1): воркер получает config; не заданы REFLECTIONS_TOPIC_ID
+или REPORTS_TOPIC_ID → отдельный WARNING с именами тем (без значений), воркер стартует.
 Остановка (SIGTERM → start_polling завершается → finally): stop.set(), ждём воркер до 25 с
 (текущая строка дописывается), затем cancel (возможный дубль — docstring bot/outbox.py);
 потом закрываем сессию бота (start_polling вызывается с close_bot_session=False).
@@ -86,9 +88,14 @@ def start_outbox_worker(bot, config: BotConfig, stop: asyncio.Event) -> "asyncio
     if not config.database_url:
         logger.warning("BOT_DATABASE_URL пуст — доставка outbox выключена")
         return None
+    missing_topics = config.group_missing_vars()
+    if missing_topics:
+        logger.warning("Темы группы не заданы: %s", ", ".join(missing_topics))
     from bot.outbox import run_worker
 
-    return asyncio.create_task(run_worker(bot, config.database_url, stop), name="outbox")
+    return asyncio.create_task(
+        run_worker(bot, config.database_url, stop, config=config), name="outbox"
+    )
 
 
 async def stop_outbox_worker(task: "asyncio.Task | None", stop: asyncio.Event) -> None:

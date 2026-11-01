@@ -13,6 +13,11 @@ ACCESS_ADMIN_TOPIC_ID (message_thread_id админ-темы), ACCESS_ADMIN_IDS 
 ACCESS_LOCK_HOURS (по умолчанию 24, ≥ 1). access_enabled = BOT_DATABASE_URL и три первые
 заданы; иначе функция выключена (WARNING при старте — только имена переменных).
 Неверный формат числа → ConfigError без значения.
+
+Темы Рабочей группы (bot-group-1): REFLECTIONS_TOPIC_ID (тема «Рефлексии»),
+REPORTS_TOPIC_ID (тема «Отчёты и активность») — message_thread_id; чат — WORK_GROUP_ID.
+Пусто → None: строки outbox для этой темы уходят в DLQ group_not_configured
+(WARNING при старте воркера — только имена переменных).
 """
 from __future__ import annotations
 
@@ -43,6 +48,7 @@ def parse_database_url(env) -> str:
 
 
 ACCESS_REQUIRED_VARS = ("BOT_DATABASE_URL", "WORK_GROUP_ID", "ACCESS_ADMIN_TOPIC_ID", "ACCESS_ADMIN_IDS")
+GROUP_TOPIC_VARS = ("REFLECTIONS_TOPIC_ID", "REPORTS_TOPIC_ID")
 
 
 def _parse_int(env, name: str) -> int | None:
@@ -97,6 +103,8 @@ class BotConfig:
     access_admin_ids: frozenset[int] = frozenset()
     access_max_denies: int = 5
     access_lock_hours: int = 24
+    reflections_topic_id: int | None = None  # тема «Рефлексии» (bot-group-1)
+    reports_topic_id: int | None = None  # тема «Отчёты и активность» (bot-group-1)
 
     @property
     def webapp_enabled(self) -> bool:
@@ -116,6 +124,14 @@ class BotConfig:
     def access_enabled(self) -> bool:
         return not self.access_missing_vars()
 
+    def group_missing_vars(self) -> list[str]:
+        """Имена незаданных тем Рабочей группы (без значений)."""
+        present = {
+            "REFLECTIONS_TOPIC_ID": self.reflections_topic_id is not None,
+            "REPORTS_TOPIC_ID": self.reports_topic_id is not None,
+        }
+        return [name for name in GROUP_TOPIC_VARS if not present[name]]
+
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "BotConfig":
         env = dict(os.environ if env is None else env)
@@ -134,4 +150,6 @@ class BotConfig:
             access_admin_ids=_parse_ids(env, "ACCESS_ADMIN_IDS"),
             access_max_denies=_parse_positive(env, "ACCESS_MAX_DENIES", 5),
             access_lock_hours=_parse_positive(env, "ACCESS_LOCK_HOURS", 24),
+            reflections_topic_id=_parse_int(env, "REFLECTIONS_TOPIC_ID"),
+            reports_topic_id=_parse_int(env, "REPORTS_TOPIC_ID"),
         )
