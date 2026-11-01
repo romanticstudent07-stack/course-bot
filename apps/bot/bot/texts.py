@@ -74,3 +74,14 @@ ACCESS_ALREADY_DECIDED = "Уже решено."
 ACCESS_REPLY_REQUIRED = "Ответьте командой на сообщение-заявку."
 # bot.access_request_not_found
 ACCESS_REQUEST_NOT_FOUND = "Заявка не найдена: ответьте на сообщение-заявку бота."
+
+# --- Темы Рабочей группы (bot-group-1, Р-15). HTML; подстановки экранирует bot/outbox.py ---
+
+# bot.group_who — {num}: short_no из 6 цифр или «—», {tg_id}: числовой id, {link}: ссылка tg://user?id
+GROUP_WHO = "Участник #{num} (ID {tg_id}) → {link}"
+# bot.group_write — текст ссылки tg://user?id
+GROUP_WRITE = "написать"
+# bot.group_day2_alert — {who}: подпись GROUP_WHO
+GROUP_DAY2_ALERT = "[заглушка] День 2: пришёл, но не отправил.\n{who}"
+# bot.group_reflection — {s}, {m}, {d}: этап, модуль, день; {time}: «дд.мм.гггг чч:мм МСК»; {body}: текст
+GROUP_REFLECTION = "[заглушка] Рефлексия · этап {s} · модуль {m} · день {d} · {time}\n{who}\n\n{body}"

@@ -4,14 +4,27 @@
 (text_registry + render из send-1a) -> Telegram -> sent_at; окончательная ошибка -> outbox_dlq.
 БД — psycopg 3 (async, без SQLAlchemy), DSN — BOT_DATABASE_URL (coursebot_bot, роль app_bot).
 
-SQL и права (миграция 0009_app_bot; других прав у app_bot нет):
-    CLAIM     SELECT (id, aggregate_id, event_type, payload, created_at) на outbox
-    MARK      UPDATE (sent_at) на outbox
-    TO_DLQ    INSERT (original_id, payload, error) на outbox_dlq + USAGE outbox_dlq_id_seq
-    ADDRESSEE SELECT (pid, tg_user_id, tombstoned_at) на tg_user_registry
-    TEXT      SELECT на text_registry
+SQL и права (миграция 0009_app_bot, дополнение 0011; других прав у app_bot нет):
+    CLAIM           SELECT (id, aggregate_id, event_type, payload, created_at) на outbox
+    MARK            UPDATE (sent_at) на outbox
+    TO_DLQ          INSERT (original_id, payload, error) на outbox_dlq + USAGE outbox_dlq_id_seq
+    ADDRESSEE       SELECT (pid, tg_user_id, tombstoned_at) на tg_user_registry
+    TEXT            SELECT на text_registry
+    GROUP_ADDRESSEE + SELECT (short_no) на tg_user_registry (0011)
+    REFLECTION      SELECT на reflections_log (0011)
 Нет: INSERT в outbox, SELECT outbox_dlq, RETURNING, SELECT *, tx_id. Только параметры %s.
 Отличие от 0009 §7 — LIMIT 1 вместо :n и created_at в списке (для expired).
+
+Темы Рабочей группы (bot-group-1): в начале _deliver развилка GROUP_ROUTES.get(event_type).
+None -> прежний путь лички. reflection_submitted -> тема «Рефлексии» (REFLECTIONS_TOPIC_ID),
+ladder_day2_alert -> тема «Отчёты и активность» (REPORTS_TOPIC_ID); чат — WORK_GROUP_ID.
+Порядок ветки группы (как Ф7 лички): aggregate_id (bad_aggregate_id) -> GROUP_ADDRESSEE
+(addressee_not_found; стёрт -> MARK без поста и без DLQ) -> expired -> чат или тема не заданы
+(group_not_configured) -> payload {pid, reflection_id} (bad_payload) -> REFLECTION
+(reflection_not_found; чужой pid -> bad_payload) -> одно сообщение HTML -> MARK.
+Подпись — Р-15: «Участник #NNNNNN (ID N) → написать», ссылка tg://user?id=N; getChat не вызываем.
+Ошибки Telegram — как в личке, но частей и прогресса нет. Ветка всегда кончается MARK или
+DLQ+MARK, либо откатом без MARK при временной ошибке.
 
 Семантика:
 - sent_at = обработано, не доставлено (В13): после DLQ sent_at = now() в той же транзакции;
@@ -38,14 +51,15 @@ SQL и права (миграция 0009_app_bot; других прав у app_b
 - TelegramUnauthorizedError -> доставка прекращается: ERROR сразу и повторно раз в 10 мин.
 - SQL бота CI на настоящей БД не проверяет — только живая проверка на сервере.
 - Р-11: адрес API Telegram — умолчание aiogram, своей сессии и прокси нет.
-Логи: только outbox id, event_type, код ошибки, число частей. Никогда: tg_user_id, pid, текст,
-payload_vars, DSN, BOT_TOKEN.
+Логи: только outbox id, event_type, код ошибки, число частей. Никогда: tg_user_id, pid, short_no,
+текст (и body рефлексии), payload_vars, DSN, BOT_TOKEN.
 
 Самопроверка прав: python -m bot.outbox selfcheck.
 """
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import os
 import sys
@@ -65,6 +79,7 @@ from aiogram.exceptions import (
 )
 from psycopg.types.json import Jsonb
 
+from bot import texts
 from bot.render import MissingVarError, TemplateError, build_html_parts, build_plain_parts
 
 logger = logging.getLogger(__name__)
@@ -77,6 +92,17 @@ ADDRESSEE = "SELECT tg_user_id, tombstoned_at FROM tg_user_registry WHERE pid = 
 TEXT = "SELECT text FROM text_registry WHERE key = %s"
 MARK = "UPDATE outbox SET sent_at = now() WHERE id = %s AND sent_at IS NULL"
 TO_DLQ = "INSERT INTO outbox_dlq (original_id, payload, error) VALUES (%s, %s, %s)"
+
+# Темы Рабочей группы (bot-group-1). Права — 0011.
+GROUP_ADDRESSEE = "SELECT tg_user_id, short_no, tombstoned_at FROM tg_user_registry WHERE pid = %s"
+REFLECTION = "SELECT pid, stage_no, module_no, day_no, body, created_at FROM reflections_log WHERE id = %s"
+DAY2 = None  # алерт дня 2: дополнительного SQL нет
+
+# event_type -> (поле BotConfig с темой, дополнительный SQL)
+GROUP_ROUTES = {
+    "reflection_submitted": ("reflections_topic_id", REFLECTION),
+    "ladder_day2_alert": ("reports_topic_id", DAY2),
+}
 
 IDLE_SECONDS = 2
 DB_RETRY_SECONDS = 5
@@ -113,6 +139,19 @@ async def _pause(stop: asyncio.Event, seconds: float) -> bool:
         return False
 
 
+def _esc(value) -> str:
+    """Подстановка в HTML: None -> «—», иначе html.escape(str)."""
+    return "—" if value is None else html.escape(str(value))
+
+
+def _group_who(tg_user_id, short_no) -> str:
+    """Подпись Р-15: «Участник #NNNNNN (ID N) → написать», ссылка tg://user?id=N."""
+    num = "—" if short_no is None else str(short_no).zfill(6)
+    tg_id = int(tg_user_id)
+    link = f'<a href="tg://user?id={tg_id}">{html.escape(texts.GROUP_WRITE)}</a>'
+    return texts.GROUP_WHO.format(num=html.escape(num), tg_id=tg_id, link=link)
+
+
 class _Rollback(Exception):
     """Выйти из транзакции без MARK (строка остаётся в outbox)."""
 
@@ -131,9 +170,10 @@ class _Final(Exception):
 
 
 class OutboxWorker:
-    def __init__(self, bot, stop: asyncio.Event) -> None:
+    def __init__(self, bot, stop: asyncio.Event, config=None) -> None:
         self.bot = bot
         self.stop = stop
+        self.config = config  # BotConfig или None (тогда темы группы не заданы)
         # {outbox_id: (отправлено частей, всего частей, "html" | "plain")}
         self.progress: dict[int, tuple[int, int, str]] = {}
         self.failures: dict[int, int] = {}  # {outbox_id: неожиданных ошибок подряд}
@@ -184,6 +224,11 @@ class OutboxWorker:
         return outcome, delay
 
     async def _deliver(self, conn, oid, aggregate_id, event_type, payload, created_at) -> None:
+        # 0. Развилка: строки для тем Рабочей группы (bot-group-1); None -> путь лички.
+        route = GROUP_ROUTES.get(event_type)
+        if route is not None:
+            await self._deliver_group(conn, oid, aggregate_id, event_type, payload, created_at, route)
+            return
         # 1. pid — до любого SQL с адресом (Н1).
         try:
             pid = uuid.UUID(aggregate_id)
@@ -290,6 +335,111 @@ class OutboxWorker:
         await self._mark(conn, oid, event_type)
         logger.info("outbox %s %s: sent, parts=%s", oid, event_type, len(parts))
 
+    async def _deliver_group(self, conn, oid, aggregate_id, event_type, payload, created_at, route) -> None:
+        """Ветка тем Рабочей группы (bot-group-1). Порядок — как Ф7 лички."""
+        topic_attr, extra_sql = route
+        # 1. pid из aggregate_id.
+        try:
+            pid = uuid.UUID(aggregate_id)
+        except (ValueError, TypeError, AttributeError):
+            raise _Final("bad_aggregate_id") from None
+        # 2. Участник; стёрт -> MARK без поста и без DLQ (В11).
+        cur = await conn.execute(GROUP_ADDRESSEE, (pid,))
+        addressee = await cur.fetchone()
+        if addressee is None:
+            raise _Final("addressee_not_found")
+        tg_user_id, short_no, tombstoned_at = addressee
+        if tombstoned_at is not None:
+            logger.info("outbox %s %s: skipped: tombstoned", oid, event_type)
+            await self._mark(conn, oid, event_type)
+            return
+        # 3. Срок жизни строки.
+        if _now() - _aware(created_at) > EXPIRE_AFTER:
+            raise _Final("expired")
+        # 4. Чат и тема маршрута.
+        chat_id = getattr(self.config, "work_group_id", None)
+        thread_id = getattr(self.config, topic_attr, None)
+        if chat_id is None or thread_id is None:
+            raise _Final("group_not_configured")
+        # 5. Конверт: {pid} или {pid, reflection_id}.
+        if not isinstance(payload, dict):
+            raise _Final("bad_payload")
+        raw_pid = payload.get("pid")
+        if not isinstance(raw_pid, str):
+            raise _Final("bad_payload")
+        try:
+            if uuid.UUID(raw_pid) != pid:
+                raise _Final("bad_payload")
+        except (ValueError, TypeError, AttributeError):
+            raise _Final("bad_payload") from None
+        who = _group_who(tg_user_id, short_no)
+        if extra_sql is REFLECTION:
+            reflection_id = payload.get("reflection_id")
+            if isinstance(reflection_id, bool) or not isinstance(reflection_id, int) or reflection_id <= 0:
+                raise _Final("bad_payload")
+            # 6. Текст рефлексии.
+            cur = await conn.execute(REFLECTION, (reflection_id,))
+            refl = await cur.fetchone()
+            if refl is None:
+                raise _Final("reflection_not_found")
+            r_pid, stage_no, module_no, day_no, body, r_created = refl
+            if str(r_pid) != str(pid):
+                raise _Final("bad_payload")
+            from bot.access import fmt_msk
+
+            text = texts.GROUP_REFLECTION.format(
+                s=_esc(stage_no),
+                m=_esc(module_no),
+                d=_esc(day_no),
+                time=_esc(fmt_msk(_aware(r_created))),
+                who=who,
+                body=_esc(body),
+            )
+        else:
+            text = texts.GROUP_DAY2_ALERT.format(who=who)
+        # 7. Одно сообщение в тему.
+        await self._send_group(oid, event_type, chat_id, thread_id, text)
+        await self._mark(conn, oid, event_type)
+        logger.info("outbox %s %s: sent to group", oid, event_type)
+
+    async def _send_group(self, oid, event_type, chat_id, thread_id, text) -> None:
+        """Одно send_message в тему; ошибки — как в личке, частей и прогресса нет."""
+        waited = 0.0
+        while True:
+            try:
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    message_thread_id=thread_id,
+                    text=text,
+                    parse_mode="HTML",
+                    request_timeout=REQUEST_TIMEOUT,
+                )
+            except TelegramRetryAfter as exc:
+                wait = exc.retry_after
+                if waited + wait > RETRY_AFTER_INLINE_MAX:
+                    logger.warning("outbox %s %s: retry_after %s с — вне транзакции", oid, event_type, wait)
+                    raise _Rollback(LATER, wait) from None
+                logger.warning("outbox %s %s: retry_after %s с", oid, event_type, wait)
+                waited += wait
+                if await _pause(self.stop, wait):
+                    raise _Rollback(STOPPED) from None
+                continue
+            except TelegramUnauthorizedError:
+                raise
+            except (TelegramNetworkError, TelegramServerError, asyncio.TimeoutError) as exc:
+                logger.warning("outbox %s %s: временная ошибка %s", oid, event_type, type(exc).__name__)
+                raise _Rollback(NET_RETRY) from None
+            except TelegramBadRequest:
+                raise _Final("tg_bad_request") from None
+            except TelegramForbiddenError:
+                raise _Final("tg_forbidden") from None
+            except TelegramNotFound:
+                raise _Final("tg_not_found") from None
+            except TelegramAPIError:
+                raise _Final("tg_api_error") from None
+            self.net_failures = 0
+            return
+
     async def run(self, connect) -> None:
         """Главный цикл. connect() -> psycopg.AsyncConnection (autocommit=True)."""
         logger.info("outbox: воркер стартовал")
@@ -360,8 +510,8 @@ async def _connect(dsn: str):
     return await psycopg.AsyncConnection.connect(dsn, autocommit=True, connect_timeout=CONNECT_TIMEOUT)
 
 
-async def run_worker(bot, dsn: str, stop: asyncio.Event, connect=None) -> None:
-    worker = OutboxWorker(bot, stop)
+async def run_worker(bot, dsn: str, stop: asyncio.Event, connect=None, config=None) -> None:
+    worker = OutboxWorker(bot, stop, config=config)
     await worker.run(connect or (lambda: _connect(dsn)))
 
 
