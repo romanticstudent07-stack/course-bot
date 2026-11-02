@@ -24,6 +24,9 @@ tick(engine, now) → TickResult(closed, skipped):
      projector._SELECT_BATCH). Есть — пропуск: отчёт, принятый до 00:00, не теряется.
   4. Есть ключ day_done или day_close по D → пропуск.
   5. came = есть строки day_marks (pid, D); исход — day_clock.close_outcome.
+     День рефлексии (clocks-1: day_no ∈ day_clock.REFLECTION_DAYS, дни 6 и 13) закрыт без
+     отчёта → −1 жизнь сразу (ровно 1) и счётчик 0, отметки не важны; reason прежний
+     (LIFE_OP_REASON). Отчёт сдан — день не закрывается (шаг 4, ключ day_done).
   6. next = last_midnight(now, tz); строго позже D в UTC (У5), иначе WARNING без pid и пропуск
      (проектор такой day_closed не применил бы, Н5).
   7. Ключ day_close:{pid}:{dsa(D)} (ON CONFLICT DO NOTHING RETURNING; 0 строк → пропуск),
@@ -202,7 +205,12 @@ def _plan(conn: Connection, pid: uuid.UUID, row: Any, now: datetime) -> ClosePla
         return None
     came = conn.execute(_HAS_MARKS, {"pid": pid, "started": started}).first() is not None
     try:
-        outcome = day_clock.close_outcome(came, row.missed_streak, row.lives)
+        outcome = day_clock.close_outcome(
+            came,
+            row.missed_streak,
+            row.lives,
+            is_reflection_day=day_clock.is_reflection_day(row.day_no),
+        )
     except ValueError:
         logger.warning("life_ops: skip (state out of range)")
         return None
@@ -328,7 +336,12 @@ def dry_run(engine: Engine, pid: uuid.UUID, now: datetime) -> dict[str, Any] | N
                 info["is_overdue"] = day_clock.is_overdue(started, row.tz, now)
                 came = conn.execute(_HAS_MARKS, {"pid": pid, "started": started}).first()
                 try:
-                    o = day_clock.close_outcome(came is not None, row.missed_streak, row.lives)
+                    o = day_clock.close_outcome(
+                        came is not None,
+                        row.missed_streak,
+                        row.lives,
+                        is_reflection_day=day_clock.is_reflection_day(row.day_no),
+                    )
                     info["outcome_if_closed_now"] = {
                         "outcome": o.outcome,
                         "missed_streak": o.missed_streak,

@@ -52,8 +52,10 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
   life_op, day_closed и ключ day_close:{pid}:{dsa} в ОДНОЙ транзакции под замком
   participant:pid — тогда ни одно из трёх не появится без остальных.
 
-«Часы» в run_forever (once — без них): life_ops.tick (закрытие дня) и notify_ops.tick
-(pushi-notify-1, НП3 «Задания откроются … в 04:00» — ключ tasks_open и outbox, без participant_state).
+«Часы» в run_forever (once — без них): life_ops.tick (закрытие дня; день рефлексии 6 / 13 без
+отчёта — −1 жизнь сразу, clocks-1) и notify_ops.tick (pushi-notify-1, НП3 «Задания откроются …
+в 04:00» — ключ tasks_open и outbox; НП1 noon_nudge (T3, noon-1); лестница ladder_reminder (T2,
+ladder-1) + алерт Автору ladder_day2_alert (clocks-1) — ключи и outbox, без participant_state).
 
 Курсор — по pid: события e с e.id > coalesce(c.last_event_id, 0) через LEFT JOIN
 participant_state_checkpoints c USING (pid), ORDER BY e.id, LIMIT 500. Глобальный

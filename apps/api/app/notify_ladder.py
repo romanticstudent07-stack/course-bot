@@ -13,8 +13,18 @@
 Вход один — notify_ops.tick (Т1). notify_ops импортирует этот модуль внутри tick, а этот модуль
 импортирует notify_ops и берёт его помощники только при вызове: _run_rule, _LOCK_TIMEOUT,
 _EXISTING_KEYS, _HAS_KEY, _INSERT_KEY, _INSERT_OUTBOX, MAX_PER_TICK, logger. Своего INSERT
-в outbox здесь нет. Пишется только idempotency_keys (kind ladder) и outbox; participant_state и
-participant_events не пишутся (E1 / INV-1). Алерт Автору «день 2 проблемы» — вне задачи.
+в outbox здесь нет. Пишется только idempotency_keys (kind ladder, ladder_day2) и outbox;
+participant_state и participant_events не пишутся (E1 / INV-1).
+
+Алерт Автору «день 2 проблемы» (clocks-1, 03 §3.17, 08 §8.2): участник второй день подряд
+пришёл (есть day_marks), но не отправил отчёт. Пишется на шаге plus1h, только если ключ plus1h
+вставлен в этой транзакции (plan.send == plus1h или plus1h из plan.late, _insert_key → True).
+Тогда читается последнее событие day_closed участника (_LAST_DAY_CLOSED, только чтение);
+is_day2 (в Python, без CAST в SQL): outcome == "came" и next_day_started_at в UTC равен
+текущему day_started_at. Да → ключ ladder_day2:{pid}:{dsa} (notify_ops._INSERT_KEY, RETURNING);
+вставлен → одна строка outbox ladder_day2_alert, payload {"pid": str(pid)} (текст делает бот);
+ключ уже есть → без строки и без отката. Та же транзакция и тот же commit, что у лестницы.
+Если на момент выката ключ plus1h за текущий день уже есть — алерта за этот день не будет.
 
 tick_ladder(engine, now) → NotifyResult(sent, late, skipped):
   1. Кандидаты — своя транзакция, только чтение: фильтр life_ops (_CANDIDATES, BLOCKING_FLAGS);
@@ -23,8 +33,9 @@ tick_ladder(engine, now) → NotifyResult(sent, late, skipped):
   2. Каждый pid — своя транзакция под lock_participant (lock_timeout): состояние заново,
      life_ops._eligible, «проектор догнал pid», данные и решение заново.
   3. Ключи late (ON CONFLICT DO NOTHING), ключ send (RETURNING; 0 строк → rollback), строка
-     outbox ladder_reminder (T2). Один commit на pid.
+     outbox ladder_reminder (T2), затем алерт «день 2» (см. выше). Один commit на pid.
 sent — pid с отправкой; late — записанные ключи без отправки; skipped — остальные кандидаты.
+Число алертов «день 2» — отдельной строкой INFO «notify_ops: ladder day2=N» (NotifyResult прежний).
 
 Время: now — только аргумент; сравнения — в UTC. Лог: без pid, tz, payload и ПДн.
 """
@@ -42,14 +53,18 @@ from sqlalchemy import Connection, Engine, text
 from app import day_clock, life_ops, notify_ops
 from app.day_keys import (
     KIND_LADDER,
+    KIND_LADDER_DAY2,
     LADDER_STEPS,
     TTL_LADDER,
+    TTL_LADDER_DAY2,
     key_day_done,
     key_ladder,
+    key_ladder_day2,
 )
 from app.participant_lock import lock_participant
 
 EVENT_TYPE = "ladder_reminder"
+EVENT_TYPE_DAY2 = "ladder_day2_alert"
 TIER = "T2"
 STEP_PLUS1H, STEP_MINUS2H, STEP_MINUS30M = LADDER_STEPS
 PLUS1H = timedelta(hours=1)
@@ -74,6 +89,16 @@ _FIRST_MARK_ONE = text(
     "SELECT min(at) FROM day_marks WHERE pid = :pid AND day_started_at = :started"
 )
 
+_LAST_DAY_CLOSED = text(
+    """
+    SELECT payload
+    FROM participant_events
+    WHERE pid = :pid AND kind = 'day_closed'
+    ORDER BY id DESC
+    LIMIT 1
+    """
+)
+
 
 @dataclass(frozen=True)
 class LadderPlan:
@@ -83,6 +108,28 @@ class LadderPlan:
 
 def _utc(ts: datetime) -> datetime:
     return ts.astimezone(timezone.utc)
+
+
+def is_day2(payload: Any, started: datetime) -> bool:
+    """Последний day_closed — «пришёл» и закрыл именно вчерашний день перед started (clocks-1).
+
+    True, только если payload — dict, payload["outcome"] == "came" и next_day_started_at —
+    строка ISO с поясом, в UTC равная started. Иначе или при ошибке разбора → False.
+    """
+    try:
+        if not isinstance(payload, dict) or payload.get("outcome") != day_clock.OUTCOME_CAME:
+            return False
+        raw = payload.get("next_day_started_at")
+        if not isinstance(raw, str):
+            return False
+        nxt = datetime.fromisoformat(raw)
+        if nxt.tzinfo is None or nxt.tzinfo.utcoffset(nxt) is None:
+            return False
+        if started.tzinfo is None or started.tzinfo.utcoffset(started) is None:
+            return False
+        return _utc(nxt) == _utc(started)
+    except Exception:  # битый payload — не алерт
+        return False
 
 
 def step_times(first_mark_at: datetime, deadline: datetime) -> list[tuple[str, datetime]]:
@@ -208,38 +255,85 @@ def _insert_key(conn: Connection, pid: uuid.UUID, started: datetime, step: str) 
     return inserted is not None
 
 
-def _write(conn: Connection, pid: uuid.UUID, row: Any, plan: LadderPlan) -> int | None:
-    """Шаг 3: ключи late, ключ send, строка outbox. None — ключ send уже есть (rollback).
-    Возвращает число записанных ключей late. Commit делает вызывающий."""
+def _write_day2(conn: Connection, pid: uuid.UUID, started: datetime) -> bool:
+    """Алерт «день 2» (clocks-1): True — ключ ladder_day2 и строка outbox записаны."""
+    payload = conn.execute(_LAST_DAY_CLOSED, {"pid": pid}).scalar()
+    if not is_day2(payload, started):
+        return False
+    inserted = conn.execute(
+        notify_ops._INSERT_KEY,
+        {"key": key_ladder_day2(pid, started), "kind": KIND_LADDER_DAY2, "ttl": TTL_LADDER_DAY2},
+    ).first()
+    if inserted is None:
+        return False  # алерт за этот день уже записан — без строки и без отката
+    conn.execute(
+        notify_ops._INSERT_OUTBOX,
+        {
+            "aggregate_id": str(pid),
+            "event_type": EVENT_TYPE_DAY2,
+            "payload": json.dumps({"pid": str(pid)}),
+        },
+    )
+    return True
+
+
+def _write(
+    conn: Connection,
+    pid: uuid.UUID,
+    row: Any,
+    plan: LadderPlan,
+    day2_counter: list[int] | None = None,
+) -> int | None:
+    """Шаг 3: ключи late, ключ send, строка outbox, алерт «день 2». None — ключ send уже есть
+    (rollback). Возвращает число записанных ключей late; day2_counter[0] += 1, если записан
+    алерт «день 2». Commit делает вызывающий."""
     started: datetime = row.day_started_at
-    late_written = sum(1 for step in plan.late if _insert_key(conn, pid, started, step))
+    late_written = 0
+    plus1h_inserted = False
+    for step in plan.late:
+        if _insert_key(conn, pid, started, step):
+            late_written += 1
+            if step == STEP_PLUS1H:
+                plus1h_inserted = True
     if not _insert_key(conn, pid, started, plan.send):
         return None
+    if plan.send == STEP_PLUS1H:
+        plus1h_inserted = True
     payload = {"text_id": TEXT_BY_STEP[plan.send], "payload_vars": {}, "tier": TIER}
     conn.execute(
         notify_ops._INSERT_OUTBOX,
         {"aggregate_id": str(pid), "event_type": EVENT_TYPE, "payload": json.dumps(payload)},
     )
+    if plus1h_inserted and _write_day2(conn, pid, started) and day2_counter is not None:
+        day2_counter[0] += 1
     return late_written
 
 
 def ladder_one(
-    engine: Engine, pid: uuid.UUID, now: datetime, late_counter: list[int] | None = None
+    engine: Engine,
+    pid: uuid.UUID,
+    now: datetime,
+    late_counter: list[int] | None = None,
+    day2_counter: list[int] | None = None,
 ) -> str | None:
     """Один pid — одна транзакция под замком participant:pid. "send" — отправлено.
-    late_counter[0] += число записанных ключей late (после commit)."""
+    late_counter[0] += число записанных ключей late; day2_counter[0] += число алертов
+    «день 2» (оба — после commit)."""
+    day2_written = [0]
     with engine.connect() as conn:
         conn.execute(notify_ops._LOCK_TIMEOUT)  # SET LOCAL — только эта транзакция
         lock_participant(conn, pid)
         row = conn.execute(life_ops._STATE, {"pid": pid}).first()
         plan = None if row is None else _plan(conn, pid, row, now)
-        late_written = None if plan is None else _write(conn, pid, row, plan)
+        late_written = None if plan is None else _write(conn, pid, row, plan, day2_written)
         if late_written is None:
             conn.rollback()
             return None
-        conn.commit()  # ключи + outbox — один commit
+        conn.commit()  # ключи + outbox (+ алерт «день 2») — один commit
     if late_counter is not None:
         late_counter[0] += late_written
+    if day2_counter is not None:
+        day2_counter[0] += day2_written[0]
     return notify_ops.DECISION_SEND
 
 
@@ -247,15 +341,17 @@ def tick_ladder(engine: Engine, now: datetime) -> notify_ops.NotifyResult:
     """Лестница на момент now (aware). Ошибка чтения кандидатов — наружу."""
     notify_ops._require_aware(now)
     late_counter = [0]
+    day2_counter = [0]
     sent, _late, skipped = notify_ops._run_rule(
         engine,
         now,
         "ladder",
         _candidates,
-        lambda e, p, n: ladder_one(e, p, n, late_counter),
+        lambda e, p, n: ladder_one(e, p, n, late_counter, day2_counter),
     )
     late = late_counter[0]
     notify_ops.logger.info(
         "notify_ops: ladder sent=%s late=%s skipped=%s", sent, late, skipped
     )
+    notify_ops.logger.info("notify_ops: ladder day2=%s", day2_counter[0])
     return notify_ops.NotifyResult(sent, late, skipped)
