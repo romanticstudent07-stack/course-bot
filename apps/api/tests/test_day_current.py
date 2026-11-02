@@ -90,6 +90,7 @@ def test_kinds_and_ttl():
         "tasks_open": "3650 days",  # pushi-notify-1
         "noon": "3650 days",  # noon-1
         "ladder": "3650 days",  # ladder-1
+        "ladder_day2": "3650 days",  # clocks-1
     }
 
 

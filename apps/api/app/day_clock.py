@@ -13,7 +13,10 @@ life-ops-c; после life-ops-a этими функциями никто не 
     по (pid, day_started_at), хранить не надо (ЛО-1, DM 3.19); на счёт дня не влияет;
   - после простоя — одна граница (В32): last_midnight;
   - исход закрытия (В27 = А, DM 3.4 / 3.6): «пришёл» → счётчик 0, жизнь цела; полное молчание →
-    missed_streak + 1; на 2 → −1 жизнь и счётчик 0; 0 жизней → sleeping (Р477).
+    missed_streak + 1; на 2 → −1 жизнь и счётчик 0; 0 жизней → sleeping (Р477);
+  - день рефлексии (clocks-1, 02 §2.3, В2 = Б): день 6 или 13 закрыт без отчёта → −1 жизнь сразу
+    (ровно 1, без суммирования с прошлыми пропусками) и счётчик 0, отметки не важны;
+    REFLECTION_DAYS, is_reflection_day, флаг is_reflection_day у close_outcome.
 
 Все datetime — aware; naive → ValueError (как day_keys.dsa). Результаты — в поясе участника.
 
@@ -53,6 +56,8 @@ OUTCOME_CAME = "came"
 OUTCOME_SILENT = "silent"
 # Столько дней полного молчания подряд = −1 жизнь (DM 3.6).
 SILENT_DAYS_PER_LIFE = 2
+# Дни рефлексии (clocks-1, Т2): только по day_no.
+REFLECTION_DAYS = (6, 13)
 
 
 @dataclass(frozen=True)
@@ -181,11 +186,22 @@ def queue_until(pid: uuid.UUID | str, started_at: datetime) -> datetime:
     return (_utc(started_at) + delay).astimezone(started_at.tzinfo)
 
 
-def close_outcome(came: bool, missed_streak: int, lives: int) -> CloseOutcome:
+def is_reflection_day(day_no: object) -> bool:
+    """day_no ∈ REFLECTION_DAYS (clocks-1). bool и не int → False."""
+    if isinstance(day_no, bool) or not isinstance(day_no, int):
+        return False
+    return day_no in REFLECTION_DAYS
+
+
+def close_outcome(
+    came: bool, missed_streak: int, lives: int, *, is_reflection_day: bool = False
+) -> CloseOutcome:
     """Исход закрытия дня (В27 = А).
 
     lives вне [0, 3] → ValueError; lives = 0 → ValueError (спящему день не закрывают,
     ревью #111, Н6); missed_streak < 0, bool или не int → ValueError.
+    is_reflection_day (clocks-1, В2 = Б): день рефлексии закрыт без отчёта → outcome came/silent
+    по came, счётчик 0, ровно −1 жизнь (даже при missed_streak = 1); 0 жизней → sleeping.
     """
     if isinstance(lives, bool) or not isinstance(lives, int) or not 0 <= lives <= MAX_LIVES:
         raise ValueError("close_outcome: lives вне [0, 3]")
@@ -193,6 +209,9 @@ def close_outcome(came: bool, missed_streak: int, lives: int) -> CloseOutcome:
         raise ValueError("close_outcome: lives = 0 (участник уже sleeping)")
     if isinstance(missed_streak, bool) or not isinstance(missed_streak, int) or missed_streak < 0:
         raise ValueError("close_outcome: missed_streak — int ≥ 0")
+    if is_reflection_day:
+        outcome = OUTCOME_CAME if came else OUTCOME_SILENT
+        return CloseOutcome(outcome, 0, -1, lives - 1 == 0)
     if came:
         return CloseOutcome(OUTCOME_CAME, 0, 0, False)
     streak = missed_streak + 1
