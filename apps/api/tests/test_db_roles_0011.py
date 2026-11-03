@@ -99,6 +99,21 @@ PRIVILEGE_CHECKS_0011: tuple[tuple[str, str, bool], ...] = (
         "has_any_column_privilege('app_projector', 'reflections_log', 'UPDATE')",
         False,
     ),
+    (
+        "public-select",
+        "has_table_privilege('public', 'reflections_log', 'SELECT')",
+        False,
+    ),
+    (
+        "api-insert-id",
+        "has_column_privilege('app_api', 'reflections_log', 'id', 'INSERT')",
+        False,
+    ),
+    (
+        "api-insert-created-at",
+        "has_column_privilege('app_api', 'reflections_log', 'created_at', 'INSERT')",
+        False,
+    ),
 )
 
 # Табличных DELETE / TRUNCATE на reflections_log нет ни у кого.
@@ -184,7 +199,10 @@ def test_privileges_static_0011():
         if target == "TABLE reflections_log":
             verb = privilege.split()[0].upper()
             assert verb not in {"UPDATE", "DELETE", "TRUNCATE"}, (privilege, target, role)
-    assert "ALTER DEFAULT PRIVILEGES" not in _migration_code(module).upper()
+    code = _migration_code(module)
+    assert "ALTER DEFAULT PRIVILEGES" not in code.upper()
+    # Слово в верхнем регистре: в коде 0011 есть public строчными (имена и импорты).
+    assert "PUBLIC" not in code
     assert module.REVOKE_SHORT_NO == (
         "REVOKE SELECT (short_no) ON TABLE tg_user_registry FROM app_bot"
     )
@@ -261,10 +279,11 @@ def test_app_projector_denied_0011(projector_engine, sql):
 
 
 # 3. CHECK длины текста, позиции дня и FK pid.
+# CHECK считает char_length (символы), не байты.
 @pytest.mark.parametrize(
     "body",
-    ["a", "   a   ", "", "x" * 2001],
-    ids=["one-char", "one-char-padded", "empty", "len-2001"],
+    ["a", "   a   ", "", "x" * 2001, "я" * 2001],
+    ids=["one-char", "one-char-padded", "empty", "len-2001", "len-2001-cyrillic"],
 )
 def test_body_len_rejected_0011(db_engine, body):
     from psycopg import errors as pg_errors
@@ -276,7 +295,11 @@ def test_body_len_rejected_0011(db_engine, body):
     assert caught.value.orig.diag.constraint_name == "ck_reflections_log_body_len"
 
 
-@pytest.mark.parametrize("body", ["ab", "x" * 2000], ids=["two-chars", "len-2000"])
+@pytest.mark.parametrize(
+    "body",
+    ["ab", "x" * 2000, "я" * 2000],
+    ids=["two-chars", "len-2000", "len-2000-cyrillic"],
+)
 def test_body_len_accepted_0011(db_engine, body):
     pid = _registry_pid(db_engine, 3611)
     _owner_insert(db_engine, pid, body)
@@ -318,6 +341,12 @@ def test_downgrade_0011(migrated_db):
     tg_user_id = text(
         "SELECT has_column_privilege('app_bot', 'tg_user_registry', 'tg_user_id', 'SELECT')"
     )
+    pid_select = text(
+        "SELECT has_column_privilege('app_bot', 'tg_user_registry', 'pid', 'SELECT')"
+    )
+    tombstoned_at = text(
+        "SELECT has_column_privilege('app_bot', 'tg_user_registry', 'tombstoned_at', 'SELECT')"
+    )
     engine = create_engine(migrated_db)
     try:
         with engine.connect() as conn:
@@ -328,6 +357,12 @@ def test_downgrade_0011(migrated_db):
             assert conn.execute(table_exists).scalar_one() is False
             assert conn.execute(short_no).scalar_one() is False
             assert conn.execute(tg_user_id).scalar_one() is True  # право 0009 цело
+            assert conn.execute(pid_select).scalar_one() is True  # право 0009 цело
+            assert conn.execute(tombstoned_at).scalar_one() is True  # право 0009 цело
+        command.upgrade(cfg, "head")
+        with engine.connect() as conn:
+            assert conn.execute(table_exists).scalar_one() is True
+            assert conn.execute(short_no).scalar_one() is True
     finally:
         command.upgrade(cfg, "head")
         engine.dispose()

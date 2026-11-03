@@ -77,9 +77,10 @@ PROJECTOR_DENIED_0009: tuple[str, ...] = (
     INSERT_DLQ_LITERAL,
 )
 
+# INSERT_OUTBOX_LITERAL убран в db-2: после 0012 этот INSERT под app_api проходит
+# (константа нужна BOT_DENIED_0009 и PROJECTOR_DENIED_0009). Права app_api — 0012.
 API_DENIED_0009: tuple[str, ...] = (
     "SELECT id FROM outbox",
-    INSERT_OUTBOX_LITERAL,
     "SELECT id FROM outbox_dlq",
 )
 

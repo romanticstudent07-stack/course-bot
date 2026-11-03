@@ -1,21 +1,22 @@
 # STATE — живое состояние course-bot
-Обновлено: 31.10.2026 (main — 606080f после #157; сервер ✅ 31.10). Снимок до 31.10 — docs/history/STATE-606080f.md. Снимок до сжатия 24.10 (дословно: «Сейчас» Р-2 по строкам, «Смержено» #101–#121, учёт кредитов 21–22.10, В БД 22.10) — docs/history/STATE-6966838.md. Решения 21.10 (Р-А1…Р-А4, Ш-1…Ш-4, правила А-CI, А-КАНОН, А-МЕРЖ) — Issue #109. ПРАВИЛО К (22.10) — docs/process/CANON-CHECK.md: сначала канон, потом ответ; для всех ролей. До 90 строк и 20 КБ. Секретов, реальных ID и IP здесь нет.
+Обновлено: 03.11.2026 (main — a60b4e9 после #166; сервер ✅ 03.11). Снимок до 31.10 — docs/history/STATE-606080f.md. Снимок до сжатия 24.10 (дословно: «Сейчас» Р-2 по строкам, «Смержено» #101–#121, учёт кредитов 21–22.10, В БД 22.10) — docs/history/STATE-6966838.md. Решения 21.10 (Р-А1…Р-А4, Ш-1…Ш-4, правила А-CI, А-КАНОН, А-МЕРЖ) — Issue #109. ПРАВИЛО К (22.10) — docs/process/CANON-CHECK.md: сначала канон, потом ответ; для всех ролей. До 90 строк и 20 КБ. Секретов, реальных ID и IP здесь нет.
 Кто обновляет: ШТАБ даёт строки → они идут первым файлом пакета следующей задачи.
 Подробности закрытых задач — docs/HISTORY.md. Снимки STATE (дословно): docs/history/STATE-a5ef1d7.md (до 18.10: выкаты до 0008, #49–#96), STATE-20a21c4.md (до 22.10: #97–#113, send-1), STATE-6966838.md (до 24.10), STATE-3e95900.md (до 27.10: «Сейчас» 25.10, учёт кредитов 23–25.10), STATE-606080f.md (до 31.10: «Сейчас» 28.10, уроки 17–25.10, план 25.10, тесты 0007/0008). КОДЕРАМ HISTORY и снимки не давать.
 Правила ШТАБа — docs/process/SHTAB.md (часть 1) + docs/process/SHTAB-2.md (часть 2), читать ОБА.
 Процессные решения (роли, РЕВЬЮЕР, окна чатов, терминал, rulesets main, форки, LF, expected_tables.txt, миграции по одной) — в SHTAB.md, SHTAB-2.md, DESIGNER.md, README.md.
 ## Сейчас
 - 27.10 решение Автора: «6 кругов» отменены → страница решений docs/decisions/DECISIONS.md в каждом промпте + правка канона DOCS по частям перед задачей (DESIGNER «Канон и решения»).
-- main = 606080f (31.10): код — #149 api-3, #151 miniapp-fix-2, #155 content-1, #157 db-1; прочие #147–#156 — docs, карточки, sync. Сервер ✅ 31.10: alembic 0011_reflections_log, 17 таблиц, права 0011 t f f f t t f; 7/7 Up, 5 healthy; образы migrate 606080f, api eac83a1, miniapp 49dd033, projector 0a26161, bot 8833b18; text_registry 79; контент дней 6; DAY_TEST_ENTRY_ENABLED = false; PROJECTOR_VERSION = 3; в projector «часы» life_ops, notify_ops (НП3, НП1) и лестница ladder-1, tick 30 с. api без models.py #157 — пересобрать при выкате api-refl-1. Бот ходит в БД под coursebot_bot (роль app_bot), доставляет outbox. Сервер IRONCLAD работает только с main.
+- main = a60b4e9 (03.11). Код после 31.10: #161 bot-group-1 (выкачен 01.11), #164 clocks-1 (выкачен 03.11, пересобран только projector); прочее — docs и карточки. Сервер ✅ 03.11: alembic 0011_reflections_log, 17 таблиц; образы migrate 606080f, api eac83a1, miniapp 49dd033, projector e4069b0, bot e881d07; 7/7 Up, 5 healthy; text_registry 79, контент дней 6; DAY_TEST_ENTRY_ENABLED = false; PROJECTOR_VERSION = 3; tick 30 с. api без models.py #157 — пересобрать при выкате api-refl-1. Сервер IRONCLAD работает только с main.
+- Открытые хвосты выката: читает ли projector content/ — не проверено; dry-run outcome_if_closed_now silent даёт next_day_started_at = начало текущего дня — не сверено с кодом; ladder_day2_alert живьём ещё не было.
 - до 27.10 — снимок docs/history/STATE-3e95900.md
 - Норма сервера: 7/7 Up, 5 healthy (db, redis, garage, api, miniapp), healthcheck нет у bot и projector; curl / 200, /healthz 200, /miniapp/v1/onboarding/status 401; проектор проверяется по логам (Traceback 0, WARNING 0), projector once рядом с run запрещён (infra/SERVER-IRONCLAD.md:146). Роли: api — coursebot_api, projector — coursebot_projector, alembic и texts load — владелец (только DC --profile tools run --rm --no-deps migrate); env_file нет ни у одного сервиса; repr/str Settings без DSN. Перед каждой миграцией — бэкап before-000N и DC --profile tools build migrate. Новые тексты — build migrate до texts load.
 - 27.10: живое закрытие дня, мелочи ревью Р-2 (bot-access-2), S3_* у api, Р-1/Р-3/Р-4/Р-5 в каноне — снимок STATE-606080f.md.
 - 27.10 ✅ НП3 «после очереди» живьём (А1) — снимок STATE-606080f.md. НП3 «после онбординга» — не проверен (нужен А4, только с согласия Автора).
-- 29–31.10 ✅ живьём (А1): НП1 noon_nudge в 12:00 по ТЗ; лестница ladder_reminder после первой отметки дня, отправляется только самый поздний наступивший шаг (В7 А); при 0 отметок лестницы нет (по коду notify_ladder). 31.10 00:02 день А1 silent, missed_streak 1; отметка 31.10 → 01.11 ожидается came, lives 2 (проверить).
+- 29.10–03.11 ✅ живьём (А1): НП1 noon_nudge в 12:00 по ТЗ; лестница после первой отметки дня, шлётся только самый поздний наступивший шаг (В7 А), при 0 отметок лестницы нет; посты бота в темы группы (bot-group-1); clocks-1 — пропуск дня рефлексии снимает жизнь сразу. 03.11 00:02 день закрыт came, lives 2, streak 0.
 - Р-2 ✅ 25.10 (#124–#127) и бэкапы before-0004…before-0010 ✅ — снимок docs/history/STATE-3e95900.md; не живьём — экран no_access (тесты #127). Downgrade ниже 0004 запрещён (стирает журнал согласий).
-- Наблюдать: WARNING bot «access: кнопки старой заявки не сняты» (1 раз 26.10) — повторится → разбор.
-- Очередь: карточки iter2-rest (research iter2-rest.md) — окно КАРТОЧКИ-2 ПРОЕКТИРОВЩИКА: bot-group-1, clocks-1; окно КАРТОЧКИ-3: api-refl-1, miniapp-refl-1. activity-1 отложена (DECISIONS, 28.10). 01.11 — пересмотр плана до 0-Б.
-- Кредиты: 8 866 (28.10), резерв 1 500. Факты: docs-pack-2510 229, bot-access-2 288, бонус +196, pushi-notify-1 667, noon-1 550, бонус +200, ladder-1 635. Новый месяц — 25.11. api-3 #149 — факт не внесён (у Автора).
+- Наблюдать: WARNING bot «access: кнопки старой заявки не сняты» (1 раз 26.10); обрывы bot около 04:11 (4 ночи подряд к 01.11) — проверять в Г0 каждого выката.
+- План и очередь — docs/process/PLAN.md (#162, утверждён Автором 01–02.11): стратегия кредитов, карточки заранее, очередь выката (§4), 31 задача с окнами и хвосты api-3 (§5), накопитель строк STATE (§6). Сейчас: db-2 → api-refl-1 → miniapp-refl-1, выкат один общий (migrate 0012 → api → miniapp).
+- Кредиты: 8 457 (01.11), резерв 1 500. Факты: docs-pack-2510 229, bot-access-2 288, pushi-notify-1 667, noon-1 550, ladder-1 635, api-3 #149 609, бонусы +596. Новый месяц 25.11; с 01.01.2027 Opus в AI Chat тратит кредиты.
 - ЗАКРЫТО: И1, projector, returning, B-3, miniapp-fix, melochi-2, И2 БД (0007–0009), И2 API (iter2-api-1/2a/2b) — подробно снимки.
 - Лимиты: STATE ≤ 20 480 Б, DEFECTS-FOUND < 25 000 Б (правило А) — перед каждой записью «сейчас + добавляю». DEFECTS-ARCHIVE.md КОДЕРАМ кода не давать.
 - Процесс: лимиты чтения — КОДЕР ≈ 130–140 КБ; ПРОЕКТИРОВЩИК ПОЛНОЕ/КАРТОЧКИ 170 КБ, ИССЛЕДОВАНИЕ 200 КБ (решение Автора 19.10). SHTAB.md 3-Б: одна карточка = одна область, задачу режем, чтение не урезаем; DESIGNER.md «Бюджет окна». Файл восстановления ШТАБа — SHTAB-CONTEXT-CHAT.txt.
@@ -24,9 +25,8 @@
 ## Смержено (подробно — docs/HISTORY.md и снимок docs/history/STATE-a5ef1d7.md)
 - до #129 — снимок docs/history/STATE-3e95900.md
 - #130–#137 — сервер ✅ 3e95900 (27.10; docs — только pull).
-- #138 docs-pack-2710a (STATE 27.10, D-40, DOCS-CANON, AGENTS, SERVER-IRONCLAD); #139 docs-pack-2710b (SHTAB-2 §8, DESIGNER «Команды Codespaces», флаги migrate).
-- #140–#146 (27–28.10): #140 docs-pack-2710c (STATE, D-41), #141 canon-1b-1 (research), #142 docs-decisions-1 (DECISIONS.md), #143 карточки noon-1, ladder-1, #144 sync DOCS, #145 noon-1 (сервер ✅ 7ee5882), #146 ladder-1 (не выкачен).
-- #147–#157 (28–31.10): код — #149 api-3, #151 miniapp-fix-2, #155 content-1, #157 db-1 (сервер ✅ 31.10); прочие — docs, карточки, sync.
+- #138–#157 (27–31.10): код — #145 noon-1, #146 ladder-1, #149 api-3, #151 miniapp-fix-2, #155 content-1, #157 db-1; прочее — docs, карточки, DECISIONS, research, sync. Подробно — docs/HISTORY.md и снимок docs/history/STATE-606080f.md.
+- #158–#166 (31.10–03.11): #158 docs-pack-3110, #159 карточка bot-group-1 и Р-15, #160 sync 08 §8.5, #161 bot-group-1 (выкачен 01.11), #162 PLAN.md, #163 карточка clocks-1, #164 clocks-1 (выкачен 03.11), #165 карточки api-refl-1 и miniapp-refl-1, #166 карточка db-2.
 ## Решения Автора (процессные — в правилах, см. шапку)
 - Бот — long polling. Cloudflare Tunnel — нет. Прод — Timeweb Cloud (Р-9), туннель дом→VPS autossh/WireGuard.
 - Память: сумма лимитов ≤ 2 ГБ; сейчас 1920 МБ (api 384, db 384, bot 512, garage 192, miniapp 128, projector 128, redis 64; migrate 128 одноразово), реально ~362 МБ (06.10).
@@ -52,11 +52,12 @@
 - Мелочи ревью Р-2 (25.10) — docs/reviews/R2-2510.md → карточка ПРОЕКТИРОВЩИКА (п.3 плана).
 - Settings.model_dump() и __dict__ отдают DSN — настройки целиком не выводить. texts.run_load: ImportError драйвера не ловится («1 — А», 15.10). rate_limit: INCR и EXPIRE — две команды (лишняя память Redis).
 - DEFECTS (внести, Р0): app_projector INSERT participant_events с любым kind/actor (РЕВЬЮЕР #94); app_bot UPDATE outbox.sent_at без WHERE; у outbox_relay нет прав на outbox_dlq и последовательности; компакция outbox (INV-3) без владельца; sent_at после DLQ = «обработано» (В13); erasure — FK day_marks без DELETE.
-- Тесты 0007 (#94), 0008 (#95): негативные CHECK, Н1–Н5 — снимок STATE-606080f.md. Тесты 0011 от РЕВЬЮЕРА #157 (pid и tombstoned_at после downgrade, права после повторного upgrade, «TO PUBLIC», INSERT id/created_at = false, кириллица 2000/2001) — в «Задетые тесты» api-refl-1.
+- Тесты 0007 (#94), 0008 (#95) — снимок docs/history/STATE-606080f.md. Пять пунктов РЕВЬЮЕРА #157 по 0011 закрыты в db-2 (0012). Долг ШТАБа: AGENT-BRIEF.md §6 устарел («миграции до 0010», «таблиц 16») — подложить в ближайшую задачу без БД.
 - Внесено ранее (D-25…D-28, SERVER-IRONCLAD, AGENT-BRIEF §6) — снимок; открыто: outbox_events (канон) ≠ outbox; В8 — права прямо app_*.
 ## Уроки ШТАБа (живые)
 - 17–25.10: уроки — снимки docs/history/STATE-6966838.md и STATE-606080f.md.
 - 31.10: правила читать целиком — инструмент чтения ссылок вырезает середину длинных файлов; середины нет → дочитать частями или попросить SHTAB-копия; РЕВЬЮЕР — бесплатный чат; мерж — Create a merge commit + Delete branch + кредиты в комментарии; канон или YAML, не прочитанный глазами, — «не проверено» (К-3).
+- 03.11: защита «не раньше ЧЧ:ММ» в заданиях серверу — всегда по дате и времени, иначе повтор в другой день даёт ложное «рано»; формат строк лога в «Ожиданиях» сверять с кодом и карточкой; мерж любого PR ШТАБ выдаёт только вместе с блоком «Комментарий ШТАБа» и полной цепочкой кнопок Merge pull request → Create a merge commit → Confirm merge → Delete branch.
 ## К пересмотру 01.11.2026 (не проверено)
 - Free Quota Deep Research: что покрывает и сколько (D-1, D-5, D-9, 152-ФЗ, PSP).
 - Триггеры денег: Т1 — апгрейд тарифа на месяц; Т3 — GenTeam + свой Claude Code. Докупка 20 $ = 7 500 (источники расходятся); ноль кредитов; бесплатный Opus до 31.12 при апгрейде.
