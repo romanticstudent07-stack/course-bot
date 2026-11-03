@@ -105,6 +105,11 @@ PRIVILEGE_CHECKS_0011: tuple[tuple[str, str, bool], ...] = (
         False,
     ),
     (
+        "public-select-any-column",
+        "has_any_column_privilege('public', 'reflections_log', 'SELECT')",
+        False,
+    ),
+    (
         "api-insert-id",
         "has_column_privilege('app_api', 'reflections_log', 'id', 'INSERT')",
         False,
@@ -295,6 +300,7 @@ def test_body_len_rejected_0011(db_engine, body):
     assert caught.value.orig.diag.constraint_name == "ck_reflections_log_body_len"
 
 
+# CHECK считает char_length (символы), не байты.
 @pytest.mark.parametrize(
     "body",
     ["ab", "x" * 2000, "я" * 2000],
