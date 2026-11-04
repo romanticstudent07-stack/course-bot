@@ -11,6 +11,10 @@
 // после первого нажатия кнопка гаснет (DM 3.10). Вердикт экран не показывает (DM 3.19).
 // miniapp-fix-2: «Обновить» — без «Загрузка…», экран остаётся, кнопка гаснет и пишет «Обновляем…».
 // miniapp-fix-2: 503 SERVICE_UNAVAILABLE — 2 повтора GET (2 с, 4 с) тем же timerRef (dayRetryDelayMs).
+// miniapp-refl-1: поле рефлексии (03 §3.12) — в view open при reflection_required из GET под блоками
+// textarea «Рефлексия»; «Отправить отчёт» активна от 2 символов после trim; текст уходит полем
+// reflection. Текст только в памяти экрана (не на устройстве, не в консоль); фоновый GET его не
+// сбрасывает, после 200 поле очищается; 422 REFLECTION_REQUIRED — своё сообщение и перечитать день.
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import {
@@ -25,12 +29,15 @@ import {
   type DayMarkValue,
 } from '@/api/client.ts';
 import {
+  REFLECTION_LABEL,
+  REFLECTION_MAX,
   actionMessage,
   canPressMark,
   canSendReport,
   markErrorAction,
   markLabels,
   marksFromDay,
+  reflectionRequired,
   reportBody,
   reuseOpId,
   submitErrorAction,
@@ -120,6 +127,8 @@ export function DayPage() {
   const [sent, setSent] = useState(false);
   // «Обновить» нажата и GET (с повторами) ещё идёт: кнопка гаснет и пишет «Обновляем…».
   const [refreshing, setRefreshing] = useState(false);
+  // Текст рефлексии — только в памяти экрана: не на устройстве, не в консоль; GET его не трогает.
+  const [reflection, setReflection] = useState('');
 
   const mountedRef = useRef(true);
   const requestIdRef = useRef(0);
@@ -292,12 +301,13 @@ export function DayPage() {
 
   const sendReport = () => {
     if (sendingRef.current || pendingRef.current.size > 0) return;
-    if (!canSendReport(view, day, { sending: false, sent }, marks)) return;
+    if (!canSendReport(view, day, { sending: false, sent }, marks, reflection)) return;
     const blockList = day?.blocks ?? [];
     sendingRef.current = true;
     setSending(true);
     setNotice('');
-    const body = reportBody(blockList, marks);
+    // Рефлексия — только в день рефлексии; другой текст даст другое тело и новый opId (reuseOpId, D-17).
+    const body = reportBody(blockList, marks, reflectionRequired(day) ? reflection : undefined);
     const op = reuseOpId(opRef.current, body, newClientOpId);
     opRef.current = op;
     const sentFrom = { view, started: day?.day_started_at ?? null };
@@ -308,6 +318,7 @@ export function DayPage() {
         if (!mountedRef.current) return;
         sentFromRef.current = sentFrom;
         setSent(true);
+        setReflection('');
         load('silent');
       })
       .catch((err: unknown) => {
@@ -386,11 +397,26 @@ export function DayPage() {
       />
     ));
 
+  // Поле рефлексии: только view open и reflection_required из GET; disabled — как кнопки отметок.
+  const reflectionField = () =>
+    view === 'open' && reflectionRequired(day) ? (
+      <label style={blockStyle}>
+        <span>{REFLECTION_LABEL}</span>
+        <textarea
+          value={reflection}
+          rows={4}
+          maxLength={REFLECTION_MAX}
+          disabled={!marksAllowed}
+          onChange={(e) => setReflection(e.target.value)}
+        />
+      </label>
+    ) : null;
+
   const reportRow = () => (
     <div style={rowStyle}>
       <button
         type="button"
-        disabled={!canSendReport(view, day, { sending, sent }, marks) || pending.size > 0}
+        disabled={!canSendReport(view, day, { sending, sent }, marks, reflection) || pending.size > 0}
         onClick={sendReport}
       >
         {sending ? 'Отправляем…' : 'Отправить отчёт'}
@@ -429,6 +455,7 @@ export function DayPage() {
       body = (
         <>
           {blocks()}
+          {reflectionField()}
           {reportRow()}
         </>
       );

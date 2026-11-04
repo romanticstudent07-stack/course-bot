@@ -3,6 +3,8 @@
 // DM 3.3: «Выполнил» / «Не выполнил» переключаемо до отправки; «Отправить отчёт» — когда отмечены все.
 // DM 3.10: после первого нажатия гаснет. DM 3.11: ложного успеха нет.
 // «Можно ли нажать» — только view и buttons_active; окно 04:00–00:00 клиент не считает (коды 409 — от сервера).
+// miniapp-refl-1 (03 §3.12): в день рефлексии (только reflection_required из GET) отчёт уходит
+// с полем reflection; «Отправить отчёт» — от 2 символов после trim (символы, как на сервере).
 import { ApiError, type DayBlock, type DayCurrent, type DayMarkValue, type DayReportIn } from '../api/client.ts';
 import { PARTICIPANT_NOT_FOUND_MESSAGE, type DayView } from './dayScreen.ts';
 import { errorMessage } from './OnboardingFlow.tsx';
@@ -13,6 +15,13 @@ export interface DayBusy {
   sending: boolean;
   sent: boolean;
 }
+
+/** Рефлексия: минимум символов после trim и предел поля (обрезает сервер). */
+export const REFLECTION_MIN = 2;
+export const REFLECTION_MAX = 2000;
+/** Строки интерфейса (не тексты курса). */
+export const REFLECTION_LABEL = 'Рефлексия';
+export const REFLECTION_REQUIRED_MESSAGE = 'Напишите рефлексию: минимум 2 символа.';
 
 /** Отметки из ответа GET (сервер — источник правды); null пропускается. */
 export function marksFromDay(day: DayCurrent | null | undefined): LocalMarks {
@@ -38,22 +47,43 @@ export function allMarked(blocks: readonly DayBlock[] | null | undefined, marks:
   return blocks.every((b) => marks[b.block_id] === 'done' || marks[b.block_id] === 'not_done');
 }
 
+/** День рефлексии — только по полю сервера; клиент сам не считает. */
+export function reflectionRequired(day: DayCurrent | null | undefined): boolean {
+  return day?.reflection_required === true;
+}
+
+/** Т10: символы (кодовые точки) после trim, как на сервере: эмодзи — 1 символ. */
+export function reflectionFilled(text: string): boolean {
+  return Array.from(text.trim()).length >= REFLECTION_MIN;
+}
+
 export function canPressMark(view: DayView, day: DayCurrent | null | undefined, busy: DayBusy): boolean {
   return view === 'open' && day?.buttons_active === true && !busy.sending && !busy.sent;
 }
 
+/** Т12: в день рефлексии ещё и поле заполнено; без 5-го аргумента — прежнее поведение. */
 export function canSendReport(
   view: DayView,
   day: DayCurrent | null | undefined,
   busy: DayBusy,
   marks: LocalMarks,
+  reflection = '',
 ): boolean {
-  return canPressMark(view, day, busy) && allMarked(day?.blocks, marks);
+  return (
+    canPressMark(view, day, busy) &&
+    allMarked(day?.blocks, marks) &&
+    (!reflectionRequired(day) || reflectionFilled(reflection))
+  );
 }
 
-/** Тело отчёта: каждый блок ровно один раз, в порядке блоков. */
-export function reportBody(blocks: readonly DayBlock[], marks: LocalMarks): DayReportIn {
-  return { marks: blocks.map((b) => ({ block_id: b.block_id, value: marks[b.block_id] })) };
+/**
+ * Тело отчёта: каждый блок ровно один раз, в порядке блоков.
+ * reflection === undefined — ключа reflection в теле нет; иначе текст как введён (обрезает сервер).
+ */
+export function reportBody(blocks: readonly DayBlock[], marks: LocalMarks, reflection?: string): DayReportIn {
+  const body: DayReportIn = { marks: blocks.map((b) => ({ block_id: b.block_id, value: marks[b.block_id] })) };
+  if (reflection !== undefined) body.reflection = reflection;
+  return body;
 }
 
 export interface OpRef {
@@ -86,6 +116,8 @@ export function submitErrorAction(err: unknown): SubmitErrorAction {
   if (err.status === 409 && err.code === 'IDEMPOTENCY_CONFLICT') return 'new_op_refetch';
   if (err.status === 409 && DAY_409.has(err.code)) return 'refetch';
   if (err.status === 422 && err.code === 'MARKS_INCOMPLETE') return 'refetch';
+  // Т12: экран перечитывает GET и получает reflection_required.
+  if (err.status === 422 && err.code === 'REFLECTION_REQUIRED') return 'refetch';
   return 'retry';
 }
 
@@ -101,6 +133,7 @@ export function actionMessage(err: unknown, kind: 'mark' | 'report'): string {
     if (err.code === 'DAY_CLOSED') return DAY_CLOSED_MESSAGE;
     if (err.code === 'DAY_NOT_ACTIVE') return DAY_NOT_ACTIVE_MESSAGE;
     if (err.code === 'DAY_ALREADY_SUBMITTED') return DAY_ALREADY_SUBMITTED_MESSAGE;
+    if (err.code === 'REFLECTION_REQUIRED') return REFLECTION_REQUIRED_MESSAGE;
     if (DAY_CHANGED_CODES.has(err.code)) return DAY_CHANGED_MESSAGE;
   }
   return (kind === 'mark' ? 'Отметка не сохранилась. ' : 'Отчёт не отправлен. ') + errorMessage(err);

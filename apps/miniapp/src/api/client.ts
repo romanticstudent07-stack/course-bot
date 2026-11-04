@@ -206,6 +206,11 @@ export interface DayCurrent {
   deadline_at?: string | null;
   queued_until?: string | null;
   buttons_active?: boolean | null;
+  /**
+   * День рефлексии (03 §3.12, miniapp-refl-1). Д1: сервер отдаёт поле только в open, submitted
+   * и closed; в queued и без позиции его нет — поэтому необязательное. Клиент день не считает.
+   */
+  reflection_required?: boolean | null;
 }
 
 /** Только чтение. Ошибки: 401, 404 PARTICIPANT_NOT_FOUND, 429, 503. */
@@ -230,6 +235,8 @@ export type DayMarkOut = DayMarkIn;
 export interface DayReportIn {
   /** Каждый блок дня ровно один раз, в порядке блоков. */
   marks: DayMarkIn[];
+  /** Рефлексия — только в день рефлексии; текст как введён: strip и обрезку длины делает сервер. */
+  reflection?: string;
 }
 
 export interface DayReportOut {
@@ -248,6 +255,7 @@ export const putDayMark = (body: DayMarkIn) =>
 /**
  * Отчёт дня. clientOpId — один на попытку с тем же телом: повтор после ошибки — с ним же (D-17).
  * 200 — только после commit. Вердикт экран не показывает (DM 3.19).
+ * 422 REFLECTION_REQUIRED — день рефлексии без текста (меньше 2 символов после strip).
  */
 export const postDayReport = (body: DayReportIn, clientOpId: string) =>
   apiRequest<DayReportOut>('/miniapp/v1/day/report/submit', { method: 'POST', body, clientOpId });
