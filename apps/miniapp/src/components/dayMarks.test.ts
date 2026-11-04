@@ -2,6 +2,7 @@
 // Отметки и отчёт дня (day-screen-b): подписи, «все отмечены», можно ли нажать / отправить,
 // тело отчёта, тот же X-Client-Op-Id при повторе, действия и сообщения после ошибок.
 // miniapp-fix-2: 404 PARTICIPANT_NOT_FOUND на отметке и отчёте — текст без префикса.
+// miniapp-refl-1: рефлексия — 2 символа после trim (эмодзи — 1), кнопка, тело, 422 REFLECTION_REQUIRED.
 import { describe, expect, it, vi } from 'vitest';
 
 import { ApiError, type DayBlock, type DayCurrent } from '../api/client.ts';
@@ -10,6 +11,7 @@ import {
   DAY_CHANGED_MESSAGE,
   DAY_CLOSED_MESSAGE,
   DAY_NOT_ACTIVE_MESSAGE,
+  REFLECTION_REQUIRED_MESSAGE,
   actionMessage,
   allMarked,
   canPressMark,
@@ -17,6 +19,7 @@ import {
   markErrorAction,
   markLabels,
   marksFromDay,
+  reflectionFilled,
   reportBody,
   reuseOpId,
   submitErrorAction,
@@ -208,5 +211,59 @@ describe('actionMessage', () => {
   it('404 NOT_FOUND — с префиксом', () => {
     const e = new ApiError(404, 'NOT_FOUND', '');
     expect(actionMessage(e, 'mark')).toBe(`Отметка не сохранилась. ${errorMessage(e)}`);
+  });
+});
+
+// ---- miniapp-refl-1: рефлексия (03 §3.12) ----
+
+describe('reflectionFilled', () => {
+  it('минимум 2 символа после trim; эмодзи — 1 символ', () => {
+    expect(reflectionFilled('')).toBe(false);
+    expect(reflectionFilled(' а ')).toBe(false);
+    expect(reflectionFilled('ок')).toBe(true);
+    expect(reflectionFilled('  ок  ')).toBe(true);
+    expect(reflectionFilled('😀')).toBe(false);
+    expect(reflectionFilled('😀😀')).toBe(true);
+  });
+});
+
+describe('canSendReport с рефлексией', () => {
+  it('reflection_required true, всё отмечено: пусто → нет, «ок» → да', () => {
+    const day = openDay({ reflection_required: true });
+    expect(canSendReport('open', day, idle, both, '')).toBe(false);
+    expect(canSendReport('open', day, idle, both)).toBe(false);
+    expect(canSendReport('open', day, idle, both, 'ок')).toBe(true);
+  });
+  it('без reflection_required — как раньше, без 5-го аргумента → да', () => {
+    expect(canSendReport('open', openDay(), idle, both)).toBe(true);
+    expect(canSendReport('open', openDay({ reflection_required: false }), idle, both)).toBe(true);
+    expect(canSendReport('open', openDay({ reflection_required: null }), idle, both)).toBe(true);
+  });
+});
+
+describe('reportBody с рефлексией', () => {
+  const blocks = [block(1), block(2)];
+  const marks = [
+    { block_id: 'b1', value: 'done' },
+    { block_id: 'b2', value: 'not_done' },
+  ];
+  it('без reflection — ключа нет', () => {
+    const body = reportBody(blocks, both);
+    expect(body).toEqual({ marks });
+    expect('reflection' in body).toBe(false);
+  });
+  it('с «ок» — текст как введён', () => {
+    expect(reportBody(blocks, both, 'ок')).toEqual({ marks, reflection: 'ок' });
+  });
+});
+
+describe('REFLECTION_REQUIRED', () => {
+  it('submitErrorAction → refetch', () => {
+    expect(submitErrorAction(new ApiError(422, 'REFLECTION_REQUIRED', ''))).toBe('refetch');
+  });
+  it('actionMessage → своё сообщение', () => {
+    expect(actionMessage(new ApiError(422, 'REFLECTION_REQUIRED', ''), 'report')).toBe(
+      REFLECTION_REQUIRED_MESSAGE,
+    );
   });
 });
