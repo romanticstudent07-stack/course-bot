@@ -1,5 +1,7 @@
 """/miniapp/v1/day/* — день участника (iter2-api-1: GET current; iter2-api-2a: test-enter, marks;
-iter2-api-2b: report/submit; life-ops-b: окно дня 04:00–00:00, позиция в отчёте, очередь в GET).
+iter2-api-2b: report/submit; life-ops-b: окно дня 04:00–00:00, позиция в отчёте, очередь в GET;
+api-refl-1: рефлексия в отчёте дня — поле reflection, лог reflections_log, outbox
+reflection_submitted, reflection_required в GET).
 
 Время (life-ops-b, У1): «сейчас» — только day_clock.utcnow(), один раз за запрос: в marks и
 submit — после замка participant:pid, в GET — в начале read_day_current. Окно, границы и
@@ -30,6 +32,8 @@ GET /day/current — только чтение, ничего не пишет:
   - отметки — из day_marks только по pid и текущему day_started_at (true → done,
     false → not_done, нет строки → null);
   - can_submit = все блоки отмечены, статус open и окно open;
+  - reflection_required = day_clock.is_reflection_day(day_no) (api-refl-1, Т8) — только в
+    ветках с позицией open / submitted / closed; в queued и без позиции поля нет (exclude_unset);
   - test_entry = флаг DAY_TEST_ENTRY_ENABLED включён и позиции нет (iter2-api-2a);
   - позиция есть, а контента дня нет → 503 DAY_CONTENT_MISSING, в лог ERROR
     (stage, module, day; без pid).
@@ -58,7 +62,9 @@ PUT /day/marks (iter2-api-2a), тело {block_id ^[a-z0-9_]{1,32}$, value done 
   at не меняется — время первой отметки блока («пришёл» = min(at), В19) → commit → 200.
 
 POST /day/report/submit (iter2-api-2b; П-31, В15, В18, В22), заголовок X-Client-Op-Id (UUID v4,
-обязателен; нет, не UUID или не v4 → 422 VALIDATION_ERROR), тело {marks: [{block_id, value}]}.
+обязателен; нет, не UUID или не v4 → 422 VALIDATION_ERROR), тело {marks: [{block_id, value}],
+reflection?: string} (api-refl-1: reflection ≤ 2000 символов, без NUL, иначе 422 VALIDATION_ERROR;
+norm = reflection.strip() — в БД и в params_hash; поле есть → хеш с norm, нет → прежний хеш).
 Одна транзакция, порядок:
   1) нет активного pid под замком → 404 PARTICIPANT_NOT_FOUND;
   2) есть ключ day_report:{pid}:{op_id} (api-3; срок — в SQL: created_at + ttl < now):
@@ -72,12 +78,19 @@ POST /day/report/submit (iter2-api-2b; П-31, В15, В18, В22), заголов�
      окно not_active → 409 DAY_NOT_ACTIVE, closed → 409 DAY_CLOSED (повтор op_id — раньше);
   4) набор block_id ≠ блоки дня (лишний, недостающий, повтор) → 422 MARKS_INCOMPLETE;
   5) есть ключ day_done по текущему day_started_at → 409 DAY_ALREADY_SUBMITTED;
+  5а) api-refl-1 (Т4): день рефлексии (day_clock.is_reflection_day) и поля нет или len(norm) < 2 →
+     422 REFLECTION_REQUIRED (all_not_done тоже требует поле); в день не рефлексии поле
+     принимается, но в лог и outbox не пишется (Т6);
   6) UPSERT day_marks, как PUT (at не меняется);
   7) вердикт — app/day_report.py; жизни не меняются (Ш1);
   8) INSERT idempotency_keys: day_done (result_ref = verdict) и day_report (result_ref,
      params_hash; day_report с created_at = now запроса (api-3)) — без ON CONFLICT: под замком дубля нет, а если будет — ошибка БД → 503;
   8а) INSERT idempotency_keys day_queue:{pid}:{dsa(next_started)} (kind day_queue) — тоже без
      ON CONFLICT, как day_done: конфликт → IntegrityError → rollback → 503;
+  8б) api-refl-1 (Т7), только в день рефлексии: INSERT reflections_log (позиция и day_started_at
+     из прочитанной строки state, body = norm) RETURNING id → INSERT outbox (event_type —
+     литерал 'reflection_submitted' в SQL, payload {pid, reflection_id}, без RETURNING: у app_api
+     нет SELECT на outbox). Текста рефлексии и ПДн в payload нет. Ошибка БД → rollback → 503;
   9) INSERT participant_events kind day_report_submitted, payload {day_started_at (dsa),
      verdict, stage_no, module_no, day_no, next_stage_no, next_module_no, next_day_no,
      next_day_started_at = dsa(next_started)}, actor participant. passed → day_no + 1, если
@@ -87,10 +100,12 @@ POST /day/report/submit (iter2-api-2b; П-31, В15, В18, В22), заголов�
   10) commit → 200 {verdict, queued: true}. Ответ строится только после успешного commit:
      ошибка БД, в том числе на commit → rollback, 503 (ложного 200 нет, П-31).
   Время — day_clock.utcnow() после замка; время клиента не принимается.
-Лог INFO: только tg_user_id и status (для marks — ещё block_id). pid и op_id в лог не идут.
+Лог INFO: только tg_user_id и status (для marks — ещё block_id). pid, op_id и текст рефлексии
+в лог не идут.
 """
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from collections.abc import Mapping
@@ -99,7 +114,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
-from pydantic import UUID4, BaseModel, Field
+from pydantic import UUID4, BaseModel, Field, field_validator
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
@@ -156,6 +171,8 @@ MARK_NOT_DONE = "not_done"
 CLIENT_OP_ID_HEADER = "X-Client-Op-Id"
 ACTOR_PARTICIPANT = "participant"
 MAX_REPORT_MARKS = 64  # верхняя граница длины marks (защита от огромного тела)
+MAX_REFLECTION_LEN = 2000  # api-refl-1 (Т1): как CHECK 0011
+MIN_REFLECTION_LEN = 2  # api-refl-1 (Т4): после strip
 
 # Тестовый вход — всегда день 1 этапа 1 модуля 1 (В3 — А).
 TEST_ENTRY_PAYLOAD: dict[str, Any] = {
@@ -195,6 +212,21 @@ _INSERT_REPORT_KEY_SQL = text(
     "VALUES (:key, :kind, CAST(:ttl AS interval), :result_ref, :params_hash, :created_at)"
 )
 
+# api-refl-1 (Т7): контракт 0011 дословно. Только INSERT: UPDATE / DELETE reflections_log нет.
+_INSERT_REFLECTION = text(
+    "INSERT INTO reflections_log (pid, stage_no, module_no, day_no, day_started_at, body) "
+    "VALUES (:pid, :s, :m, :d, :ds, :body) RETURNING id"
+)
+
+# api-refl-1 (Т7): по образцу notify_ops._INSERT_OUTBOX; event_type — литерал (колоночный GRANT
+# 0012 значение не ограничивает), без RETURNING (у app_api нет SELECT на outbox).
+_INSERT_REFLECTION_OUTBOX = text(
+    """
+    INSERT INTO outbox (aggregate_id, event_type, payload, tx_id)
+    VALUES (:pid_text, 'reflection_submitted', CAST(:payload AS jsonb), pg_current_xact_id())
+    """
+)
+
 # api-3: повтор op_id — срок ключа сравнивается в SQL с :now запроса.
 _REPORT_KEY_SQL = text(
     "SELECT result_ref, params_hash, (created_at + ttl < :now) AS expired "
@@ -230,6 +262,8 @@ class DayCurrentOut(BaseModel):
     deadline_at: datetime | None = None
     queued_until: datetime | None = None
     buttons_active: bool | None = None
+    # api-refl-1 (Т8): только open / submitted / closed (exclude_unset — иначе поля нет).
+    reflection_required: bool | None = None
 
 
 class TestEnterOut(BaseModel):
@@ -250,6 +284,15 @@ class DayMarkOut(BaseModel):
 class DayReportIn(BaseModel):
     # Лишние поля (pid, day_started_at, …) игнорируются (extra="ignore").
     marks: list[DayMarkIn] = Field(max_length=MAX_REPORT_MARKS)
+    # api-refl-1 (Т1, Т3): не строка или длиннее 2000 → 422 VALIDATION_ERROR; NUL — тоже.
+    reflection: str | None = Field(default=None, max_length=MAX_REFLECTION_LEN)
+
+    @field_validator("reflection")
+    @classmethod
+    def _no_nul(cls, value: str | None) -> str | None:
+        if value is not None and "\x00" in value:
+            raise ValueError("reflection не может содержать символ NUL")
+        return value
 
 
 class DayReportOut(BaseModel):
@@ -537,6 +580,7 @@ def read_day_current(
         deadline_at=deadline_at,
         queued_until=None,
         buttons_active=window_open and not submitted,  # Р1: после сдачи кнопки неактивны
+        reflection_required=day_clock.is_reflection_day(row.day_no),  # api-refl-1 (Т8)
     )
 
 
@@ -661,7 +705,8 @@ def submit_day_report(
     now = day_clock.utcnow()  # после замка (У1)
 
     pairs = [(mark.block_id, mark.value) for mark in body.marks]
-    p_hash = params_hash(pairs)
+    norm = None if body.reflection is None else body.reflection.strip()  # api-refl-1 (Т2)
+    p_hash = params_hash(pairs, norm)
     report_key = key_day_report(pid, str(op_id))
     previous = session.execute(_REPORT_KEY_SQL, {"key": report_key, "now": now}).first()
     if previous is not None:
@@ -706,6 +751,17 @@ def submit_day_report(
     done_key = key_day_done(pid, started)
     if _has_key(session, done_key):
         raise _released(session, _day_already_submitted())
+    # 5а (api-refl-1, Т4): до UPSERT отметок и вердикта; all_not_done тоже требует поле.
+    reflection_day = day_clock.is_reflection_day(row.day_no)
+    if reflection_day and (norm is None or len(norm) < MIN_REFLECTION_LEN):
+        raise _released(
+            session,
+            _error(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "REFLECTION_REQUIRED",
+                "Нужна рефлексия: минимум 2 символа.",
+            ),
+        )
 
     done = {block_id: value == MARK_DONE for block_id, value in pairs}
     for block_id, is_done in done.items():
@@ -717,6 +773,28 @@ def submit_day_report(
     next_started = next_day_started(now, row.tz)
     next_stage_no, next_module_no, next_day_no = next_position(content, row, result)
     _insert_result_key(session, key_day_queue(pid, next_started), KIND_DAY_QUEUE, None, None)
+    if reflection_day:
+        # 8б (api-refl-1, Т7): та же транзакция; ошибка БД → вызывающий: rollback, 503.
+        reflection_id = int(
+            session.execute(
+                _INSERT_REFLECTION,
+                {
+                    "pid": pid,
+                    "s": row.stage_no,
+                    "m": row.module_no,
+                    "d": row.day_no,
+                    "ds": started,
+                    "body": norm,
+                },
+            ).scalar_one()
+        )
+        session.execute(
+            _INSERT_REFLECTION_OUTBOX,
+            {
+                "pid_text": str(pid),
+                "payload": json.dumps({"pid": str(pid), "reflection_id": reflection_id}),
+            },
+        )
     session.execute(
         ParticipantEvent.__table__.insert().values(
             pid=pid,
@@ -870,7 +948,10 @@ def put_day_marks(
             "description": "IDEMPOTENCY_CONFLICT / DAY_NOT_STARTED / DAY_NOT_ACTIVE / "
             "DAY_CLOSED / DAY_ALREADY_SUBMITTED"
         },
-        422: {"description": "MARKS_INCOMPLETE / нет или неверный X-Client-Op-Id / тело"},
+        422: {
+            "description": "MARKS_INCOMPLETE / REFLECTION_REQUIRED / нет или неверный "
+            "X-Client-Op-Id / тело"
+        },
         503: {"description": "SERVICE_UNAVAILABLE — ошибка БД (в т. ч. commit); DAY_CONTENT_MISSING"},
     },
 )

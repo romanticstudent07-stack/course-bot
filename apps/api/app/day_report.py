@@ -8,7 +8,9 @@ verdict (docs/tasks/iter2-api-2b.md, §7; решения В18, Ш1):
 
 marks_complete: набор block_id отчёта равен блокам дня — без лишних, недостающих и повторов.
 params_hash: sha256 (hex) канонического JSON отсортированного списка [block_id, value];
-порядок marks в теле на хеш не влияет.
+порядок marks в теле на хеш не влияет. api-refl-1 (Т5): reflection is None → тот же хеш, что
+раньше (только список); иначе — sha256 канонического JSON объекта {"marks": <тот же список>,
+"reflection": strip(reflection)}.
 БД, время и логи здесь не используются.
 """
 from __future__ import annotations
@@ -48,8 +50,15 @@ def verdict(day: Day, done: Mapping[str, bool]) -> str:
     return VERDICT_NOT_PASSED
 
 
-def params_hash(marks: Iterable[tuple[str, str]]) -> str:
-    """sha256 канонического JSON: [[block_id, value], …], отсортировано, без пробелов."""
+def params_hash(marks: Iterable[tuple[str, str]], reflection: str | None = None) -> str:
+    """sha256 канонического JSON: [[block_id, value], …], отсортировано, без пробелов.
+
+    reflection задан (api-refl-1, Т5) → JSON объекта {"marks": …, "reflection": norm},
+    norm = reflection.strip() (повторный strip нормализованной строки ничего не меняет).
+    """
     canonical = sorted([str(block_id), str(value)] for block_id, value in marks)
-    raw = json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
+    payload: object = canonical
+    if reflection is not None:
+        payload = {"marks": canonical, "reflection": reflection.strip()}
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
