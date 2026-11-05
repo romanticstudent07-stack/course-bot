@@ -70,6 +70,20 @@ reflections_log (0011, db-1) — неизменяемый лог рефлекс�
     и SELECT (short_no) на tg_user_registry; UPDATE / DELETE / TRUNCATE нет ни у кого;
     app_projector прав нет.
 
+measurements_log (0014, db-i3-2) — append-only журнал замеров: Чек-Ап и стартовый вес:
+  - id bigint (measurements_log_id_seq), pid → tg_user_registry (measurements_log_pid_fkey),
+    kind checkup / body, occasion onboarding / stage_end (stage_no — только у stage_end),
+    checkup_answers (15 ответов 0–3), checkup_score, checkup_zone, checkup_config_version,
+    weight_kg numeric(5,1), client_op_id, created_at; updated_at нет;
+  - UNIQUE (pid, client_op_id) — повтор гасит ON CONFLICT DO NOTHING; индекс
+    measurements_log_pid_kind_idx (pid, kind, created_at) — не уникальный;
+  - CHECK ck_measurements_log_* — в миграции 0014: балл = сумма 15 ответов; связи
+    балл↔зона нет (Р-7: границы зон в конфиге, их проверяет API); вес — от WEIGHT_MIN_KG
+    до WEIGHT_MAX_KG; объёмы, город, ФИО, телефон, email не хранятся (Р-16, А1);
+  - app_api: INSERT по 10 колонкам, SELECT, USAGE последовательности; app_bot: SELECT
+    (pid, kind, occasion, checkup_zone, weight_kg, created_at) — без балла и ответов;
+    UPDATE / DELETE / TRUNCATE нет ни у кого; app_projector прав нет.
+
 participant_state (0001) здесь НЕ моделируется: единственный писатель — проектор
 (E1/INV-1), колонка last_seen_publish_epoch — xid8 (SQLAlchemy его не знает).
 CHECK lifecycle_phase (FSM I2, D-11 «6А») добавлен миграцией 0005.
@@ -78,6 +92,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -89,12 +104,14 @@ from sqlalchemy import (
     Identity,
     Index,
     Integer,
+    Numeric,
+    SmallInteger,
     Text,
     UniqueConstraint,
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import INET, INTERVAL, JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, INET, INTERVAL, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -127,6 +144,16 @@ ACCESS_CREATED_VIA_BACKFILL = "backfill_0010"
 # Те же числа — в CHECK ck_reflections_log_body_len миграции 0011.
 REFLECTION_MIN_LEN = 2
 REFLECTION_MAX_LEN = 2000
+
+# measurements_log (0014, db-i3-2): Чек-Ап и стартовый вес (для api-1, api-2, bot-1).
+# Те же значения — в CHECK ck_measurements_log_* миграции 0014.
+MEASUREMENT_KINDS: tuple[str, ...] = ("checkup", "body")
+MEASUREMENT_OCCASIONS: tuple[str, ...] = ("onboarding", "stage_end")
+CHECKUP_ZONES: tuple[str, ...] = ("green", "yellow", "red")
+CHECKUP_ANSWERS_COUNT = 15
+CHECKUP_ANSWER_MAX = 3
+WEIGHT_MIN_KG = 30
+WEIGHT_MAX_KG = 300
 
 
 def _in_list(column: str, values: tuple[str, ...]) -> str:
@@ -378,4 +405,94 @@ class ReflectionLog(Base):
             "day_no",
             "created_at",
         ),
+    )
+
+
+class MeasurementsLog(Base):
+    __tablename__ = "measurements_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    pid: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tg_user_registry.pid", name="measurements_log_pid_fkey"),
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    occasion: Mapped[str] = mapped_column(Text, nullable=False)
+    stage_no: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    checkup_answers: Mapped[list[int] | None] = mapped_column(
+        ARRAY(SmallInteger), nullable=True
+    )
+    checkup_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    checkup_zone: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checkup_config_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(5, 1), nullable=True)
+    client_op_id: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(_in_list("kind", MEASUREMENT_KINDS), name="ck_measurements_log_kind"),
+        CheckConstraint(
+            _in_list("occasion", MEASUREMENT_OCCASIONS), name="ck_measurements_log_occasion"
+        ),
+        CheckConstraint(
+            "(occasion = 'onboarding' AND stage_no IS NULL) "
+            "OR (occasion = 'stage_end' AND stage_no >= 1)",
+            name="ck_measurements_log_stage",
+        ),
+        CheckConstraint(
+            "kind <> 'checkup' OR (checkup_answers IS NOT NULL AND checkup_score IS NOT NULL "
+            "AND checkup_zone IS NOT NULL AND checkup_config_version IS NOT NULL "
+            "AND weight_kg IS NULL)",
+            name="ck_measurements_log_kind_checkup",
+        ),
+        CheckConstraint(
+            "kind <> 'body' OR (weight_kg IS NOT NULL AND checkup_answers IS NULL "
+            "AND checkup_score IS NULL AND checkup_zone IS NULL "
+            "AND checkup_config_version IS NULL)",
+            name="ck_measurements_log_kind_body",
+        ),
+        CheckConstraint(
+            "checkup_answers IS NULL OR (array_ndims(checkup_answers) = 1 "
+            "AND array_lower(checkup_answers, 1) = 1 "
+            f"AND cardinality(checkup_answers) = {CHECKUP_ANSWERS_COUNT} "
+            "AND array_position(checkup_answers, NULL) IS NULL "
+            f"AND 0 <= ALL (checkup_answers) AND {CHECKUP_ANSWER_MAX} >= ALL (checkup_answers))",
+            name="ck_measurements_log_answers",
+        ),
+        CheckConstraint(
+            "checkup_score IS NULL OR checkup_score = "
+            + " + ".join(
+                f"checkup_answers[{i}]" for i in range(1, CHECKUP_ANSWERS_COUNT + 1)
+            ),
+            name="ck_measurements_log_score_sum",
+        ),
+        CheckConstraint(
+            "checkup_score IS NULL OR checkup_score BETWEEN 0 AND "
+            f"{CHECKUP_ANSWERS_COUNT * CHECKUP_ANSWER_MAX}",
+            name="ck_measurements_log_score_range",
+        ),
+        CheckConstraint(
+            "checkup_zone IS NULL OR " + _in_list("checkup_zone", CHECKUP_ZONES),
+            name="ck_measurements_log_zone",
+        ),
+        CheckConstraint(
+            "checkup_config_version IS NULL "
+            "OR char_length(btrim(checkup_config_version)) BETWEEN 1 AND 64",
+            name="ck_measurements_log_config_version",
+        ),
+        CheckConstraint(
+            f"weight_kg IS NULL OR weight_kg BETWEEN {WEIGHT_MIN_KG} AND {WEIGHT_MAX_KG}",
+            name="ck_measurements_log_weight",
+        ),
+        CheckConstraint(
+            "char_length(client_op_id) BETWEEN 1 AND 64",
+            name="ck_measurements_log_client_op_id",
+        ),
+        UniqueConstraint(
+            "pid", "client_op_id", name="measurements_log_pid_client_op_id_key"
+        ),
+        Index("measurements_log_pid_kind_idx", "pid", "kind", "created_at"),
     )
