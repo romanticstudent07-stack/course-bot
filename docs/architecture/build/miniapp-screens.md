@@ -18,7 +18,7 @@ doc_version: "скелет v0"
 | `onb.age-gate` | `/onboarding/age` | Ввод даты рождения (жёсткая проверка ≥ 18) | onb.welcome | `onb.age.title`, `onb.age.error_under18` | → `onb.consent-152fz` |
 | `onb.consent-152fz` | `/onboarding/consent/152fz` | Согласие 152-ФЗ (C1) | onb.age-gate | `legal.consent.152fz` | → `onb.offer` |
 | `onb.offer` | `/onboarding/offer` | Оферта + галочка «согласен» (C2) | onb.consent-152fz | `legal.offer` | → `onb.form` |
-| `onb.form` | `/onboarding/form` | Анкета (ФИО, телефон, ТЗ, стартовые замеры; фото нет — Р-3) | onb.offer | `onb.form.*` | → `onb.checkup` |
+| `onb.form` | `/onboarding/form` | Анкета (часовой пояс по городу, пол, самочувствие, стартовый вес; ФИО, телефона, email, объёмов нет — Р-16; фото нет — Р-3) | onb.offer | `onb.form.*` | → `onb.checkup` |
 | `onb.checkup` | `/onboarding/checkup` | Чек-Ап (Блок 5) | onb.form | `checkup.*` | → `onb.rules` |
 | `onb.rules` | `/onboarding/rules` | Правила + «Ознакомлен/Принимаю» | onb.checkup | `onb.rules` | → `day.current` (день 1.1) |
 
