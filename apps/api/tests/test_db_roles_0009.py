@@ -62,7 +62,8 @@ BOT_DENIED_0009: tuple[str, ...] = (
     "DELETE FROM outbox_dlq",
     INSERT_DLQ_LITERAL + " RETURNING id",
     "SELECT * FROM tg_user_registry",
-    "SELECT pid FROM participant_state",
+    "SELECT * FROM participant_state",
+    "SELECT missed_streak FROM participant_state",
     "SELECT id FROM participant_events",
     "DELETE FROM text_registry",
 )
