@@ -15,6 +15,7 @@ Append-only таблица measurements_log (имя из db-tables-index): ре�
 - Р-7 [Автор, DECISIONS]: конфиг Чек-Апа меняется через эпохи → связь балл↔зона в CHECK НЕ кладём.
 - Л2 [ШТАБ, К-5; по выдержке iter3-2]: до Панели конфиг — файл в репо с версией, версия пишется в результат; участнику — только зона, балл не показываем.
 - [ШТАБ-тех, К-5]: kind = checkup / body; у body только weight_kg; CHECK checkup_score = сумма 15 ответов; occasion = onboarding / stage_end; app_bot SELECT (pid, kind, occasion, checkup_zone, weight_kg, created_at), checkup_score боту не даём.
+- [ШТАБ-тех, К-5]: stage_no — для Карты изменений (stage_end), onboarding — NULL.
 - Ш-4 [ШТАБ-тех, К-5]: CHECK диапазонов (вес 30–300 кг).
 
 ## 4. Выдержки архитектуры
@@ -42,8 +43,9 @@ Append-only таблица measurements_log (имя из db-tables-index): ре�
 
 ## 7. Контракт (SQL; код — api-1, api-2, bot-1)
 - API, Чек-Ап (балл и зону сервер считает сам по ответам и конфигу):
-  INSERT INTO measurements_log (pid, kind, occasion, checkup_answers, checkup_score, checkup_zone, checkup_config_version, client_op_id) VALUES (:pid, 'checkup', :occ, :answers, :score, :zone, :ver, :op) ON CONFLICT (pid, client_op_id) DO NOTHING RETURNING id
-- API, вес (анкета, api-2): INSERT INTO measurements_log (pid, kind, occasion, weight_kg, client_op_id) VALUES (:pid, 'body', :occ, :w, :op) ON CONFLICT (pid, client_op_id) DO NOTHING RETURNING id
+  INSERT INTO measurements_log (pid, kind, occasion, stage_no, checkup_answers, checkup_score, checkup_zone, checkup_config_version, client_op_id) VALUES (:pid, 'checkup', :occ, :stage, :answers, :score, :zone, :ver, :op) ON CONFLICT (pid, client_op_id) DO NOTHING RETURNING id
+- API, вес (анкета, api-2): INSERT INTO measurements_log (pid, kind, occasion, stage_no, weight_kg, client_op_id) VALUES (:pid, 'body', :occ, :stage, :w, :op) ON CONFLICT (pid, client_op_id) DO NOTHING RETURNING id
+- :stage — номер этапа для stage_end; для onboarding — NULL.
 - Повтор (RETURNING дал 0 строк): SELECT id, checkup_score, checkup_zone, created_at FROM measurements_log WHERE pid = :pid AND client_op_id = :op → тот же 200.
 - Бот (карточка): SELECT kind, occasion, checkup_zone, weight_kg, created_at FROM measurements_log WHERE pid = :pid ORDER BY created_at — старт = первая строка своего kind, текущее = последняя.
 
@@ -52,17 +54,18 @@ Append-only таблица measurements_log (имя из db-tables-index): ре�
 - Таблица measurements_log:
   id bigint (bigserial, measurements_log_id_seq), PK measurements_log_pkey;
   pid uuid NOT NULL, FK → tg_user_registry.pid (measurements_log_pid_fkey);
-  kind text NOT NULL; occasion text NOT NULL;
+  kind text NOT NULL; occasion text NOT NULL; stage_no smallint NULL;
   checkup_answers smallint[] NULL; checkup_score smallint NULL; checkup_zone text NULL; checkup_config_version text NULL;
   weight_kg numeric(5,1) NULL; client_op_id text NOT NULL; created_at timestamptz NOT NULL DEFAULT now(); updated_at нет.
 - UNIQUE (pid, client_op_id) — measurements_log_pid_client_op_id_key; индекс measurements_log_pid_kind_idx (pid, kind, created_at), не уникальный.
 - CHECK (имена точно такие):
   ck_measurements_log_kind: kind IN ('checkup', 'body');
   ck_measurements_log_occasion: occasion IN ('onboarding', 'stage_end');
+  ck_measurements_log_stage: (occasion = 'onboarding' AND stage_no IS NULL) OR (occasion = 'stage_end' AND stage_no >= 1);
   ck_measurements_log_kind_checkup: kind <> 'checkup' OR (checkup_answers IS NOT NULL AND checkup_score IS NOT NULL AND checkup_zone IS NOT NULL AND checkup_config_version IS NOT NULL AND weight_kg IS NULL);
   ck_measurements_log_kind_body: kind <> 'body' OR (weight_kg IS NOT NULL AND checkup_answers IS NULL AND checkup_score IS NULL AND checkup_zone IS NULL AND checkup_config_version IS NULL);
   ck_measurements_log_answers: checkup_answers IS NULL OR (array_ndims(checkup_answers) = 1 AND array_lower(checkup_answers, 1) = 1 AND cardinality(checkup_answers) = 15 AND array_position(checkup_answers, NULL) IS NULL AND 0 <= ALL (checkup_answers) AND 3 >= ALL (checkup_answers));
-  ck_measurements_log_score_sum: checkup_score IS NULL OR checkup_score = checkup_answers[1] + checkup_answers[2] + … + checkup_answers[15] (все 15 слагаемых явно: подзапрос в CHECK нельзя);
+  ck_measurements_log_score_sum: checkup_score IS NULL OR checkup_score = checkup_answers[1] + checkup_answers[2] + checkup_answers[3] + checkup_answers[4] + checkup_answers[5] + checkup_answers[6] + checkup_answers[7] + checkup_answers[8] + checkup_answers[9] + checkup_answers[10] + checkup_answers[11] + checkup_answers[12] + checkup_answers[13] + checkup_answers[14] + checkup_answers[15] (все 15 слагаемых выписаны: подзапрос в CHECK нельзя);
   ck_measurements_log_score_range: checkup_score IS NULL OR checkup_score BETWEEN 0 AND 45;
   ck_measurements_log_zone: checkup_zone IS NULL OR checkup_zone IN ('green', 'yellow', 'red');
   ck_measurements_log_config_version: checkup_config_version IS NULL OR char_length(btrim(checkup_config_version)) BETWEEN 1 AND 64;
@@ -70,20 +73,20 @@ Append-only таблица measurements_log (имя из db-tables-index): ре�
   ck_measurements_log_client_op_id: char_length(client_op_id) BETWEEN 1 AND 64.
 - Связи балл↔зона в CHECK нет (Р-7): границы зон лежат в конфиге, их проверяет api-1 (тест 9/10/22/23).
 - Права (одна строка — одно право; роли создаются, если их нет):
-  app_api INSERT (pid, kind, occasion, checkup_answers, checkup_score, checkup_zone, checkup_config_version, weight_kg, client_op_id);
-  app_api SELECT (id, pid, kind, occasion, checkup_answers, checkup_score, checkup_zone, checkup_config_version, weight_kg, client_op_id, created_at);
+  app_api INSERT (pid, kind, occasion, stage_no, checkup_answers, checkup_score, checkup_zone, checkup_config_version, weight_kg, client_op_id);
+  app_api SELECT (id, pid, kind, occasion, stage_no, checkup_answers, checkup_score, checkup_zone, checkup_config_version, weight_kg, client_op_id, created_at);
   app_api USAGE — SEQUENCE measurements_log_id_seq;
-  app_bot SELECT (pid, kind, occasion, checkup_zone, weight_kg, created_at).
+  app_bot SELECT (pid, kind, occasion, checkup_zone, weight_kg, created_at) — stage_no боту не выдаётся (карточке не нужен).
 - UPDATE, DELETE, TRUNCATE не получает никто; app_projector прав не получает; без ALTER DEFAULT PRIVILEGES и PUBLIC.
 - downgrade: DROP INDEX, затем DROP TABLE (права на таблицу и последовательность уходят вместе с ней; на чужих таблицах 0014 прав не выдаёт). Права 0013 остаются.
-- models.py: MeasurementsLog по схеме выше (ARRAY(SmallInteger), Numeric(5, 1), те же имена CHECK); константы MEASUREMENT_KINDS, MEASUREMENT_OCCASIONS, CHECKUP_ZONES, CHECKUP_ANSWERS_COUNT = 15, CHECKUP_ANSWER_MAX = 3, WEIGHT_MIN_KG = 30, WEIGHT_MAX_KG = 300 — те же значения, что в CHECK.
+- models.py: MeasurementsLog по схеме выше, включая stage_no (SmallInteger, nullable) (ARRAY(SmallInteger), Numeric(5, 1), те же имена CHECK); константы MEASUREMENT_KINDS, MEASUREMENT_OCCASIONS, CHECKUP_ZONES, CHECKUP_ANSWERS_COUNT = 15, CHECKUP_ANSWER_MAX = 3, WEIGHT_MIN_KG = 30, WEIGHT_MAX_KG = 300 — те же значения, что в CHECK.
 
 ## 9. Тесты (apps/api/tests/test_db_roles_0014.py, образец test_db_roles_0011)
 - Статика: revision и down_revision; в PRIVILEGES нет UPDATE, DELETE, TRUNCATE и app_projector; у app_bot нет checkup_score и checkup_answers; в коде нет ALTER DEFAULT PRIVILEGES и PUBLIC.
 - SQL раздела 7 под app_api: checkup → id; повтор того же client_op_id → 0 строк, в таблице одна строка; body (вес 72.5) → id. Под app_bot SELECT карточки возвращает обе строки.
-- Отказы app_bot (42501): SELECT checkup_score; SELECT checkup_answers; SELECT checkup_config_version; SELECT client_op_id; SELECT *; INSERT; UPDATE. Отказы app_api: UPDATE, DELETE, TRUNCATE. app_projector: SELECT id.
+- Отказы app_bot (42501): SELECT checkup_score; SELECT checkup_answers; SELECT checkup_config_version; SELECT client_op_id; SELECT stage_no; SELECT *; INSERT; UPDATE. Отказы app_api: UPDATE, DELETE, TRUNCATE. app_projector: SELECT id.
 - Функции прав, как PRIVILEGE_CHECKS_0011, плюс нет DELETE и TRUNCATE у app_bot, app_api, app_projector.
-- CHECK (вставка владельцем, имя ограничения в diag): 14 и 16 ответов; элементы 4 и −1; NULL-элемент; нижняя граница массива 0 (литерал '[0:14]={…}'); балл ≠ сумме; zone 'blue'; kind 'x'; occasion 'x'; checkup с весом; body без веса; body с ответами; вес 29.9 и 300.1; версия '' и '   '; client_op_id ''. Проходят: вес 30 и 300; баллы 9, 10, 22, 23 с любой зоной (связи нет, Р-7). Дубль (pid, client_op_id) → UniqueViolation measurements_log_pid_client_op_id_key; чужой pid → measurements_log_pid_fkey.
+- CHECK (вставка владельцем, имя ограничения в diag): 14 и 16 ответов; элементы 4 и −1; NULL-элемент; нижняя граница массива 0 (литерал '[0:14]={…}'); балл ≠ сумме; zone 'blue'; kind 'x'; occasion 'x'; checkup с весом; body без веса; body с ответами; вес 29.9 и 300.1; версия '' и '   '; client_op_id ''; ck_measurements_log_stage — onboarding со stage_no 1, stage_end без stage_no, stage_end со stage_no 0. Проходят: вес 30 и 300; баллы 9, 10, 22, 23 с любой зоной (связи нет, Р-7); stage_end со stage_no 2. Дубль (pid, client_op_id) → UniqueViolation measurements_log_pid_client_op_id_key; чужой pid → measurements_log_pid_fkey.
 - ПОСЛЕДНИМ — downgrade до 0013_bot_card: таблицы нет, SELECT (tz) на participant_state у app_bot (право 0013) → true; в finally upgrade head.
 - tg_user_id — 3901–3999 (grep -rn "39[0-9][0-9]" apps/api/tests — пересечений нет). tools/check.sh api — статика; тесты с БД — CI.
 
