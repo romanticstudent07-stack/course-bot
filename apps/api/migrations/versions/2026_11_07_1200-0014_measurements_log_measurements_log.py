@@ -69,8 +69,8 @@ CHECKS: tuple[tuple[str, str], ...] = (
     ("ck_measurements_log_occasion", "occasion IN ('onboarding', 'stage_end')"),
     (
         "ck_measurements_log_stage",
-        "(occasion = 'onboarding' AND stage_no IS NULL) "
-        "OR (occasion = 'stage_end' AND stage_no >= 1)",
+        "(occasion='onboarding' AND stage_no IS NULL) "
+        "OR (occasion='stage_end' AND stage_no IS NOT NULL AND stage_no >= 1)",
     ),
     (
         "ck_measurements_log_kind_checkup",
