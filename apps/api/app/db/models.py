@@ -84,6 +84,19 @@ measurements_log (0014, db-i3-2) — append-only журнал замеров: Ч
     (pid, kind, occasion, checkup_zone, weight_kg, created_at) — без балла и ответов;
     UPDATE / DELETE / TRUNCATE нет ни у кого; app_projector прав нет.
 
+onboarding_form (0015, db-i3-3) — анкета участника по Р-16, одна строка на pid:
+  - pid uuid PK (onboarding_form_pkey) → tg_user_registry (onboarding_form_pid_fkey),
+    gender (GENDERS), wellbeing_code (формат WELLBEING_CODE_PATTERN), created_at;
+    updated_at нет;
+  - повтор гасит ON CONFLICT (pid) DO NOTHING; исходная анкета заново не спрашивается
+    (04 §4.8), поэтому UPDATE нет;
+  - CHECK ck_onboarding_form_gender и ck_onboarding_form_wellbeing_code — в миграции 0015;
+    список кодов самочувствия — в конфиге api-2 (заглушки), БД проверяет только формат;
+  - часовой пояс идёт событием через проектор (participant_state.tz, api-2), вес —
+    в measurements_log; город, ФИО, телефон, email не хранятся (Р-16);
+  - app_api: INSERT (pid, gender, wellbeing_code), SELECT (pid, gender, wellbeing_code,
+    created_at); app_bot и app_projector прав нет; UPDATE / DELETE / TRUNCATE нет ни у кого.
+
 participant_state (0001) здесь НЕ моделируется: единственный писатель — проектор
 (E1/INV-1), колонка last_seen_publish_epoch — xid8 (SQLAlchemy его не знает).
 CHECK lifecycle_phase (FSM I2, D-11 «6А») добавлен миграцией 0005.
@@ -154,6 +167,11 @@ CHECKUP_ANSWERS_COUNT = 15
 CHECKUP_ANSWER_MAX = 3
 WEIGHT_MIN_KG = 30
 WEIGHT_MAX_KG = 300
+
+# onboarding_form (0015, db-i3-3): анкета по Р-16 (для api-2).
+# Те же значения — в CHECK ck_onboarding_form_* миграции 0015.
+GENDERS: tuple[str, ...] = ("male", "female")
+WELLBEING_CODE_PATTERN = "^[a-z0-9_]{1,32}$"
 
 
 def _in_list(column: str, values: tuple[str, ...]) -> str:
@@ -495,4 +513,27 @@ class MeasurementsLog(Base):
             "pid", "client_op_id", name="measurements_log_pid_client_op_id_key"
         ),
         Index("measurements_log_pid_kind_idx", "pid", "kind", "created_at"),
+    )
+
+
+class OnboardingForm(Base):
+    __tablename__ = "onboarding_form"
+
+    pid: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tg_user_registry.pid", name="onboarding_form_pid_fkey"),
+        primary_key=True,
+    )
+    gender: Mapped[str] = mapped_column(Text, nullable=False)
+    wellbeing_code: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(_in_list("gender", GENDERS), name="ck_onboarding_form_gender"),
+        CheckConstraint(
+            f"wellbeing_code ~ '{WELLBEING_CODE_PATTERN}'",
+            name="ck_onboarding_form_wellbeing_code",
+        ),
     )
