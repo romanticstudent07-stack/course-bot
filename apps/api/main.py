@@ -12,6 +12,9 @@
   POST /miniapp/v1/texts/bulk                — пачка текстов по списку ключей (1d)
   GET  /miniapp/v1/day/current               — текущий день участника (iter2-api-1),
                                                только чтение
+  GET  /miniapp/v1/checkup/config            — конфиг Чек-Апа из файла (api-i3-1), без БД
+  POST /miniapp/v1/checkup/submit            — 15 ответов Чек-Апа → зона (api-i3-1),
+                                               measurements_log, X-Client-Op-Id
   POST /security/csp-report                  — приёмник CSP-репортов (E2), без initData
                                                (security: [] в miniapp-api-contract.yaml),
                                                без rate-limit
@@ -22,6 +25,7 @@ RATE_LIMIT_PER_MINUTE на tg_user_id, fail-open). Новые роутеры Min
 
 Контент дня (apps/api/content) загружается и проверяется в create_app:
 битый контент → исключение DayContentError, api не стартует (iter2-api-1).
+Конфиг Чек-Апа (apps/api/config/checkup) — так же: битый → CheckupConfigError (api-i3-1).
 """
 from __future__ import annotations
 
@@ -29,11 +33,12 @@ import logging
 
 from fastapi import APIRouter, Depends, FastAPI
 
+from app.checkup_config import get_checkup_config
 from app.config import get_settings
 from app.day_content import load_day_content
 from app.errors import install_error_handlers
 from app.rate_limit import rate_limit
-from app.routers import consents, day, health, onboarding, security, texts
+from app.routers import checkup, consents, day, health, onboarding, security, texts
 from app.telegram_init_data import require_init_data
 
 
@@ -61,6 +66,8 @@ def create_app() -> FastAPI:
 
     # Контент дня: битый или отсутствующий → исключение, api не стартует (iter2-api-1).
     load_day_content()
+    # Конфиг Чек-Апа: битый или отсутствующий → CheckupConfigError, api не стартует (api-i3-1).
+    get_checkup_config()
 
     app = FastAPI(
         title="course-bot API",
@@ -74,7 +81,7 @@ def create_app() -> FastAPI:
     # /miniapp/v1/** — проверка initData и rate-limit на уровне роутера, для всех маршрутов.
     app.include_router(
         build_miniapp_v1_router(
-            onboarding.router, consents.router, texts.router, day.router
+            onboarding.router, consents.router, texts.router, day.router, checkup.router
         )
     )
 
