@@ -1,0 +1,25 @@
+{
+  "version": "onboarding-form-stub-1",
+  "wellbeing_question": "Заглушка: вопрос о самочувствии",
+  "wellbeing": [
+    {"code": "option_1", "text": "Заглушка: вариант 1"},
+    {"code": "option_2", "text": "Заглушка: вариант 2"},
+    {"code": "option_3", "text": "Заглушка: вариант 3"},
+    {"code": "option_4", "text": "Заглушка: вариант 4"}
+  ],
+  "weight": {"min": 30, "max": 300, "step": 0.1},
+  "fallback_title": "Заглушка: выберите подходящий по часовому поясу город",
+  "timezones": [
+    {"tz": "Europe/Kaliningrad", "city": "Калининград"},
+    {"tz": "Europe/Moscow", "city": "Москва"},
+    {"tz": "Europe/Samara", "city": "Самара"},
+    {"tz": "Asia/Yekaterinburg", "city": "Екатеринбург"},
+    {"tz": "Asia/Omsk", "city": "Омск"},
+    {"tz": "Asia/Novosibirsk", "city": "Новосибирск"},
+    {"tz": "Asia/Irkutsk", "city": "Иркутск"},
+    {"tz": "Asia/Yakutsk", "city": "Якутск"},
+    {"tz": "Asia/Vladivostok", "city": "Владивосток"},
+    {"tz": "Asia/Magadan", "city": "Магадан"},
+    {"tz": "Asia/Kamchatka", "city": "Петропавловск-Камчатский"}
+  ]
+}
