@@ -15,7 +15,7 @@ from sqlalchemy import text
 import app.projector as projector
 from app.config import Settings
 from app.db.models import EVENT_KIND_MINI_APP_FIRST_CONSENT
-from app.projector import ProjectorResult, run_once
+from app.projector import PROJECTOR_VERSION, ProjectorResult, run_once
 
 
 def _participant(engine, tg_user_id: int) -> uuid.UUID:
@@ -86,8 +86,8 @@ def _count(engine, sql: str) -> int:
         return conn.execute(text(sql)).scalar_one()
 
 
-# 1. mini_app_first_consent → onboarding, status_flags '{}', projector_version 2
-#    (PROJECTOR_VERSION с iter2-api-2a); checkpoint.
+# 1. mini_app_first_consent → onboarding, status_flags '{}', projector_version =
+#    PROJECTOR_VERSION (4 с projector-i3-2); checkpoint.
 def test_first_consent_builds_onboarding(db_engine):
     pid = _participant(db_engine, 910001)
     event_id = _event(db_engine, pid)
@@ -98,11 +98,11 @@ def test_first_consent_builds_onboarding(db_engine):
     assert state is not None
     assert state["lifecycle_phase"] == "onboarding"
     assert list(state["status_flags"]) == []
-    assert state["projector_version"] == 3  # PROJECTOR_VERSION с life-ops-a
+    assert state["projector_version"] == PROJECTOR_VERSION
     assert _checkpoint(db_engine, pid) == event_id
 
 
-# 2. Повторный once → без изменений.
+# 2. Повторный once → состояние то же.
 def test_second_pass_changes_nothing(db_engine):
     pid = _participant(db_engine, 910002)
     _event(db_engine, pid)
