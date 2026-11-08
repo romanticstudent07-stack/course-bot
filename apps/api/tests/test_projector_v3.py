@@ -28,8 +28,8 @@ OLD_DAY = "2001-01-01T00:00:00+00:00"
 NEXT_DAY = datetime(2030, 1, 2, 1, 0, tzinfo=timezone.utc)
 
 
-def test_version_is_3():
-    assert PROJECTOR_VERSION == 3
+def test_version_is_4():
+    assert PROJECTOR_VERSION == 4  # projector-i3-2
 
 
 def _open_day(engine, tg_user_id: int):
@@ -140,7 +140,7 @@ def test_report_with_next_fields_advances_day(db_engine):
     assert state.lives == 2
     assert state.lifecycle_phase == "onboarding"
     assert list(state.status_flags) == ["block_lives"]
-    assert state.projector_version == 3
+    assert state.projector_version == PROJECTOR_VERSION
 
 
 def test_old_payload_103_only_resets_streak(db_engine):

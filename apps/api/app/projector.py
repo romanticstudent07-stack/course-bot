@@ -15,7 +15,8 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
   - I2 fsm_participant: pre_registered → onboarding по mini_app_first_consent (6А, D-11);
   - I2 checkpoint_table: participant_state_checkpoints (pid, last_event_id, at).
 
-Виды событий (PROJECTOR_VERSION 3, life-ops-a; выдержки — docs/tasks/life-ops-a.md, раздел 7):
+Виды событий (PROJECTOR_VERSION 4, projector-i3-2; выдержки — docs/tasks/life-ops-a.md, раздел 7,
+и docs/tasks/projector-i3-2.md, разделы 3–4 и 7):
   - mini_app_first_consent — строка состояния, фаза onboarding (без изменений с версии 1);
   - day_entered (iter2-api-2a) — позиция stage_no / module_no / day_no из payload,
     day_started_at = at события, missed_streak = 0; только если позиции ещё нет
@@ -43,7 +44,15 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
     next_day_started_at}: day_started_at = next_day_started_at, missed_streak из payload;
     позиция не меняется. Условие — day_started_at совпадает и next_day_started_at строго
     позже него (Н5: равные → пропуск, иначе повтор применился бы снова). 0 строк → WARNING,
-    пропуск.
+    пропуск;
+  - tz_set (projector-i3-2, Р-16: город → только tz IANA) — payload {tz}: participant_state.tz =
+    tz, только если первый день ещё не начат (WHERE day_no IS NULL). 04 yaml «timezone:
+    applies_next_day», 14 §14.11 — смена пояса со следующего дня; до первого дня «следующего
+    дня» нет → пояс сразу; смена пояса на курсе — отдельная задача. 0 строк (день начат или
+    строки нет) → WARNING «tz_set: day started or no state», пропуск. tz — строка длиной
+    1–MAX_TZ_LEN (64), шаблон _TZ_RE (П-4: проверка до ZoneInfo, ZoneInfo открывает файл
+    по имени), ZoneInfo(tz) без исключения; иначе «bad payload». Набор поясов анкеты сверяет
+    API, не проектор. Фаза, флаги и позиция не упоминаются; tz в лог не идёт.
   Порядок в life-ops-c: life_op раньше day_closed (меньший id) — оба видят старый
   day_started_at. Защита от повтора (ревью #111, Н4) — ТОЛЬКО для пары life_op + day_closed:
   после day_closed day_started_at уже другой, и повтор обоих пропускается. Сам по себе
@@ -72,7 +81,7 @@ kind и именем класса ошибки (без payload и pid), проп
 события — одно битое событие не останавливает проектор. Другие SQLAlchemyError — откат
 всей пачки, как раньше.
 participant_events только читается; at и payload читаются для day_entered;
-payload — для day_report_submitted, life_op и day_closed; в лог не идут.
+payload — для day_report_submitted, life_op, day_closed и tz_set; в лог не идут.
 author_pause_reason и last_seen_publish_epoch не трогаются.
 DSN проектора — Settings.projector_dsn(): PROJECTOR_DATABASE_URL → DATABASE_URL → POSTGRES_*
 (B-3a-2; роль app_projector — миграция 0006). DSN не логируется.
@@ -83,6 +92,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import signal
 import sys
 import time
@@ -92,6 +102,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
@@ -106,7 +117,7 @@ logger = logging.getLogger("app.projector")
 BATCH_SIZE = 500
 POLL_SECONDS = 1.0
 RETRY_SECONDS = 5.0
-PROJECTOR_VERSION = 3
+PROJECTOR_VERSION = 4
 PHASE_PRE_REGISTERED = "pre_registered"
 PHASE_ONBOARDING = "onboarding"
 # Пишет POST /miniapp/v1/day/test-enter (app/routers/day.py) под замком participant:pid.
@@ -117,6 +128,8 @@ EVENT_KIND_DAY_REPORT_SUBMITTED = "day_report_submitted"
 EVENT_KIND_LIFE_OP = "life_op"
 # Пишет life-ops-c (закрытие дня) под замком participant:pid.
 EVENT_KIND_DAY_CLOSED = "day_closed"
+# Пояс из анкеты (projector-i3-2, Р-16); писатель — API анкеты (api-i3-2, после этой задачи).
+EVENT_KIND_TZ_SET = "tz_set"
 PHASE_SLEEPING = "sleeping"
 DAY_CLOSED_OUTCOMES = ("came", "silent")
 # life_op: единственные допустимые delta и reason (life-ops-a §7, ревью #111, Н3).
@@ -126,6 +139,10 @@ LIFE_OP_REASON = "missed_days"
 MAX_LIVES = 3
 # Верхняя граница stage_no / module_no / day_no (smallint).
 MAX_POSITION_VALUE = 32767
+# Граница длины tz (projector-i3-2, Ш-1).
+MAX_TZ_LEN = 64
+# Шаблон имени пояса до ZoneInfo (projector-i3-2, П-4): ZoneInfo открывает файл по имени.
+_TZ_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$")
 USAGE = "usage: python -m app.projector run | once"
 
 _LOCK = text("SELECT pg_advisory_lock(hashtext('participant_state_projector'))")
@@ -234,6 +251,19 @@ _CLOSE_DAY = text(
         projector_version = :version
     WHERE pid = :pid AND day_started_at = CAST(:day_started_at AS timestamptz)
       AND CAST(:next_day_started_at AS timestamptz) > day_started_at
+    RETURNING pid
+    """
+)
+
+# tz_set: пояс только до первого дня (projector-i3-2, Ш-1). Без ON CONFLICT;
+# фаза, флаги, позиция и жизни не упоминаются.
+_SET_TZ = text(
+    """
+    UPDATE participant_state
+    SET tz = :tz,
+        updated_at = now(),
+        projector_version = :version
+    WHERE pid = :pid AND day_no IS NULL
     RETURNING pid
     """
 )
@@ -380,6 +410,28 @@ def day_closed_from_payload(payload: Any) -> tuple[str, int, str] | None:
     return started, streak, next_started
 
 
+def tz_from_payload(payload: Any) -> str | None:
+    """payload.tz (имя пояса IANA) из tz_set или None (битый payload).
+
+    payload — dict или JSON-строка; лишние ключи игнорируются. tz — str длиной
+    1–MAX_TZ_LEN, совпадает с _TZ_RE (до ZoneInfo: П-4) и открывается ZoneInfo.
+    Набор поясов анкеты здесь не сверяется — это делает API.
+    """
+    data = _payload_dict(payload)
+    if data is None:
+        return None
+    tz = data.get("tz")
+    if not isinstance(tz, str) or not 1 <= len(tz) <= MAX_TZ_LEN:
+        return None
+    if _TZ_RE.fullmatch(tz) is None:
+        return None
+    try:
+        ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return None
+    return tz
+
+
 def _apply_first_consent(conn: Connection, event_id: int, pid: uuid.UUID, kind: str) -> bool:
     applied = conn.execute(
         _UPSERT_STATE,
@@ -508,6 +560,23 @@ def _apply_day_closed(
     return True
 
 
+def _apply_tz_set(
+    conn: Connection, event_id: int, pid: uuid.UUID, kind: str, payload: Any
+) -> bool:
+    tz = tz_from_payload(payload)
+    if tz is None:
+        _skip(event_id, kind, "bad payload")
+        return False
+    applied = conn.execute(
+        _SET_TZ,
+        {"pid": pid, "tz": tz, "version": PROJECTOR_VERSION},
+    ).first()
+    if applied is None:
+        _skip(event_id, kind, "tz_set: day started or no state")
+        return False
+    return True
+
+
 def _apply_event(
     conn: Connection,
     event_id: int,
@@ -527,6 +596,8 @@ def _apply_event(
         return _apply_life_op(conn, event_id, pid, kind, payload)
     if kind == EVENT_KIND_DAY_CLOSED:
         return _apply_day_closed(conn, event_id, pid, kind, payload)
+    if kind == EVENT_KIND_TZ_SET:
+        return _apply_tz_set(conn, event_id, pid, kind, payload)
     _skip(event_id, kind, "unknown kind")
     return False
 
