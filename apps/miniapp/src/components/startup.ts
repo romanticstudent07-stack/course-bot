@@ -55,11 +55,13 @@ export function isReconsent(resp: unknown): boolean {
 }
 
 /**
- * Куда после номера: незаконченный черновик → анкета, иначе → курс.
+ * Куда после номера (miniapp-i3-1a §7.4): незаконченный черновик → шаги онбординга;
+ * иначе решает сервер — анкета отправлена (GET /onboarding/form) → курс, нет → онбординг с оферты.
  * openDraft уже чистит чужой, битый, старше 24 ч и старую метку finished.
  */
-export function afterNumber(draft: Draft | null): AfterNumber {
-  return draft !== null && draft.step !== 'finished' ? 'later' : 'app';
+export function afterNumber(draft: Draft | null, formSubmitted: boolean): AfterNumber {
+  if (draft !== null && draft.step !== 'finished') return 'later';
+  return formSubmitted ? 'app' : 'later';
 }
 
 /** Текст экрана «Повторить» при ошибке status — те же формулировки, что в онбординге. */
