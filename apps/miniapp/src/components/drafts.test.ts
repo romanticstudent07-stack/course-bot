@@ -1,15 +1,13 @@
 // apps/miniapp/src/components/drafts.test.ts — vitest, environment node.
-// DraftStore: сохранение/чтение, очистка при смене tg_user_id, TTL 24 ч, только step/email/city;
+// DraftStore: сохранение/чтение, очистка при смене tg_user_id, TTL 24 ч, только step (v2);
 // метки finished на устройстве нет (returning-2): saveDraft / openDraft / finishDraft с finished
 // → хранилище пусто; ошибка хранилища переход к курсу не блокирует.
 // D-23 (miniapp-fix-1): withTimeout, очередь createSerialDraftStore, seal, таймауты openDraft / finishDraft.
 import { describe, expect, it } from 'vitest';
 
 import {
-  CITY_OPTIONS,
   DRAFT_FUTURE_SKEW_MS,
   DRAFT_TTL_MS,
-  EMAIL_MAX_LENGTH,
   EMPTY_DRAFT,
   createDraftStore,
   createMemoryDraftStore,
@@ -28,10 +26,10 @@ import {
 const NOW = Date.UTC(2026, 9, 2, 12, 0, 0);
 const USER = 777;
 const OTHER = 888;
-const DRAFT: Draft = { step: 'city', email: 'a@example.com', city: CITY_OPTIONS[0] };
+const DRAFT: Draft = { step: 'checkup' };
 
 function validStored(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return { v: 1, tgUserId: USER, savedAt: NOW, ...DRAFT, ...over };
+  return { v: 2, tgUserId: USER, savedAt: NOW, ...DRAFT, ...over };
 }
 
 describe('сохранение и чтение', () => {
@@ -45,12 +43,12 @@ describe('сохранение и чтение', () => {
     expect(await openDraft(createMemoryDraftStore(), USER, NOW)).toBeNull();
   });
 
-  it('в черновик попадают только step, email, city (+ v, tgUserId, savedAt)', async () => {
+  it('в черновик попадает только step (+ v, tgUserId, savedAt)', async () => {
     const store = createMemoryDraftStore();
     const withExtra = { ...DRAFT, birthDate: '1990-05-17', birth_date: '1990-05-17' } as Draft;
     await saveDraft(store, USER, withExtra, NOW);
     const raw = store.peek() as Record<string, unknown>;
-    expect(Object.keys(raw).sort()).toEqual(['city', 'email', 'savedAt', 'step', 'tgUserId', 'v']);
+    expect(Object.keys(raw).sort()).toEqual(['savedAt', 'step', 'tgUserId', 'v']);
     expect(JSON.stringify(raw)).not.toContain('1990-05-17');
   });
 
@@ -112,23 +110,30 @@ describe('битые записи', () => {
       null,
       'x',
       42,
-      validStored({ v: 2 }),
+      validStored({ v: 1 }),
       validStored({ tgUserId: 0 }),
       validStored({ tgUserId: '777' }),
       validStored({ savedAt: 'now' }),
       validStored({ step: 'payment' }),
       validStored({ step: 'photo' }),
-      validStored({ email: 5 }),
-      validStored({ email: 'a'.repeat(EMAIL_MAX_LENGTH + 1) }),
-      validStored({ city: 'Атлантида' }),
+      validStored({ step: 'email' }),
+      validStored({ step: 'city' }),
     ];
     for (const raw of bad) expect(parseStoredDraft(raw)).toBeNull();
+  });
+
+  it('запись v1 с email и city → openDraft = null, хранилище пусто', async () => {
+    const store = createMemoryDraftStore();
+    const v1 = { v: 1, tgUserId: USER, savedAt: NOW, step: 'checkup', email: 'a@example.com', city: 'Москва' };
+    await store.put(v1 as unknown as StoredDraft);
+    expect(await openDraft(store, USER, NOW + 1000)).toBeNull();
+    expect(store.peek()).toBeUndefined();
   });
 
   it('битая запись в хранилище → очистка и null', async () => {
     let cleared = false;
     const store: DraftStore = {
-      get: async () => ({ v: 1, tgUserId: USER, savedAt: NOW, step: 'payment', email: '', city: '' }),
+      get: async () => ({ v: 2, tgUserId: USER, savedAt: NOW, step: 'payment' }),
       put: async () => undefined,
       clear: async () => {
         cleared = true;
@@ -138,15 +143,15 @@ describe('битые записи', () => {
     expect(cleared).toBe(true);
   });
 
-  it('sanitizeDraft: неизвестный город и шаг сбрасываются', () => {
+  it('sanitizeDraft: неизвестный шаг сбрасывается, лишние поля отброшены', () => {
     const dirty = { step: 'payment', email: 'x@y.z', city: 'Атлантида' } as unknown as Draft;
-    expect(sanitizeDraft(dirty)).toEqual({ step: 'offer', email: 'x@y.z', city: '' });
+    expect(sanitizeDraft(dirty)).toEqual({ step: 'offer' });
     expect(sanitizeDraft(EMPTY_DRAFT)).toEqual(EMPTY_DRAFT);
   });
 });
 
 describe('метки finished на устройстве нет', () => {
-  it('saveDraft со step finished → хранилище пусто (email и город стёрты)', async () => {
+  it('saveDraft со step finished → хранилище пусто', async () => {
     const store = createMemoryDraftStore();
     await saveDraft(store, USER, DRAFT, NOW - 5000);
     await saveDraft(store, USER, { ...DRAFT, step: 'finished' }, NOW);
@@ -172,14 +177,14 @@ describe('метки finished на устройстве нет', () => {
 
   it('openDraft со старой записью step finished → null и хранилище пусто', async () => {
     const store = createMemoryDraftStore();
-    await store.put({ v: 1, tgUserId: USER, savedAt: NOW, step: 'finished', email: '', city: '' });
+    await store.put({ v: 2, tgUserId: USER, savedAt: NOW, step: 'finished' });
     expect(await openDraft(store, USER, NOW + 1000)).toBeNull();
     expect(store.peek()).toBeUndefined();
   });
 });
 
 describe('finishDraft', () => {
-  it('известный пользователь с email и городом → хранилище пусто; onFinish 1 раз после очистки', async () => {
+  it('известный пользователь с черновиком → хранилище пусто; onFinish 1 раз после очистки', async () => {
     const store = createMemoryDraftStore();
     await saveDraft(store, USER, DRAFT, NOW - 5000);
     let calls = 0;
@@ -291,7 +296,7 @@ describe('finishDraft', () => {
 
 // ---- D-23 (miniapp-fix-1) ----
 
-const STORED: StoredDraft = { v: 1, tgUserId: USER, savedAt: NOW, ...DRAFT };
+const STORED: StoredDraft = { v: 2, tgUserId: USER, savedAt: NOW, ...DRAFT };
 
 /** Дать отработать микрозадачам и таймерам 0 мс. */
 function tick(): Promise<void> {
@@ -430,7 +435,7 @@ describe('seal', () => {
     const store = createSerialDraftStore(g.inner, 1000);
     const first = store.put(STORED);
     await tick();
-    const second = store.put({ ...STORED, city: CITY_OPTIONS[1] });
+    const second = store.put({ ...STORED, step: 'rules' });
     store.seal?.();
     g.release();
     await Promise.all([first, second]);
@@ -472,11 +477,11 @@ describe('таймауты openDraft и finishDraft', () => {
     expect(mem.peek()).toBeUndefined();
   });
 
-  it('saveDraft, поставленный прямо перед finishDraft, не возвращает email и город', async () => {
+  it('saveDraft, поставленный прямо перед finishDraft, не возвращает черновик', async () => {
     const mem = createMemoryDraftStore();
     await mem.put(STORED);
     const store = createSerialDraftStore(mem, 50);
-    const pending = saveDraft(store, USER, { ...DRAFT, city: CITY_OPTIONS[1] }, NOW);
+    const pending = saveDraft(store, USER, { ...DRAFT, step: 'rules' }, NOW);
     await finishDraft(store, USER, NOW, () => undefined, 50);
     await pending;
     expect(mem.peek()).toBeUndefined();

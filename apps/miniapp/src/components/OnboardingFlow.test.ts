@@ -14,8 +14,6 @@ import {
   LATER_TEXT_KEY_LIST,
   LaterStepView,
   activeConsentIds,
-  canContinueEmail,
-  canGoNext,
   consentsLabel,
   laterReducer,
   progressLabel,
@@ -293,11 +291,9 @@ describe('тексты', () => {
     ]);
   });
 
-  it('LATER_TEXT_KEY_LIST — 5 ключей экранов после pid', () => {
+  it('LATER_TEXT_KEY_LIST — 3 ключа экранов после pid', () => {
     expect([...LATER_TEXT_KEY_LIST].sort()).toEqual([
       'B4.onb_checkup',
-      'B4.onb_city',
-      'B4.onb_email',
       'B4.onb_rules',
       'legal.offer',
     ]);
@@ -333,16 +329,14 @@ function renderLater(draft: Draft, consentsText?: string): string {
 }
 
 describe('LaterSteps: порядок шагов', () => {
-  it('offer → email → city → checkup → rules → finished', () => {
+  it('offer → form → checkup → rules → finished', () => {
     let s = EMPTY_DRAFT;
     expect(s.step).toBe('offer');
     s = run(s, { type: 'next' });
-    expect(s.step).toBe('email');
-    s = run(s, { type: 'next' }); // email пустой — можно дальше
-    expect(s.step).toBe('city');
-    s = run(s, { type: 'next' }); // город не выбран — стоим
-    expect(s.step).toBe('city');
-    s = run(s, { type: 'setCity', city: 'Москва' }, { type: 'next' });
+    expect(s.step).toBe('form');
+    s = run(s, { type: 'next' }); // на form «Далее» нет — стоим
+    expect(s.step).toBe('form');
+    s = run(s, { type: 'formDone' });
     expect(s.step).toBe('checkup');
     s = run(s, { type: 'next' }, { type: 'next' });
     expect(s.step).toBe('finished');
@@ -350,38 +344,16 @@ describe('LaterSteps: порядок шагов', () => {
   });
 
   it('«Назад» на шаг раньше; с offer назад некуда', () => {
-    expect(run(at('city'), { type: 'back' }).step).toBe('email');
-    expect(run(at('offer'), { type: 'back' }).step).toBe('offer');
+    expect(run(at('checkup'), { type: 'back' }).step).toBe('form');
+    expect(run(at('form'), { type: 'back' }).step).toBe('offer');
     expect(run(at('finished'), { type: 'back' }).step).toBe('rules');
   });
 
-  it('email: неверный адрес не пускает дальше, «Пропустить» очищает', () => {
-    expect(canContinueEmail('')).toBe(true);
-    expect(canContinueEmail('  ')).toBe(true);
-    expect(canContinueEmail('a@b.ru')).toBe(true);
-    expect(canContinueEmail('abc')).toBe(false);
-    const bad = run(at('email'), { type: 'setEmail', email: 'abc' }, { type: 'next' });
-    expect(bad.step).toBe('email');
-    const skipped = run(bad, { type: 'skipEmail' });
-    expect(skipped).toEqual({ ...EMPTY_DRAFT, step: 'city', email: '' });
-    const ok = run(at('email'), { type: 'setEmail', email: ' a@b.ru ' }, { type: 'next' });
-    expect(ok).toEqual({ ...EMPTY_DRAFT, step: 'city', email: 'a@b.ru' });
-  });
-
-  it('city: только город из списка', () => {
-    expect(run(at('city'), { type: 'setCity', city: 'Атлантида' }).city).toBe('');
-    expect(canGoNext(at('city'))).toBe(false);
-    expect(canGoNext(at('city', { city: 'Москва' }))).toBe(true);
-    // поля меняются только на своём шаге
-    expect(run(at('offer'), { type: 'setEmail', email: 'a@b.ru' }).email).toBe('');
-    expect(run(at('offer'), { type: 'setCity', city: 'Москва' }).city).toBe('');
-  });
-
   it('индикатор прогресса', () => {
-    expect(progressLabel('offer')).toBe('Шаг 1 из 5');
-    expect(progressLabel('rules')).toBe('Шаг 5 из 5');
+    expect(progressLabel('offer')).toBe('Шаг 1 из 4');
+    expect(progressLabel('rules')).toBe('Шаг 4 из 4');
     expect(progressLabel('finished')).toBe('');
-    expect(renderLater(at('checkup'))).toContain('Шаг 4 из 5');
+    expect(renderLater(at('checkup'))).toContain('Шаг 3 из 4');
   });
 
   it('offer: «Назад» неактивна, «Далее» активна; ни оплаты, ни галочки акцепта', () => {
@@ -389,36 +361,6 @@ describe('LaterSteps: порядок шагов', () => {
     expect(html).toMatch(BUTTON_DISABLED_RE);
     expect(html).not.toContain('type="checkbox"');
     expect(html.toLowerCase()).not.toContain('оплат');
-  });
-});
-
-describe('LaterSteps: формы email и city, Enter', () => {
-  it('email и city — <form> с type="submit"', () => {
-    for (const step of ['email', 'city'] as const) {
-      const html = renderLater(at(step));
-      expect(html.startsWith('<form')).toBe(true);
-      expect(html).toContain('type="submit"');
-    }
-    expect(renderLater(at('city'))).toMatch(SUBMIT_DISABLED_RE);
-    expect(renderLater(at('email', { email: 'abc' }))).toMatch(SUBMIT_DISABLED_RE);
-  });
-
-  it('Enter при невыполненных условиях ничего не делает', () => {
-    for (const draft of [at('email', { email: 'abc' }), at('city')]) {
-      const onAction = vi.fn();
-      const el = LaterStepView({ draft, text: 't', onAction, onFinish: noop });
-      expect(rootOf(el).type).toBe('form');
-      expect(submitForm(rootOf(el).onSubmit)).toBe(true);
-      expect(onAction).not.toHaveBeenCalled();
-    }
-  });
-
-  it('Enter при выполненных условиях → next', () => {
-    for (const draft of [at('email'), at('email', { email: 'a@b.ru' }), at('city', { city: 'Москва' })]) {
-      const onAction = vi.fn();
-      submitForm(rootOf(LaterStepView({ draft, text: 't', onAction, onFinish: noop })).onSubmit);
-      expect(onAction).toHaveBeenCalledWith({ type: 'next' });
-    }
   });
 });
 
@@ -457,7 +399,14 @@ describe('tgUserIdFromInitData (только для привязки черно�
 
 // ---- Хранилища и утечки (D-19) ----
 
-const NO_STORAGE_FILES = ['./OnboardingFlow.tsx', './LaterSteps.tsx', './App.tsx', '../api/client.ts'];
+const NO_STORAGE_FILES = [
+  './OnboardingFlow.tsx',
+  './LaterSteps.tsx',
+  './App.tsx',
+  '../api/client.ts',
+  './OnbForm.tsx',
+  './onbForm.ts',
+];
 const BANNED_STORAGE = [
   'localstorage',
   'sessionstorage',
@@ -494,7 +443,19 @@ describe('дата и анкета не уходят в хранилище (D-19
 
   it('drafts.ts: нет даты рождения и console', () => {
     const text = source('./drafts.ts');
-    for (const banned of ['birth', 'console.', 'localstorage', 'sessionstorage', 'document.cookie', 'dexie']) {
+    for (const banned of [
+      'birth',
+      'console.',
+      'localstorage',
+      'sessionstorage',
+      'document.cookie',
+      'dexie',
+      'email',
+      'city',
+      'gender',
+      'weight',
+      'wellbeing',
+    ]) {
       expect(text.includes(banned), banned).toBe(false);
     }
   });
