@@ -1,12 +1,15 @@
-// apps/miniapp/src/components/drafts.ts — черновик анкеты после pid (1e-2, 1e-2b-2, returning-2, miniapp-fix-1).
+// apps/miniapp/src/components/drafts.ts — черновик шагов после pid (1e-2, 1e-2b-2, returning-2, miniapp-fix-1,
+// miniapp-i3-1a).
 //
 // Нативный IndexedDB без библиотек, за интерфейсом DraftStore (в тестах — хранилище в памяти).
 // Это ЕДИНСТВЕННЫЙ файл Mini App, который пишет на устройство.
 //
 // Правила (I4 §7 R380_cleanup, карточки 1e-2 §7, 1e-2b-2 §7, returning-2 §7.4):
-//   - в черновике только step, email, city + служебные v, tgUserId, savedAt;
-//     дату рождения сюда не класть НИКОГДА (её и нет в типе Draft; sanitizeDraft
-//     отбрасывает любые лишние поля). short_no, status и reasons сервера — тоже нет;
+//   - в черновике только step + служебные v, tgUserId, savedAt (miniapp-i3-1a, Р-16:
+//     DRAFT_VERSION = 2; запись версии 1 не проходит parseStoredDraft → очистка, как битая).
+//     Ответы анкеты сюда не класть НИКОГДА — они только в памяти экрана и уходят на сервер;
+//     дату рождения — тоже (её нет в типе Draft; sanitizeDraft отбрасывает любые лишние поля).
+//     short_no, status и reasons сервера — тоже нет;
 //   - черновик привязан к tg_user_id: другой tg_user_id или неизвестный → полная
 //     очистка сразу при открытии;
 //   - черновик старше 24 ч (от последнего сохранения) → удалить при открытии;
@@ -19,27 +22,22 @@
 // D-23 (miniapp-fix-1): createDraftStore отдаёт хранилище с одной очередью get / put / clear
 //   (операция держит очередь до своего завершения или 3 с); finishDraft вызывает seal() —
 //   put после него не пишет; openDraft и finishDraft ждут хранилище не дольше 3 с (DRAFT_IO_TIMEOUT_MS).
-// На сервер черновик не уходит: эндпоинта анкеты нет.
+// Шаги: offer → form → checkup → rules → finished. Анкета (шаг form) хранится на сервере
+// (OnbForm.tsx), черновик на сервер не уходит.
 
-export const LATER_STEPS = ['offer', 'email', 'city', 'checkup', 'rules', 'finished'] as const;
+export const LATER_STEPS = ['offer', 'form', 'checkup', 'rules', 'finished'] as const;
 export type LaterStep = (typeof LATER_STEPS)[number];
-
-/** Кнопки-города (заглушка до решения по списку). */
-export const CITY_OPTIONS = ['Москва', 'Санкт-Петербург', 'Другой город'] as const;
 
 export interface Draft {
   step: LaterStep;
-  email: string;
-  city: string;
 }
 
-export const EMPTY_DRAFT: Draft = { step: 'offer', email: '', city: '' };
+export const EMPTY_DRAFT: Draft = { step: 'offer' };
 
-export const DRAFT_VERSION = 1;
+export const DRAFT_VERSION = 2;
 export const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 /** savedAt дальше этого в будущем — запись считается битой. */
 export const DRAFT_FUTURE_SKEW_MS = 60 * 1000;
-export const EMAIL_MAX_LENGTH = 254;
 /** Сколько ждём хранилище в openDraft, finishDraft и в очереди (D-23). */
 export const DRAFT_IO_TIMEOUT_MS = 3000;
 
@@ -134,17 +132,9 @@ function isLaterStep(value: unknown): value is LaterStep {
   return typeof value === 'string' && (LATER_STEPS as readonly string[]).includes(value);
 }
 
-function isCity(value: unknown): value is string {
-  return value === '' || (typeof value === 'string' && (CITY_OPTIONS as readonly string[]).includes(value));
-}
-
-/** Только три поля черновика; всё лишнее отбрасывается. */
+/** Только шаг; всё лишнее отбрасывается. */
 export function sanitizeDraft(d: Draft): Draft {
-  return {
-    step: isLaterStep(d.step) ? d.step : 'offer',
-    email: typeof d.email === 'string' ? d.email.slice(0, EMAIL_MAX_LENGTH) : '',
-    city: isCity(d.city) ? d.city : '',
-  };
+  return { step: isLaterStep(d.step) ? d.step : 'offer' };
 }
 
 /** Проверка записи из хранилища. Не по формату → null. */
@@ -155,15 +145,11 @@ export function parseStoredDraft(raw: unknown): StoredDraft | null {
   if (typeof r.tgUserId !== 'number' || !Number.isSafeInteger(r.tgUserId) || r.tgUserId <= 0) return null;
   if (typeof r.savedAt !== 'number' || !Number.isFinite(r.savedAt)) return null;
   if (!isLaterStep(r.step)) return null;
-  if (typeof r.email !== 'string' || r.email.length > EMAIL_MAX_LENGTH) return null;
-  if (!isCity(r.city)) return null;
   return {
     v: DRAFT_VERSION,
     tgUserId: r.tgUserId,
     savedAt: r.savedAt,
     step: r.step,
-    email: r.email,
-    city: r.city,
   };
 }
 
@@ -200,7 +186,7 @@ export function openDraft(
 }
 
 /**
- * Сохранить черновик. Шаг finished → очистка вместо записи (email и город не остаются
+ * Сохранить черновик. Шаг finished → очистка вместо записи (черновик не остаётся
  * на устройстве). Пользователь неизвестен → ничего не пишем. Порядок записей даёт очередь
  * хранилища (createSerialDraftStore).
  */

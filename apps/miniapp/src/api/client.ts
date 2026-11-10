@@ -259,3 +259,64 @@ export const putDayMark = (body: DayMarkIn) =>
  */
 export const postDayReport = (body: DayReportIn, clientOpId: string) =>
   apiRequest<DayReportOut>('/miniapp/v1/day/report/submit', { method: 'POST', body, clientOpId });
+
+// ---- Анкета онбординга (api-i3-2; карточка miniapp-i3-1a §7.1) ----
+// Значения анкеты на устройстве не хранятся и в лог не пишутся (Р-16): только тело POST.
+
+export type FormGender = 'male' | 'female';
+
+export interface FormWellbeingOption {
+  code: string;
+  text: string;
+}
+
+export interface FormTimezone {
+  tz: string;
+  city: string;
+}
+
+/** [город, регион, i] — i: индекс в timezones. */
+export type FormCity = [string, string, number];
+
+export interface FormConfig {
+  version: number;
+  genders: FormGender[];
+  wellbeing_question: string;
+  wellbeing: FormWellbeingOption[];
+  weight: { min: number; max: number; step: number };
+  /** 11 поясов РФ — кнопки «Моего города нет» (Р-17). */
+  timezones: FormTimezone[];
+  fallback_title: string;
+  cities: FormCity[];
+}
+
+export interface FormStatus {
+  submitted: boolean;
+  created_at: string | null;
+}
+
+/** Тело POST ровно из 4 ключей; города нет (Р-16). */
+export interface FormBody {
+  tz: string;
+  gender: FormGender;
+  wellbeing_code: string;
+  weight_kg: number;
+}
+
+export interface FormCreated {
+  created_at: string;
+}
+
+/** Только чтение. Ошибки: 401, 429, 503. */
+export const getFormConfig = () => apiRequest<FormConfig>('/miniapp/v1/onboarding/form/config');
+
+/** Только чтение, без X-Client-Op-Id. Ошибки: 401, 404 PARTICIPANT_NOT_FOUND, 429, 503. */
+export const getForm = () => apiRequest<FormStatus>('/miniapp/v1/onboarding/form');
+
+/**
+ * Отправка анкеты. clientOpId — один на попытку с тем же телом: повтор после ошибки — с ним же (D-17).
+ * Ошибки: 404; 409 RECONSENT_REQUIRED / ONBOARDING_FORM_EXISTS / IDEMPOTENCY_CONFLICT;
+ * 422 VALIDATION_ERROR; 401, 429, 503.
+ */
+export const postForm = (body: FormBody, clientOpId: string) =>
+  apiRequest<FormCreated>('/miniapp/v1/onboarding/form', { method: 'POST', body, clientOpId });

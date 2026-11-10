@@ -11,11 +11,14 @@
 //                 «доступ не открыт» и «Проверить ещё раз» → снова checking (один GET status);
 //                 OnboardingFlow не монтируется, номера нет, черновик не открывается;
 //   number      — сервер ответил returning: «Ваш номер участника» и «Продолжить» →
-//                 незаконченный черновик моложе 24 ч → later, иначе → app;
+//                 незаконченный черновик моложе 24 ч → later; иначе GET /onboarding/form:
+//                 анкета отправлена → app, нет → later с оферты; ошибка → start-error
+//                 (miniapp-i3-1a §7.4: день недоступен без пройденного онбординга, 04 §4.7);
 //   onboarding  — new / reconsent / непонятный ответ: OnboardingFlow до pid (1e-1b);
 //                 после него: new → later, reconsent → то же правило, что после номера;
-//   later       — LaterSteps после pid (1e-2): offer → email → city → checkup → rules;
-//                 черновик — drafts.ts, привязан к tg_user_id;
+//   later       — LaterSteps после pid (1e-2, miniapp-i3-1a): offer → form → checkup → rules;
+//                 анкета (form) — на сервере; черновик — drafts.ts, только шаг, привязан к tg_user_id;
+//                 экран restart анкеты → retry (снова checking);
 //   app         — роутер: экран дня /day; путь «/» и любой другой → /day (З2, вариант А).
 // OnboardingFlow монтируется ТОЛЬКО в фазе onboarding (он шлёт /texts/bulk при монтировании).
 // «Пускать ли» решает сервер: клиент не смотрит ни initDataUnsafe, ни черновик, ни время.
@@ -23,7 +26,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 
-import { getOnboardingStatus, readTgUserId } from '@/api/client.ts';
+import { getForm, getOnboardingStatus, readTgUserId } from '@/api/client.ts';
 import { createDraftStore, openDraft } from '@/components/drafts.ts';
 import { LaterSteps } from '@/components/LaterSteps.tsx';
 import { OnboardingFlow } from '@/components/OnboardingFlow.tsx';
@@ -84,12 +87,16 @@ export function App() {
   }, [attempt]);
 
   const retry = () => {
+    routingRef.current = false;
+    setRouting(false);
     setStartError(null);
     setPhase('checking');
     setAttempt((n) => n + 1);
   };
 
-  // После номера (и после reconsent): черновик → анкета или курс. Ошибка хранилища → курс.
+  // После номера (и после reconsent): незаконченный черновик → шаги онбординга. Черновика нет,
+  // finished или ошибка хранилища → GET /onboarding/form: отправлена → курс, нет → с оферты.
+  // Ошибка GET form (любая) → start-error; «Повторить» → checking.
   const routeByDraft = () => {
     if (routingRef.current) return;
     routingRef.current = true;
@@ -97,7 +104,20 @@ export function App() {
     Promise.resolve()
       .then(() => openDraft(draftStore, tgUserId, Date.now()))
       .catch(() => null)
-      .then((draft) => setPhase(afterNumber(draft)));
+      .then(async (draft) => {
+        if (draft !== null && draft.step !== 'finished') {
+          setPhase(afterNumber(draft, false));
+          return;
+        }
+        const form = await getForm();
+        setPhase(afterNumber(draft, form.submitted));
+      })
+      .catch((err: unknown) => {
+        routingRef.current = false;
+        setRouting(false);
+        setStartError(err);
+        setPhase('start-error');
+      });
   };
 
   if (phase === 'checking') {
@@ -158,7 +178,9 @@ export function App() {
   }
 
   if (phase === 'later') {
-    return <LaterSteps tgUserId={tgUserId} store={draftStore} onFinish={() => setPhase('app')}/>;
+    return (
+      <LaterSteps tgUserId={tgUserId} store={draftStore} onFinish={() => setPhase('app')} onRestart={retry}/>
+    );
   }
 
   return (

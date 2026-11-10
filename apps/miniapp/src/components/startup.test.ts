@@ -102,19 +102,23 @@ describe('no_access (Р-2)', () => {
 });
 
 describe('afterNumber', () => {
-  const draft = (step: Draft['step']): Draft => ({ step, email: '', city: '' });
+  const draft = (step: Draft['step']): Draft => ({ step });
 
   it('черновика нет → app', () => {
-    expect(afterNumber(null)).toBe('app');
+    expect(afterNumber(null, true)).toBe('app');
+  });
+
+  it('черновика нет, анкета не отправлена → later', () => {
+    expect(afterNumber(null, false)).toBe('later');
   });
 
   it('step finished → app', () => {
-    expect(afterNumber(draft('finished'))).toBe('app');
+    expect(afterNumber(draft('finished'), true)).toBe('app');
   });
 
   it('незаконченный шаг → later', () => {
-    expect(afterNumber(draft('email'))).toBe('later');
-    expect(afterNumber(draft('offer'))).toBe('later');
+    expect(afterNumber(draft('form'), false)).toBe('later');
+    expect(afterNumber(draft('offer'), false)).toBe('later');
   });
 });
 
