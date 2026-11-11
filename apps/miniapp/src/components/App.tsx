@@ -109,8 +109,9 @@ export function App() {
       .catch(() => null)
       .then(async (draft) => {
         if (draft !== null && draft.step !== 'finished') {
+          // Незаконченный черновик важнее initialStep (он восстановится в LaterSteps).
           setInitialStep('offer');
-          setPhase(afterNumber(draft, false, false));
+          setPhase('later');
           return;
         }
         const form = await getForm();
