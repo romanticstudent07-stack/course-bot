@@ -19,6 +19,8 @@
   GET  /miniapp/v1/onboarding/form           — отправлена ли анкета (api-i3-2), только чтение
   POST /miniapp/v1/onboarding/form           — анкета один раз (api-i3-2): onboarding_form,
                                                вес в measurements_log, событие tz_set
+  GET  /miniapp/v1/me/card                   — карточка участника (api-i3-3), только чтение
+  GET  /miniapp/v1/me/change-map             — Карта изменений на лету (api-i3-3), только чтение
   POST /security/csp-report                  — приёмник CSP-репортов (E2), без initData
                                                (security: [] в miniapp-api-contract.yaml),
                                                без rate-limit
@@ -49,6 +51,7 @@ from app.routers import (
     consents,
     day,
     health,
+    me,
     onboarding,
     onboarding_form,
     security,
@@ -104,6 +107,7 @@ def create_app() -> FastAPI:
             day.router,
             checkup.router,
             onboarding_form.router,
+            me.router,
         )
     )
 
