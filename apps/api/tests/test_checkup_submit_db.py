@@ -165,9 +165,9 @@ def test_repeat_op_id_returns_same_without_new_row(db_api_client, clean_measurem
     assert len(rows) == 1
     assert rows[0].checkup_score == 0
     other = _submit(db_api_client, 5301, [3] * 15)
-    assert other.status_code == 200, other.text
-    assert other.json()["zone"] == "red"
-    assert len(_rows(clean_measurements, pid)) == 2
+    assert other.status_code == 409, other.text
+    assert other.json() == {"code": "CHECKUP_EXISTS", "message": "Чек-Ап уже пройден."}
+    assert len(_rows(clean_measurements, pid)) == 1
 
 
 # ---------------------------- ошибки, строк 0 ----------------------------

@@ -1,4 +1,4 @@
-"""/miniapp/v1/checkup/* — Чек-Ап (api-i3-1).
+"""/miniapp/v1/checkup/* — Чек-Ап (api-i3-1, api-i3-4).
 
 initData и rate-limit — роутер miniapp_v1 в main.py. Конфиг — app.checkup_config (файл в репо).
 
@@ -8,6 +8,11 @@ GET /checkup/config — БД не нужна, участник не обязат
        zones [{id, title, text}], disclaimer}. Границы зон (min, max) и legal_status
   клиенту не отдаются; балла нет.
 
+GET /checkup/status — только чтение, без замка, согласия не проверяются (как GET
+/onboarding/form; Р-18): нет активного участника → 404 PARTICIPANT_NOT_FOUND; иначе
+200 {completed, created_at} по самой ранней строке measurements_log kind checkup и occasion
+onboarding (строки body и Чек-Апы после Этапа не считаются). Балл, зона и ответы не отдаются.
+
 POST /checkup/submit — заголовок X-Client-Op-Id (UUID v4, обязателен), тело
 {occasion: "onboarding", answers: 15 целых 0–3 (StrictInt)}. Лишние поля (score, zone,
 stage_no) игнорируются: балл и зону считает только сервер. Иначе → 422 VALIDATION_ERROR.
@@ -15,10 +20,13 @@ stage_no) игнорируются: балл и зону считает толь
   1) active_pid_locked: нет → 404 PARTICIPANT_NOT_FOUND;
   2) C0 и C1 действуют (consent_status): нет текста → 503 SERVICE_MISCONFIGURED;
      причины reconsent → 409 RECONSENT_REQUIRED;
-  3) score_and_zone по 15 ответам, версия — cfg.version;
-  4) INSERT measurements_log … ON CONFLICT (pid, client_op_id) DO NOTHING RETURNING;
-  5) повтор op_id → сохранённые значения (без пересчёта); op_id занят не checkup →
-     409 IDEMPOTENCY_CONFLICT;
+  3) строка measurements_log с этим op_id: kind checkup → повтор, сохранённые значения
+     (без пересчёта); kind другой → 409 IDEMPOTENCY_CONFLICT;
+  4) у pid уже есть Чек-Ап онбординга (kind checkup, occasion onboarding) → 409
+     CHECKUP_EXISTS (тело только code и message); под замком шага 1;
+  5) score_and_zone по 15 ответам, версия — cfg.version; INSERT measurements_log …
+     ON CONFLICT (pid, client_op_id) DO NOTHING RETURNING; ничего не вставлено (гонка) →
+     перечитать по op_id: kind не checkup → 409 IDEMPOTENCY_CONFLICT;
   6) commit → 200 {zone, config_version, created_at}. Балла в ответе нет никогда.
 Любая SQLAlchemyError (и на commit) → rollback, 503 SERVICE_UNAVAILABLE; в лог — имя класса.
 Пишется только measurements_log (participant_events, outbox, idempotency_keys — нет).
@@ -56,6 +64,7 @@ from app.consent_status import (
 )
 from app.db.session import get_db_session
 from app.participant_lock import active_pid_locked
+from app.participants import find_active_participant
 from app.telegram_init_data import InitDataContext, require_init_data
 
 logger = logging.getLogger("app.checkup")
@@ -78,6 +87,13 @@ _INSERT_SQL = text(
 _SELECT_SQL = text(
     "SELECT kind, checkup_zone, checkup_config_version, created_at "
     "FROM measurements_log WHERE pid = :pid AND client_op_id = :op"
+)
+
+# Признак «Чек-Ап онбординга пройден»: фильтр по kind обязателен (строки body — тоже onboarding).
+_SELECT_ONBOARDING_CHECKUP_SQL = text(
+    "SELECT created_at FROM measurements_log "
+    "WHERE pid = :pid AND kind = 'checkup' AND occasion = 'onboarding' "
+    "ORDER BY created_at LIMIT 1"
 )
 
 
@@ -124,6 +140,11 @@ class CheckupSubmitIn(BaseModel):
     answers: list[Answer] = Field(min_length=QUESTIONS_COUNT, max_length=QUESTIONS_COUNT)
 
 
+class CheckupStatusOut(BaseModel):
+    completed: bool
+    created_at: datetime | None
+
+
 class CheckupSubmitOut(BaseModel):
     zone: str
     config_version: str
@@ -151,6 +172,18 @@ def _service_unavailable() -> HTTPException:
         "SERVICE_UNAVAILABLE",
         "Сервис временно недоступен. Попробуйте позже.",
     )
+
+
+def _idempotency_conflict() -> HTTPException:
+    return _error(
+        status.HTTP_409_CONFLICT,
+        "IDEMPOTENCY_CONFLICT",
+        "Этот X-Client-Op-Id уже использован с другим отчётом.",
+    )
+
+
+def _checkup_exists() -> HTTPException:
+    return _error(status.HTTP_409_CONFLICT, "CHECKUP_EXISTS", "Чек-Ап уже пройден.")
 
 
 def _rollback(session: Session) -> None:
@@ -187,7 +220,8 @@ def submit_checkup(
     cfg: CheckupConfig,
 ) -> tuple[CheckupSubmitOut, bool]:
     """Шаги 1–6 POST /checkup/submit → (ответ, created). Ошибки — HTTPException /
-    ConsentTextMissingError / SQLAlchemyError (вызывающий → 503). commit — только на шаге 6.
+    ConsentTextMissingError / SQLAlchemyError (вызывающий → 503). commit — на шаге 6
+    (повтор op_id — на шаге 3).
     """
     # 1) участник под замком
     pid = active_pid_locked(session, tg_user_id)
@@ -209,11 +243,28 @@ def submit_checkup(
             ),
         )
 
-    # 3) балл и зону считает сервер
-    score, zone = score_and_zone(body.answers, cfg)
-
-    # 4) запись; повтор op_id гасит UNIQUE (pid, client_op_id)
+    # 3) строка с этим op_id: повтор той же отправки или чужой op_id
     op = str(op_id)
+    row = session.execute(_SELECT_SQL, {"pid": pid, "op": op}).first()
+    if row is not None:
+        if row.kind != KIND_CHECKUP:
+            raise _released(session, _idempotency_conflict())
+        session.commit()
+        return (
+            CheckupSubmitOut(
+                zone=row.checkup_zone,
+                config_version=row.checkup_config_version,
+                created_at=row.created_at,
+            ),
+            False,
+        )
+
+    # 4) Чек-Ап онбординга уже есть (под замком шага 1)
+    if session.execute(_SELECT_ONBOARDING_CHECKUP_SQL, {"pid": pid}).first() is not None:
+        raise _released(session, _checkup_exists())
+
+    # 5) балл и зону считает сервер; запись, гонку op_id гасит UNIQUE (pid, client_op_id)
+    score, zone = score_and_zone(body.answers, cfg)
     row = session.execute(
         _INSERT_SQL,
         {
@@ -226,19 +277,10 @@ def submit_checkup(
         },
     ).first()
     created = row is not None
-
-    # 5) повтор: сохранённые значения, без пересчёта
     if row is None:
         row = session.execute(_SELECT_SQL, {"pid": pid, "op": op}).first()
         if row is None or row.kind != KIND_CHECKUP:
-            raise _released(
-                session,
-                _error(
-                    status.HTTP_409_CONFLICT,
-                    "IDEMPOTENCY_CONFLICT",
-                    "Этот X-Client-Op-Id уже использован с другим отчётом.",
-                ),
-            )
+            raise _released(session, _idempotency_conflict())
 
     # 6) commit; ответ строится только после него
     session.commit()
@@ -270,12 +312,45 @@ def get_checkup_config_route(
     return config_out(cfg)
 
 
+@router.get(
+    "/checkup/status",
+    response_model=CheckupStatusOut,
+    responses={
+        404: {"description": "PARTICIPANT_NOT_FOUND"},
+        503: {"description": "SERVICE_UNAVAILABLE (ошибка БД)"},
+    },
+)
+def get_checkup_status(
+    ctx: InitDataContext = Depends(require_init_data),
+    session: Session = Depends(get_db_session),
+) -> CheckupStatusOut:
+    try:
+        found = find_active_participant(session, ctx.tg_user_id)
+        row = (
+            None
+            if found is None
+            else session.execute(_SELECT_ONBOARDING_CHECKUP_SQL, {"pid": found[0]}).first()
+        )
+    except SQLAlchemyError as exc:
+        _rollback(session)
+        logger.error("checkup/status: ошибка БД (%s) — 503", type(exc).__name__)
+        raise _service_unavailable() from None
+    if found is None:
+        logger.info("checkup/status: tg_user_id=%s status=404", ctx.tg_user_id)
+        raise _participant_not_found()
+    logger.info("checkup/status: tg_user_id=%s status=ok", ctx.tg_user_id)
+    return CheckupStatusOut(
+        completed=row is not None,
+        created_at=row.created_at if row is not None else None,
+    )
+
+
 @router.post(
     "/checkup/submit",
     response_model=CheckupSubmitOut,
     responses={
         404: {"description": "PARTICIPANT_NOT_FOUND"},
-        409: {"description": "RECONSENT_REQUIRED / IDEMPOTENCY_CONFLICT"},
+        409: {"description": "RECONSENT_REQUIRED / CHECKUP_EXISTS / IDEMPOTENCY_CONFLICT"},
         422: {"description": "VALIDATION_ERROR — нет или неверный X-Client-Op-Id / тело"},
         503: {"description": "SERVICE_UNAVAILABLE (ошибка БД, в т. ч. commit) / SERVICE_MISCONFIGURED"},
     },
