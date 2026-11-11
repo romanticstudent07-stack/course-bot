@@ -12,8 +12,9 @@
 //                 OnboardingFlow не монтируется, номера нет, черновик не открывается;
 //   number      — сервер ответил returning: «Ваш номер участника» и «Продолжить» →
 //                 незаконченный черновик моложе 24 ч → later; иначе GET /onboarding/form:
-//                 анкета отправлена → app, нет → later с оферты; ошибка → start-error
-//                 (miniapp-i3-1a §7.4: день недоступен без пройденного онбординга, 04 §4.7);
+//                 нет → later с оферты; отправлена → GET /checkup/status: пройден → app,
+//                 нет → later с шага checkup; ошибка любого GET → start-error
+//                 (miniapp-i3-1a/1b §7.4: день недоступен без пройденного онбординга, 04 §4.7);
 //   onboarding  — new / reconsent / непонятный ответ: OnboardingFlow до pid (1e-1b);
 //                 после него: new → later, reconsent → то же правило, что после номера;
 //   later       — LaterSteps после pid (1e-2, miniapp-i3-1a): offer → form → checkup → rules;
@@ -26,8 +27,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 
-import { getForm, getOnboardingStatus, readTgUserId } from '@/api/client.ts';
-import { createDraftStore, openDraft } from '@/components/drafts.ts';
+import { getCheckupStatus, getForm, getOnboardingStatus, readTgUserId } from '@/api/client.ts';
+import { createDraftStore, openDraft, type LaterStep } from '@/components/drafts.ts';
 import { LaterSteps } from '@/components/LaterSteps.tsx';
 import { OnboardingFlow } from '@/components/OnboardingFlow.tsx';
 import {
@@ -53,6 +54,7 @@ export function App() {
   const [startError, setStartError] = useState<unknown>(null);
   const [reconsent, setReconsent] = useState(false);
   const [routing, setRouting] = useState(false);
+  const [initialStep, setInitialStep] = useState<LaterStep>('offer');
   const routingRef = useRef(false);
   const [tgUserId] = useState(() => readTgUserId());
   const [draftStore] = useState(() => createDraftStore());
@@ -95,8 +97,9 @@ export function App() {
   };
 
   // После номера (и после reconsent): незаконченный черновик → шаги онбординга. Черновика нет,
-  // finished или ошибка хранилища → GET /onboarding/form: отправлена → курс, нет → с оферты.
-  // Ошибка GET form (любая) → start-error; «Повторить» → checking.
+  // finished или ошибка хранилища → GET /onboarding/form: нет → с оферты; отправлена →
+  // GET /checkup/status: пройден → курс, нет → с шага checkup.
+  // Ошибка любого GET → start-error; «Повторить» → checking.
   const routeByDraft = () => {
     if (routingRef.current) return;
     routingRef.current = true;
@@ -106,11 +109,16 @@ export function App() {
       .catch(() => null)
       .then(async (draft) => {
         if (draft !== null && draft.step !== 'finished') {
-          setPhase(afterNumber(draft, false));
+          setInitialStep('offer');
+          setPhase(afterNumber(draft, false, false));
           return;
         }
         const form = await getForm();
-        setPhase(afterNumber(draft, form.submitted));
+        // GET checkup/status — только когда анкета отправлена.
+        const checkupCompleted = form.submitted ? (await getCheckupStatus()).completed : false;
+        const next = afterNumber(draft, form.submitted, checkupCompleted);
+        setInitialStep(next === 'checkup' ? 'checkup' : 'offer');
+        setPhase(next === 'checkup' ? 'later' : next);
       })
       .catch((err: unknown) => {
         routingRef.current = false;
@@ -179,7 +187,13 @@ export function App() {
 
   if (phase === 'later') {
     return (
-      <LaterSteps tgUserId={tgUserId} store={draftStore} onFinish={() => setPhase('app')} onRestart={retry}/>
+      <LaterSteps
+        tgUserId={tgUserId}
+        store={draftStore}
+        initialStep={initialStep}
+        onFinish={() => setPhase('app')}
+        onRestart={retry}
+      />
     );
   }
 

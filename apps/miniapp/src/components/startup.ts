@@ -14,7 +14,7 @@ import type { Draft } from './drafts.ts';
 import { errorMessage } from './OnboardingFlow.tsx';
 
 export type StartPhase = 'number' | 'onboarding' | 'no-access';
-export type AfterNumber = 'later' | 'app';
+export type AfterNumber = 'later' | 'checkup' | 'app';
 
 /** short_no из ответа status, если это returning с непустой строкой; иначе null. */
 export function returningShortNo(resp: unknown): string | null {
@@ -55,13 +55,16 @@ export function isReconsent(resp: unknown): boolean {
 }
 
 /**
- * Куда после номера (miniapp-i3-1a §7.4): незаконченный черновик → шаги онбординга;
- * иначе решает сервер — анкета отправлена (GET /onboarding/form) → курс, нет → онбординг с оферты.
+ * Куда после номера (miniapp-i3-1a §7.4, miniapp-i3-1b §7.4): незаконченный черновик → шаги
+ * онбординга; иначе решает сервер — анкета не отправлена (GET /onboarding/form) → онбординг
+ * с оферты; Чек-Ап не пройден (GET /checkup/status) → шаг checkup; оба есть → курс.
  * openDraft уже чистит чужой, битый, старше 24 ч и старую метку finished.
  */
-export function afterNumber(draft: Draft | null, formSubmitted: boolean): AfterNumber {
+export function afterNumber(draft: Draft | null, formSubmitted: boolean, checkupCompleted: boolean): AfterNumber {
   if (draft !== null && draft.step !== 'finished') return 'later';
-  return formSubmitted ? 'app' : 'later';
+  if (!formSubmitted) return 'later';
+  if (!checkupCompleted) return 'checkup';
+  return 'app';
 }
 
 /** Текст экрана «Повторить» при ошибке status — те же формулировки, что в онбординге. */

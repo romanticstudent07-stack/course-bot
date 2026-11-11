@@ -144,8 +144,8 @@ export function LaterStepView({ draft, text, consentsText, body, onAction, onFin
   const progress = <p style={progressStyle}>{progressLabel(draft.step)}</p>;
   const next = () => onAction({ type: 'next' });
 
-  // form и checkup без body (тесты) — индикатор и «Назад» остаются.
-  if (draft.step === 'form' || (draft.step === 'checkup' && body !== undefined)) {
+  // form и checkup: индикатор, экран шага (body) и «Назад»; «Далее» нет.
+  if (draft.step === 'form' || draft.step === 'checkup') {
     return (
       <div className="page" style={pageStyle}>
         {progress}
@@ -170,18 +170,16 @@ export function LaterStepView({ draft, text, consentsText, body, onAction, onFin
     );
   }
 
-  // offer, rules (и checkup без body) — без полей: только текст и кнопки.
+  // offer, rules — без полей: только текст и кнопки.
   return (
     <div className="page" style={pageStyle}>
       {progress}
       <p>{text}</p>
       <div style={rowStyle}>
         {back}
-        {canGoNext(draft) ? (
-          <button type="button" onClick={next}>
-            {draft.step === 'rules' ? 'Ознакомлен' : 'Далее'}
-          </button>
-        ) : null}
+        <button type="button" onClick={next}>
+          {draft.step === 'rules' ? 'Ознакомлен' : 'Далее'}
+        </button>
       </div>
     </div>
   );
