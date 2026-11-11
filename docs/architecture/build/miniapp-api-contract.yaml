@@ -262,7 +262,7 @@ paths:
                 items: { $ref: "#/components/schemas/Consent" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
-      summary: "Обновление / отзыв согласия"
+      summary: "Обновление / отзыв согласия — с И4 (I3 §C.12)"
       parameters: [{ in: header, name: X-Client-Op-Id, required: true, schema: { type: string, format: uuid }}]
       requestBody:
         required: true
@@ -331,11 +331,30 @@ paths:
   # ---------------- Карточка / данные участника (Блок 6) ----------------
   /miniapp/v1/me/card:
     get:
-      summary: "Моя карточка (динамическая, без секции консентов и юр.данных)"
+      summary: "Моя карточка (course-bot api-i3-3): данные, замеры, позиция, жизни; без согласий и юр.данных"
+      description: |
+        Только чтение, свежая из БД (06 §6.1); согласия не проверяются. Нет данных → null (Л5).
+        Балла нет (I3 §C.7); статуса, оплат, пауз нет; направления зоны — с повторных Чек-Апов.
+      responses:
+        "200": { description: "Карточка", content: { application/json: { schema: { type: object, required: [short_no, registered_at, tz, position, lives, measurements], properties: { short_no: { type: string }, registered_at: { type: string, format: date-time }, tz: { type: [string, "null"] }, position: { type: [object, "null"], required: [stage_no, module_no, day_no], properties: { stage_no: { type: integer }, module_no: { type: integer }, day_no: { type: integer } } }, lives: { type: integer, minimum: 0, maximum: 3 }, measurements: { type: object, required: [weight_start_kg, weight_current_kg, checkup_completed, zone_start, zone_last], properties: { weight_start_kg: { type: [number, "null"] }, weight_current_kg: { type: [number, "null"] }, checkup_completed: { type: boolean }, zone_start: { enum: [green, yellow, red, null] }, zone_last: { enum: [green, yellow, red, null] } } } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "PARTICIPANT_NOT_FOUND", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /miniapp/v1/me/change-map:
     get:
-      summary: "Моя полная Карта изменений"
+      summary: "Моя Карта изменений (course-bot api-i3-3): anthro, wellbeing, checkup, functional"
+      description: |
+        На лету из БД (кэш 14 §14.4 — позже). Baseline — MIN(created_at), затем MIN(id) (14 §14.1);
+        recent — до 5 последних после baseline, по возрастанию. checkup — только зона (I3 §C.7);
+        photo4 нет (Р-3). Даты UTC; локальный день — на клиенте по tz из /me/card.
+      responses:
+        "200": { description: "Слои", content: { application/json: { schema: { type: object, required: [layers], properties: { layers: { type: array, items: { type: object, required: [layer, metric, baseline, recent], properties: { layer: { enum: [anthro, wellbeing, checkup, functional] }, metric: { enum: [weight_kg, wellbeing_code, inflammation_zone, null] }, baseline: { type: [object, "null"], required: [value, at], properties: { value: { type: [number, string] }, at: { type: string, format: date-time } } }, recent: { type: array, maxItems: 5, items: { type: object, required: [value, at], properties: { value: { type: [number, string] }, at: { type: string, format: date-time } } } } } } } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "PARTICIPANT_NOT_FOUND", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /miniapp/v1/me/legal-data:
     get:
