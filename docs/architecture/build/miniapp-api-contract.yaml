@@ -296,10 +296,37 @@ paths:
       summary: "Конфигурация Чек-Апа (3 зоны green / yellow / red, шкала, дисклеймер; границы и балл участнику не отдаются — I3 §C.7)"
       description: "Проходит гейт Legal (И3)"
 
+  /miniapp/v1/checkup/status:
+    get:
+      summary: "Пройден ли Чек-Ап онбординга (course-bot api-i3-4, Р-18)"
+      description: |
+        Только чтение, без замка; параметров и тела нет. Признак даёт сервер (Р-18):
+        measurements_log kind='checkup' AND occasion='onboarding', created_at — самая ранняя
+        такая строка. Строки kind='body' (вес анкеты) и Чек-Апы после Этапа
+        (occasion='stage_end') не считаются. Балла, зоны и ответов в ответе нет.
+        Согласия не проверяются (как GET /miniapp/v1/onboarding/form).
+      responses:
+        "200": { description: "Состояние Чек-Апа", content: { application/json: { schema: { type: object, required: [completed, created_at], properties: { completed: { type: boolean }, created_at: { type: [string, "null"], format: date-time } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "PARTICIPANT_NOT_FOUND", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
   /miniapp/v1/checkup/submit:
     post:
-      summary: "Отправить ответы Чек-Апа"
+      summary: "Отправить ответы Чек-Апа (один раз за онбординг; Р-18)"
+      description: |
+        Повтор с тем же X-Client-Op-Id → 200 с сохранёнными значениями. Новый op_id, когда
+        Чек-Ап онбординга уже есть → 409 CHECKUP_EXISTS (тело — только code и message).
       parameters: [{ in: header, name: X-Client-Op-Id, required: true, schema: { type: string, format: uuid }}]
+      responses:
+        "200": { description: "Принято или повтор", content: { application/json: { schema: { type: object, required: [zone, config_version, created_at], properties: { zone: { type: string, enum: [green, yellow, red] }, config_version: { type: string }, created_at: { type: string, format: date-time } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "PARTICIPANT_NOT_FOUND", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "RECONSENT_REQUIRED / CHECKUP_EXISTS / IDEMPOTENCY_CONFLICT", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "VALIDATION_ERROR (details.errors: [{loc, type}], без значений полей)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   # ---------------- Карточка / данные участника (Блок 6) ----------------
   /miniapp/v1/me/card:
