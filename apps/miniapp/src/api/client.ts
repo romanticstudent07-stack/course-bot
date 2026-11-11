@@ -320,3 +320,63 @@ export const getForm = () => apiRequest<FormStatus>('/miniapp/v1/onboarding/form
  */
 export const postForm = (body: FormBody, clientOpId: string) =>
   apiRequest<FormCreated>('/miniapp/v1/onboarding/form', { method: 'POST', body, clientOpId });
+
+// ---- Чек-Ап онбординга (api-i3-4; карточка miniapp-i3-1b §7.1) ----
+// Ответы и зона на устройстве не хранятся и в лог не пишутся (Р-18, 2А): только тело POST и state React.
+
+export interface CheckupBlock {
+  id: number;
+  title: string;
+}
+
+export interface CheckupQuestion {
+  id: string;
+  block: number;
+  text: string;
+}
+
+export interface CheckupZone {
+  id: string;
+  title: string;
+  text: string;
+}
+
+export interface CheckupConfig {
+  version: string;
+  scale: { min: number; max: number };
+  blocks: CheckupBlock[];
+  questions: CheckupQuestion[];
+  zones: CheckupZone[];
+  disclaimer: string;
+}
+
+export interface CheckupStatus {
+  completed: boolean;
+  created_at: string | null;
+}
+
+/** Тело POST: Чек-Ап онбординга, 15 целых 0–3. */
+export interface CheckupSubmitBody {
+  occasion: 'onboarding';
+  answers: number[];
+}
+
+export interface CheckupSubmitResult {
+  zone: string;
+  config_version: string;
+  created_at: string;
+}
+
+/** Только чтение. Ошибки: 401, 429, 503. */
+export const getCheckupConfig = () => apiRequest<CheckupConfig>('/miniapp/v1/checkup/config');
+
+/** Только чтение, без X-Client-Op-Id. Ошибки: 401, 404 PARTICIPANT_NOT_FOUND, 429, 503. */
+export const getCheckupStatus = () => apiRequest<CheckupStatus>('/miniapp/v1/checkup/status');
+
+/**
+ * Отправка Чек-Апа. clientOpId — один на попытку с тем же телом: повтор после ошибки — с ним же (D-17).
+ * Ошибки: 404 PARTICIPANT_NOT_FOUND; 409 RECONSENT_REQUIRED / IDEMPOTENCY_CONFLICT / CHECKUP_EXISTS;
+ * 422; 401, 429, 503.
+ */
+export const postCheckupSubmit = (body: CheckupSubmitBody, clientOpId: string) =>
+  apiRequest<CheckupSubmitResult>('/miniapp/v1/checkup/submit', { method: 'POST', body, clientOpId });
