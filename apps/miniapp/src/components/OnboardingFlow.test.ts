@@ -338,7 +338,11 @@ describe('LaterSteps: порядок шагов', () => {
     expect(s.step).toBe('form');
     s = run(s, { type: 'formDone' });
     expect(s.step).toBe('checkup');
-    s = run(s, { type: 'next' }, { type: 'next' });
+    s = run(s, { type: 'next' }); // на checkup «Далее» нет — стоим
+    expect(s.step).toBe('checkup');
+    s = run(s, { type: 'checkupDone' });
+    expect(s.step).toBe('rules');
+    s = run(s, { type: 'next' });
     expect(s.step).toBe('finished');
     expect(run(s, { type: 'next' }).step).toBe('finished');
   });
@@ -406,6 +410,8 @@ const NO_STORAGE_FILES = [
   '../api/client.ts',
   './OnbForm.tsx',
   './onbForm.ts',
+  './Checkup.tsx',
+  './checkup.ts',
 ];
 const BANNED_STORAGE = [
   'localstorage',

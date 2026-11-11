@@ -104,21 +104,25 @@ describe('no_access (Р-2)', () => {
 describe('afterNumber', () => {
   const draft = (step: Draft['step']): Draft => ({ step });
 
-  it('черновика нет → app', () => {
-    expect(afterNumber(null, true)).toBe('app');
+  it('черновика нет, анкета не отправлена → later', () => {
+    expect(afterNumber(null, false, false)).toBe('later');
   });
 
-  it('черновика нет, анкета не отправлена → later', () => {
-    expect(afterNumber(null, false)).toBe('later');
+  it('черновика нет, анкета есть, Чек-Апа нет → checkup', () => {
+    expect(afterNumber(null, true, false)).toBe('checkup');
+  });
+
+  it('черновика нет, анкета и Чек-Ап есть → app', () => {
+    expect(afterNumber(null, true, true)).toBe('app');
   });
 
   it('step finished → app', () => {
-    expect(afterNumber(draft('finished'), true)).toBe('app');
+    expect(afterNumber(draft('finished'), true, true)).toBe('app');
   });
 
   it('незаконченный шаг → later', () => {
-    expect(afterNumber(draft('form'), false)).toBe('later');
-    expect(afterNumber(draft('offer'), false)).toBe('later');
+    expect(afterNumber(draft('form'), false, false)).toBe('later');
+    expect(afterNumber(draft('offer'), false, false)).toBe('later');
   });
 });
 
