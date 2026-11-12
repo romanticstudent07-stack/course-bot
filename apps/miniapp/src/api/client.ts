@@ -408,3 +408,29 @@ export interface MeCard {
 
 /** Только чтение, без X-Client-Op-Id. Ошибки: 401, 404 PARTICIPANT_NOT_FOUND, 429, 503 SERVICE_UNAVAILABLE. */
 export const getMeCard = () => apiRequest<MeCard>('/miniapp/v1/me/card');
+
+// ---- Карта изменений (api-i3-3; карточка miniapp-i3-2b §7.1) ----
+// Ответ живёт только в state React: не на устройство, не в лог, не в адрес.
+// Слои по порядку: anthro, wellbeing, checkup, functional; фото нет (Р-3); балла Чек-Апа нет.
+
+export interface ChangeMapPoint {
+  /** anthro — число (кг); wellbeing — код (на экран не выводится); checkup — зона. */
+  value: number | string;
+  /** date-time, UTC. */
+  at: string;
+}
+
+export interface ChangeMapLayer {
+  layer: string;
+  metric: string | null;
+  baseline: ChangeMapPoint | null;
+  /** До 5 последних точек после baseline, по возрастанию. */
+  recent: ChangeMapPoint[];
+}
+
+export interface MeChangeMap {
+  layers: ChangeMapLayer[];
+}
+
+/** Только чтение, без X-Client-Op-Id. Ошибки: 401, 404 PARTICIPANT_NOT_FOUND, 429, 503 SERVICE_UNAVAILABLE. */
+export const getMeChangeMap = () => apiRequest<MeChangeMap>('/miniapp/v1/me/change-map');
