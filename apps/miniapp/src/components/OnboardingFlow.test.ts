@@ -414,6 +414,8 @@ const NO_STORAGE_FILES = [
   './checkup.ts',
   '../pages/MePage/MeCardPage.tsx',
   './me.ts',
+  '../pages/MePage/MeConsentsPage.tsx',
+  '../pages/MePage/MeChangeMapPage.tsx',
 ];
 const BANNED_STORAGE = [
   'localstorage',
