@@ -6,12 +6,17 @@ import { describe, expect, it } from 'vitest';
 
 import type { MeCard } from '../api/client.ts';
 import { MeCardView } from '../pages/MePage/MeCardPage.tsx';
+import { MeChangeMapView } from '../pages/MePage/MeChangeMapPage.tsx';
+import { MeConsentsView } from '../pages/MePage/MeConsentsPage.tsx';
 import {
+  LAYER_TITLES,
   ME_TEXT,
   NO_DATA,
   ZONE_TITLES,
   canOpenCard,
   cardRows,
+  changeMapView,
+  consentRows,
   localDate,
   positionText,
   weightText,
@@ -147,6 +152,155 @@ describe('MeCardView', () => {
 describe('тексты', () => {
   it('10. все тексты — заглушки', () => {
     for (const v of [...Object.values(ME_TEXT), ...Object.values(ZONE_TITLES), NO_DATA]) {
+      expect(v.startsWith('Заглушка: ')).toBe(true);
+    }
+  });
+});
+
+// ---- miniapp-i3-2b §9: me.consents и me.change-map ----
+
+const TZ = 'Asia/Yekaterinburg';
+const LAYER_IDS = ['anthro', 'wellbeing', 'checkup', 'functional'];
+
+function mapWith(layers: unknown[]): unknown {
+  return { layers };
+}
+
+describe('consentRows', () => {
+  it('11. действующее согласие: id и дата по tz, state — действует', () => {
+    const rows = consentRows(
+      [{ id: 'C1', given_at: ISO, revoked_at: null, legal_status: 'pre-legal-review' }],
+      TZ,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].given).toContain('C1');
+    expect(rows[0].given).toContain('23.10.2026');
+    expect(rows[0].state).toBe(ME_TEXT.consentActive);
+  });
+
+  it('12. отозванное согласие: «отозвано» и дата отзыва; legal_status не попадает', () => {
+    const rows = consentRows(
+      [
+        {
+          id: 'C2',
+          given_at: '2026-10-01T10:00:00Z',
+          revoked_at: '2026-10-05T10:00:00Z',
+          legal_status: 'pre-legal-review',
+        },
+      ],
+      TZ,
+    );
+    expect(rows[0].state).toContain('отозвано');
+    expect(rows[0].state).toContain('05.10.2026');
+    expect(JSON.stringify(rows)).not.toContain('pre-legal-review');
+  });
+
+  it('13. не массив и пусто → []; порядок по id', () => {
+    expect(consentRows(null, TZ)).toEqual([]);
+    expect(consentRows({}, TZ)).toEqual([]);
+    expect(consentRows([], TZ)).toEqual([]);
+    const rows = consentRows(
+      ['C2', 'C0', 'C1'].map((id) => ({ id, given_at: ISO, revoked_at: null, legal_status: 'x' })),
+      TZ,
+    );
+    expect(rows.map((r) => r.id)).toEqual(['C0', 'C1', 'C2']);
+  });
+});
+
+describe('changeMapView', () => {
+  it('14. битое и пустое тело → 4 слоя по порядку, NO_DATA и []', () => {
+    for (const map of [null, {}, { layers: [] }]) {
+      const view = changeMapView(map, TZ);
+      expect(view.map((l) => l.layer)).toEqual(LAYER_IDS);
+      for (const l of view) {
+        expect(l.baseline).toBe(NO_DATA);
+        expect(l.recent).toEqual([]);
+      }
+    }
+  });
+
+  it('15. anthro: старт в кг с датой по tz; recent — 2 строки в порядке сервера', () => {
+    const view = changeMapView(
+      mapWith([
+        {
+          layer: 'anthro',
+          metric: 'weight_kg',
+          baseline: { value: 72.5, at: ISO },
+          recent: [
+            { value: 71, at: '2026-10-25T10:00:00Z' },
+            { value: 70, at: '2026-10-28T10:00:00Z' },
+          ],
+        },
+      ]),
+      TZ,
+    );
+    const anthro = view[0];
+    expect(anthro.baseline).toContain('кг');
+    expect(anthro.baseline).toContain('23.10.2026');
+    expect(anthro.recent).toHaveLength(2);
+    expect(anthro.recent[0]).toContain('71');
+    expect(anthro.recent[0]).toContain('25.10.2026');
+    expect(anthro.recent[1]).toContain('70');
+    expect(anthro.recent[1]).toContain('28.10.2026');
+  });
+
+  it('16. wellbeing: «ответ записан» и дата; кода нет', () => {
+    const view = changeMapView(
+      mapWith([{ layer: 'wellbeing', metric: 'wellbeing_code', baseline: { value: 'w3', at: ISO }, recent: [] }]),
+      TZ,
+    );
+    expect(view[1].baseline).toContain(ME_TEXT.wellbeingRecorded);
+    expect(view[1].baseline).toContain('23.10.2026');
+    expect(JSON.stringify(view)).not.toContain('w3');
+  });
+
+  it('17. checkup: зона; functional без данных → NO_DATA', () => {
+    const view = changeMapView(
+      mapWith([
+        { layer: 'checkup', metric: 'inflammation_zone', baseline: { value: 'green', at: ISO }, recent: [] },
+        { layer: 'functional', metric: null, baseline: null, recent: [] },
+      ]),
+      TZ,
+    );
+    expect(view[2].baseline).toContain(ZONE_TITLES.green);
+    expect(view[3].baseline).toBe(NO_DATA);
+  });
+});
+
+describe('MeConsentsView и MeChangeMapView', () => {
+  it('18. MeConsentsView: пусто → NO_DATA; строки C0 и C1; нет ссылок, кнопок и балла', () => {
+    const empty = renderToStaticMarkup(createElement(MeConsentsView, { rows: [] }));
+    expect(empty).toContain(NO_DATA);
+    const rows = consentRows(
+      ['C0', 'C1'].map((id) => ({ id, given_at: ISO, revoked_at: null, legal_status: 'x' })),
+      TZ,
+    );
+    const html = renderToStaticMarkup(createElement(MeConsentsView, { rows }));
+    expect(html).toContain('C0');
+    expect(html).toContain('C1');
+    for (const h of [empty, html]) {
+      expect(h).not.toContain('<a ');
+      expect(h).not.toContain('<button');
+      expect(h.toLowerCase()).not.toContain('score');
+    }
+  });
+
+  it('19. MeChangeMapView: 4 заголовка слоёв; нет кода, балла и ссылок', () => {
+    const layers = changeMapView(
+      mapWith([{ layer: 'wellbeing', metric: 'wellbeing_code', baseline: { value: 'w3', at: ISO }, recent: [] }]),
+      TZ,
+    );
+    const html = renderToStaticMarkup(createElement(MeChangeMapView, { layers }));
+    for (const title of Object.values(LAYER_TITLES)) {
+      expect(html).toContain(title);
+    }
+    expect(html).not.toContain('w3');
+    expect(html.toLowerCase()).not.toContain('score');
+    expect(html).not.toContain('<a ');
+  });
+
+  it('20. все LAYER_TITLES — заглушки', () => {
+    for (const v of Object.values(LAYER_TITLES)) {
       expect(v.startsWith('Заглушка: ')).toBe(true);
     }
   });
