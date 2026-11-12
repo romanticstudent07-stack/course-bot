@@ -412,6 +412,8 @@ const NO_STORAGE_FILES = [
   './onbForm.ts',
   './Checkup.tsx',
   './checkup.ts',
+  '../pages/MePage/MeCardPage.tsx',
+  './me.ts',
 ];
 const BANNED_STORAGE = [
   'localstorage',
