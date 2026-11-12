@@ -3,6 +3,7 @@
 // Один GET /miniapp/v1/me/card при монтировании и по «Повторить»; автоповтора и таймеров нет (Ш-7).
 // Ответ живёт только в state React: не на устройство, не в лог, не в адрес. Балла Чек-Апа нет.
 // Ссылка «к экрану дня» — в готовом виде и на экране ошибки; на «Загрузка…» её нет.
+// В готовом виде — ссылки на /me/consents и /me/change-map (miniapp-i3-2b §7.3).
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -87,6 +88,8 @@ export function MeCardPage() {
   return (
     <div className="page" style={pageStyle}>
       <MeCardView card={card}/>
+      <Link to="/me/consents">{ME_TEXT.consentsTitle}</Link>
+      <Link to="/me/change-map">{ME_TEXT.changeMapTitle}</Link>
       <Link to="/day">{ME_TEXT.toDay}</Link>
     </div>
   );
