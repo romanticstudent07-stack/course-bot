@@ -15,7 +15,9 @@
 // textarea «Рефлексия»; «Отправить отчёт» активна от 2 символов после trim; текст уходит полем
 // reflection. Текст только в памяти экрана (не на устройстве, не в консоль); фоновый GET его не
 // сбрасывает, после 200 поле очищается; 422 REFLECTION_REQUIRED — своё сообщение и перечитать день.
+// miniapp-i3-2a: под «Обновить» — ссылка на /me (me.card), только когда поле рефлексии пустое и отчёт не отправляется (Ш-2).
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { Link } from 'react-router-dom';
 
 import {
   getDayCurrent,
@@ -56,6 +58,7 @@ import {
   wallClock,
   type DayView,
 } from '@/components/dayScreen.ts';
+import { ME_TEXT, canOpenCard } from '@/components/me.ts';
 import { errorMessage, pickText, textsToMap, type TextMap } from '@/components/OnboardingFlow.tsx';
 
 const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 16, padding: 16 };
@@ -483,6 +486,7 @@ export function DayPage() {
       <button type="button" disabled={refreshing} onClick={refresh}>
         {refreshing ? 'Обновляем…' : 'Обновить'}
       </button>
+      {canOpenCard(reflection, sending) ? <Link to="/me">{ME_TEXT.cardTitle}</Link> : null}
     </div>
   );
 }

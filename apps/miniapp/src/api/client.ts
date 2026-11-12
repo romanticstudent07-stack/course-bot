@@ -380,3 +380,31 @@ export const getCheckupStatus = () => apiRequest<CheckupStatus>('/miniapp/v1/che
  */
 export const postCheckupSubmit = (body: CheckupSubmitBody, clientOpId: string) =>
   apiRequest<CheckupSubmitResult>('/miniapp/v1/checkup/submit', { method: 'POST', body, clientOpId });
+
+// ---- Карточка участника (api-i3-3; карточка miniapp-i3-2a §7.1) ----
+// Ответ живёт только в state React: не на устройство, не в лог, не в адрес. Балла Чек-Апа нет.
+
+export type ZoneId = 'green' | 'yellow' | 'red';
+
+export interface MeMeasurements {
+  weight_start_kg: number | null;
+  weight_current_kg: number | null;
+  checkup_completed: boolean;
+  zone_start: ZoneId | null;
+  zone_last: ZoneId | null;
+}
+
+export interface MeCard {
+  /** Вид «#000123». */
+  short_no: string;
+  /** date-time, UTC. */
+  registered_at: string;
+  /** IANA-пояс участника или null. */
+  tz: string | null;
+  position: DayPosition | null;
+  lives: number;
+  measurements: MeMeasurements;
+}
+
+/** Только чтение, без X-Client-Op-Id. Ошибки: 401, 404 PARTICIPANT_NOT_FOUND, 429, 503 SERVICE_UNAVAILABLE. */
+export const getMeCard = () => apiRequest<MeCard>('/miniapp/v1/me/card');
