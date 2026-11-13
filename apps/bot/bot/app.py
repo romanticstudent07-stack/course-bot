@@ -23,6 +23,10 @@ BOT_DATABASE_URL пуст → воркер не запускается (WARNING)
 При включённом доступе дефолтная Menu Button — стандартная: Mini App ставится персонально
 только при granted (bot/handlers.py, bot/access_handlers.py).
 Личный роутер доступа ловит ВСЕ личные сообщения — новые обработчики лички подключать ДО него.
+
+Карточка участника (bot-i3-1, bot/card_handlers.py): роутер подключается после /start и ДО роутера
+доступа, только если config.card_enabled; иначе один WARNING с именами переменных (без значений).
+Ловит только Command("card") и callback «card:…».
 """
 from __future__ import annotations
 
@@ -43,6 +47,12 @@ OUTBOX_STOP_TIMEOUT = 25
 def build_dispatcher(config: BotConfig, connect=None) -> Dispatcher:
     dp = Dispatcher()
     dp.include_router(build_router(config, connect))
+    if config.card_enabled:
+        from bot.card_handlers import build_card_router
+
+        dp.include_router(build_card_router(config, connect))
+    else:
+        logger.warning("Карточка выключена: не заданы %s", ", ".join(config.card_missing_vars()))
     if config.access_enabled:
         from bot.access_handlers import build_access_router
 
