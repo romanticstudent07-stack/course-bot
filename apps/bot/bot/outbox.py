@@ -23,6 +23,7 @@ ladder_day2_alert -> тема «Отчёты и активность» (REPORTS_
 (group_not_configured) -> payload {pid, reflection_id} (bad_payload) -> REFLECTION
 (reflection_not_found; чужой pid -> bad_payload) -> одно сообщение HTML -> MARK.
 Подпись — Р-15: «Участник #NNNNNN (ID N) → написать», ссылка tg://user?id=N; getChat не вызываем.
+Под постом — кнопка «📇 Карточка» (card:<short_no>, bot-i3-2); short_no нет — без кнопки.
 Ошибки Telegram — как в личке, но частей и прогресса нет. Ветка всегда кончается MARK или
 DLQ+MARK, либо откатом без MARK при временной ошибке.
 
@@ -80,6 +81,7 @@ from aiogram.exceptions import (
 from psycopg.types.json import Jsonb
 
 from bot import texts
+from bot.card import card_button
 from bot.render import MissingVarError, TemplateError, build_html_parts, build_plain_parts
 
 logger = logging.getLogger(__name__)
@@ -398,11 +400,12 @@ class OutboxWorker:
         else:
             text = texts.GROUP_DAY2_ALERT.format(who=who)
         # 7. Одно сообщение в тему.
-        await self._send_group(oid, event_type, chat_id, thread_id, text)
+        markup = None if short_no is None else card_button(int(short_no))
+        await self._send_group(oid, event_type, chat_id, thread_id, text, reply_markup=markup)
         await self._mark(conn, oid, event_type)
         logger.info("outbox %s %s: sent to group", oid, event_type)
 
-    async def _send_group(self, oid, event_type, chat_id, thread_id, text) -> None:
+    async def _send_group(self, oid, event_type, chat_id, thread_id, text, reply_markup=None) -> None:
         """Одно send_message в тему; ошибки — как в личке, частей и прогресса нет."""
         waited = 0.0
         while True:
@@ -412,6 +415,7 @@ class OutboxWorker:
                     message_thread_id=thread_id,
                     text=text,
                     parse_mode="HTML",
+                    reply_markup=reply_markup,
                     request_timeout=REQUEST_TIMEOUT,
                 )
             except TelegramRetryAfter as exc:

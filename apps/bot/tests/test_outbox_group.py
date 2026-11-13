@@ -409,3 +409,76 @@ def test_start_worker_no_topic_warning_when_set(caplog, monkeypatch):
 def test_worker_config_default_none():
     w = OutboxWorker(make_bot(), asyncio.Event())
     assert w.config is None
+
+
+# bot-i3-2: кнопка «📇 Карточка» под постами в темах группы
+def _card_markup(kw):
+    from bot.texts import CARD_BUTTON
+
+    markup = kw["reply_markup"]
+    assert len(markup.inline_keyboard) == 1 and len(markup.inline_keyboard[0]) == 1
+    button = markup.inline_keyboard[0][0]
+    assert button.text == CARD_BUTTON
+    return button.callback_data
+
+
+# bot-i3-2 / 1
+def test_card_button_day2(caplog, sleeps):
+    caplog.set_level(logging.DEBUG)
+    conn, bot = make_db(event_type="ladder_day2_alert", payload=DAY2_PAYLOAD), make_bot()
+    _, res = one(conn, bot)
+    assert res[0] == outbox.DONE
+    kw = bot.send_message.await_args.kwargs
+    assert kw["message_thread_id"] == REPORTS
+    assert _card_markup(kw) == "card:4242"
+    _no_pii(caplog)
+
+
+# bot-i3-2 / 2
+def test_card_button_reflection(caplog, sleeps):
+    caplog.set_level(logging.DEBUG)
+    conn, bot = make_db(event_type="reflection_submitted", payload=REFL_PAYLOAD), make_bot()
+    _, res = one(conn, bot)
+    assert res[0] == outbox.DONE
+    kw = bot.send_message.await_args.kwargs
+    assert kw["message_thread_id"] == REFLECTIONS
+    assert _card_markup(kw) == "card:4242"
+    _no_pii(caplog)
+
+
+# bot-i3-2 / 3
+def test_card_button_absent_without_short_no(sleeps):
+    def answer(sql, params):
+        if sql == CLAIM:
+            return FakeCursor((7, str(PID), "ladder_day2_alert", DAY2_PAYLOAD, datetime.now(timezone.utc)))
+        if sql == GROUP_ADDRESSEE:
+            return FakeCursor((TG_ID, None, None))
+        return FakeCursor(None, rowcount=1)
+
+    bot = make_bot()
+    one(FakeConn(answer), bot)
+    kw = bot.send_message.await_args.kwargs
+    assert kw.get("reply_markup") is None
+    assert "Участник #— " in kw["text"]
+
+
+# bot-i3-2 / 4
+def test_card_button_kept_on_retry_after(caplog, sleeps):
+    caplog.set_level(logging.DEBUG)
+    conn = make_db(event_type="ladder_day2_alert", payload=DAY2_PAYLOAD)
+    bot = make_bot(TelegramRetryAfter(method=METHOD, message="flood", retry_after=3), None)
+    _, res = one(conn, bot)
+    assert res[0] == outbox.DONE
+    calls = bot.send_message.await_args_list
+    assert len(calls) == 2
+    for call in calls:
+        assert _card_markup(call.kwargs) == "card:4242"
+    _no_pii(caplog)
+
+
+# bot-i3-2 / 5
+def test_card_button_not_in_private_path(sleeps):
+    conn = make_db(event_type="send1_test", payload={"text_id": "t.key", "tier": "T2"})
+    bot = make_bot()
+    one(conn, bot)
+    assert "reply_markup" not in bot.send_message.await_args.kwargs
