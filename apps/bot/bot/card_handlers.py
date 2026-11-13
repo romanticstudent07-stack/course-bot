@@ -6,6 +6,9 @@
   иначе answerCallbackQuery без текста + лог.
 - Карточка (bot/card.py) уходит только в WORK_GROUP_ID, тему CARDS_TOPIC_ID; до отправки — аудит.
   Успех: на /card — ничего; на кнопку — CARD_SENT. Ошибка БД или отправки — CARD_TRY_LATER.
+- Номер из reply без кнопки — только строка-подпись GROUP_WHO целиком (card.number_from_reply).
+- Номер — до 19 цифр; больше bigint → как нет номера (CARD_ASK_ID / CARD_NOT_FOUND).
+- Все ответы на /card — через _reply: сбой Telegram → WARNING с именем класса, обработчик не падает.
 Роутер ловит только Command("card") и callback «card:…»; личку не ловит.
 Подключается, только если config.card_enabled (bot/app.py).
 Логи: без tg_user_id, pid, short_no и текста карточки.
@@ -39,16 +42,22 @@ def build_card_router(config: BotConfig, connect=None) -> Router:
     def _allowed(chat_id: int | None, user_id: int | None) -> bool:
         return chat_id == config.work_group_id and user_id in config.access_admin_ids
 
+    async def _reply(message: Message, text: str) -> None:
+        """Ответ на /card; ошибка Telegram — только WARNING с именем класса."""
+        try:
+            await message.reply(text)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("card: ответ не отправлен (%s)", type(exc).__name__)
+
     async def _deliver(bot: Bot, short_no: int, actor_id: int) -> str | None:
         """Собрать, записать аудит, отправить. None — успех, иначе текст ответа."""
         try:
-            loaded = await _with_conn(lambda c: card.load_and_audit(c, short_no, str(actor_id)))
+            text = await _with_conn(lambda c: card.load_and_audit(c, short_no, str(actor_id)))
         except Exception as exc:  # noqa: BLE001
             logger.error("card: карточка не собрана (%s)", type(exc).__name__)
             return texts.CARD_TRY_LATER
-        if loaded is None:
+        if text is None:
             return texts.CARD_NOT_FOUND
-        _tg_user_id, text = loaded
         try:
             await bot.send_message(chat_id=config.work_group_id, message_thread_id=config.cards_topic_id,
                                    text=text, parse_mode="HTML")
@@ -58,7 +67,7 @@ def build_card_router(config: BotConfig, connect=None) -> Router:
         logger.info("card: карточка отправлена")
         return None
 
-    @router.message(Command("card"), F.chat.type.in_({"group", "supergroup"}))
+    @router.message(F.chat.type.in_({"group", "supergroup"}), Command("card"))
     async def on_card(message: Message, command: CommandObject) -> None:
         user_id = message.from_user.id if message.from_user else None
         if not _allowed(message.chat.id, user_id):
@@ -67,27 +76,24 @@ def build_card_router(config: BotConfig, connect=None) -> Router:
         if command.args:
             short_no = card.parse_arg(command.args)
             if short_no is None:
-                await message.reply(texts.CARD_ASK_ID)
+                await _reply(message, texts.CARD_ASK_ID)
                 return
         else:
             reply = message.reply_to_message
             # В теме форума каждое сообщение формально — reply на её первое сообщение (id = thread_id).
             if reply is None or reply.message_id == message.message_thread_id:
-                await message.reply(texts.CARD_ASK_ID)
+                await _reply(message, texts.CARD_ASK_ID)
                 return
             if reply.from_user is None or reply.from_user.id != message.bot.id:
-                await message.reply(texts.CARD_NOT_FOUND)
+                await _reply(message, texts.CARD_NOT_FOUND)
                 return
             short_no = card.number_from_reply(reply)
             if short_no is None:
-                await message.reply(texts.CARD_NOT_FOUND)
+                await _reply(message, texts.CARD_NOT_FOUND)
                 return
         answer = await _deliver(message.bot, short_no, user_id)
         if answer:
-            try:
-                await message.reply(answer)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("card: ответ не отправлен (%s)", type(exc).__name__)
+            await _reply(message, answer)
 
     @router.callback_query(F.data.startswith(f"{card.CALLBACK_PREFIX}:"))
     async def on_button(callback: CallbackQuery) -> None:

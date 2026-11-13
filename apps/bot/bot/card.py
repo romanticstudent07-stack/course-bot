@@ -13,6 +13,9 @@
 «Кто» — по Р-15: «Участник #NNNNNN (ID N) → написать»; имя и username не берутся.
 Статус — по В1, жизни — по В2. Оплаты, паузы, возвраты — «нет данных» (Р-1, Р-6а).
 Балл Чек-Апа не выбирается и не показывается. Каждая подстановка из БД — html.escape.
+Номер из поста без кнопки — только из строки, целиком совпадающей с шаблоном GROUP_WHO (до пустой строки).
+Номер — до 19 цифр; больше 9223372036854775807 (bigint) → None.
+load_and_audit возвращает только текст карточки (str) или None.
 """
 from __future__ import annotations
 
@@ -33,9 +36,25 @@ AUDIT = "INSERT INTO privacy_audit_log (actor_id, actor_role, action, participan
 CALLBACK_PREFIX = "card"
 ZONE_RANK = {"green": 0, "yellow": 1, "red": 2}
 STATUS_WORDS = {"active": texts.CARD_STATUS_ACTIVE, "sleeping": texts.CARD_STATUS_SLEEPING}
+BIGINT_MAX = 9223372036854775807
 
-_ARG_RE = re.compile(r"#(\d{1,18})")
-_CALLBACK_RE = re.compile(rf"{CALLBACK_PREFIX}:(\d{{1,18}})")
+_ARG_RE = re.compile(r"#(\d{1,19})")
+_CALLBACK_RE = re.compile(rf"{CALLBACK_PREFIX}:(\d{{1,19}})")
+
+
+def _who_re() -> re.Pattern:
+    """Регулярка строки-подписи из texts.GROUP_WHO: {num} — группа, {tg_id} — цифры, {link} — GROUP_WRITE."""
+    subs = {"{num}": r"(\d{1,19})", "{tg_id}": r"\d{1,19}", "{link}": re.escape(texts.GROUP_WRITE)}
+    parts = re.split(r"(\{num\}|\{tg_id\}|\{link\})", texts.GROUP_WHO)
+    return re.compile("".join(subs.get(part, re.escape(part)) for part in parts))
+
+
+_WHO_RE = _who_re()
+
+
+def _bigint(digits: str) -> int | None:
+    number = int(digits)
+    return number if number <= BIGINT_MAX else None
 
 
 def card_button(short_no: int) -> InlineKeyboardMarkup:
@@ -46,19 +65,19 @@ def card_button(short_no: int) -> InlineKeyboardMarkup:
 
 
 def parse_arg(args: str | None) -> int | None:
-    """Аргумент /card: целиком «#<цифры>» → номер; иначе None."""
+    """Аргумент /card: целиком «#<до 19 цифр>» и не больше bigint → номер; иначе None."""
     m = _ARG_RE.fullmatch((args or "").strip())
-    return int(m.group(1)) if m else None
+    return _bigint(m.group(1)) if m else None
 
 
 def parse_callback(data: str | None) -> int | None:
-    """callback_data целиком «card:<цифры>» → номер; иначе None."""
+    """callback_data целиком «card:<до 19 цифр>» и не больше bigint → номер; иначе None."""
     m = _CALLBACK_RE.fullmatch(data or "")
-    return int(m.group(1)) if m else None
+    return _bigint(m.group(1)) if m else None
 
 
 def number_from_reply(reply) -> int | None:
-    """Номер из поста бота: кнопка «card:N» → первый «#N» до пустой строки → None."""
+    """Номер из поста бота: кнопка «card:N» → строка-подпись GROUP_WHO целиком до пустой строки → None."""
     markup = getattr(reply, "reply_markup", None)
     for row in (getattr(markup, "inline_keyboard", None) or []):
         for button in row:
@@ -67,8 +86,11 @@ def number_from_reply(reply) -> int | None:
                 return number
     text = getattr(reply, "text", None) or getattr(reply, "caption", None) or ""
     head = text.split("\n\n", 1)[0]  # после пустой строки — текст участника, не смотреть
-    m = _ARG_RE.search(head)
-    return int(m.group(1)) if m else None
+    for line in head.split("\n"):
+        m = _WHO_RE.fullmatch(line)
+        if m:
+            return _bigint(m.group(1))
+    return None
 
 
 def who_line(short_no: int, tg_user_id: int) -> str:
@@ -131,8 +153,8 @@ def render_card(short_no: int, tg_user_id: int, registered_at, state, rows) -> s
     return "\n".join(lines)
 
 
-async def load_and_audit(conn, short_no: int, actor_id: str) -> tuple[int, str] | None:
-    """FIND (нет → None, аудита нет) → STATE → MEASUREMENTS → AUDIT → render. Исключение пробрасывается."""
+async def load_and_audit(conn, short_no: int, actor_id: str) -> str | None:
+    """FIND (нет → None, аудита нет) → STATE → MEASUREMENTS → AUDIT → текст карточки. Исключение пробрасывается."""
     cur = await conn.execute(FIND, (short_no,))
     found = await cur.fetchone()
     if found is None:
@@ -143,4 +165,4 @@ async def load_and_audit(conn, short_no: int, actor_id: str) -> tuple[int, str] 
     cur = await conn.execute(MEASUREMENTS, (pid,))
     rows = await cur.fetchall()
     await conn.execute(AUDIT, (actor_id, pid))
-    return tg_user_id, render_card(short_no, tg_user_id, created_at, state, rows)
+    return render_card(short_no, tg_user_id, created_at, state, rows)

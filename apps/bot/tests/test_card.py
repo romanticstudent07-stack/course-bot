@@ -127,7 +127,7 @@ def test_parse_arg_and_callback():
 def test_number_from_reply():
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="x", callback_data="card:7")]])
     assert card.number_from_reply(SimpleNamespace(reply_markup=kb, text="#000042", caption=None)) == 7
-    assert card.number_from_reply(SimpleNamespace(reply_markup=None, text=None, caption="Пост\n#000042 x")) == 42
+    assert card.number_from_reply(SimpleNamespace(reply_markup=None, text=None, caption="Пост\n#000042 x")) is None
     assert card.number_from_reply(SimpleNamespace(reply_markup=None, text="Пост\n\n#999", caption=None)) is None
     assert card.number_from_reply(SimpleNamespace(reply_markup=None, text="Участник #— (ID 1)", caption=None)) is None
 
@@ -267,3 +267,113 @@ def test_card_disabled_without_cards_topic(caplog):
     warnings = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Карточка выключена")]
     assert len(warnings) == 1
     assert "CARDS_TOPIC_ID" in warnings[0] and "BOT_DATABASE_URL" not in warnings[0]
+
+
+# Т1
+def test_t1_number_from_reply_only_who_line():
+    def post(text):
+        return SimpleNamespace(reply_markup=None, text=text, caption=None)
+
+    assert card.number_from_reply(post("Участник #000042 (ID 555) → написать")) == 42
+    assert card.number_from_reply(post("Участник #000001 (ID 1) → написать (@u · ID 5) → написать")) is None
+    assert card.number_from_reply(post("Код: #000042")) is None
+
+
+# Т2
+def test_t2_nineteen_digits_and_bigint():
+    big = 9223372036854775807
+    assert card.parse_arg(f"#{big}") == big
+    assert card.parse_arg(f"#{big + 1}") is None
+    assert card.parse_arg("#" + "1" * 20) is None
+    assert card.parse_callback(f"card:{big}") == big
+    assert card.parse_callback(f"card:{big + 1}") is None
+    assert card.parse_callback("card:" + "1" * 20) is None
+
+
+# Т3
+def test_t3_reply_to_topic_root_asks_id():
+    log: list = []
+    db = FakeDb(log)
+    root = Message(message_id=5, date=datetime.now(), chat=Chat(id=GROUP, type="supergroup"),
+                   from_user=User(id=BOT_ID, is_bot=True, first_name="Bot"), text="тема")
+    msg = _msg("/card", reply=root, thread_id=5)
+    calls = asyncio.run(_feed(make_config(), Update(update_id=1, message=msg), db, log))
+    assert [c.text for c in calls if isinstance(c, SendMessage)] == [texts.CARD_ASK_ID]
+    assert db.connects == 0
+
+
+# Т4
+def test_t4_reply_to_not_bot_post_not_found():
+    log: list = []
+    db = FakeDb(log)
+    post = Message(message_id=5, date=datetime.now(), chat=Chat(id=GROUP, type="supergroup"),
+                   from_user=User(id=STRANGER, is_bot=False, first_name="S"),
+                   text="Участник #000042 (ID 555) → написать")
+    calls = asyncio.run(_feed(make_config(), Update(update_id=1, message=_msg("/card", reply=post)), db, log))
+    assert [c.text for c in calls if isinstance(c, SendMessage)] == [texts.CARD_NOT_FOUND]
+    assert db.connects == 0
+
+
+# Т5
+def test_t5_bad_arg_asks_id():
+    log: list = []
+    db = FakeDb(log)
+    calls = asyncio.run(_feed(make_config(), Update(update_id=1, message=_msg("/card abc")), db, log))
+    assert [c.text for c in calls if isinstance(c, SendMessage)] == [texts.CARD_ASK_ID]
+    assert db.connects == 0
+
+
+# Т6
+def test_t6_callback_from_admin_in_other_chat():
+    log: list = []
+    db = FakeDb(log)
+    msg = Message(message_id=5, date=datetime.now(), chat=Chat(id=-999, type="supergroup"),
+                  from_user=User(id=BOT_ID, is_bot=True, first_name="Bot"), text="пост")
+    cq = CallbackQuery(id="1", from_user=User(id=ADMIN, is_bot=False, first_name="A"),
+                       chat_instance="ci", data="card:123", message=msg)
+    calls = asyncio.run(_feed(make_config(), Update(update_id=1, callback_query=cq), db, log))
+    assert len(calls) == 1 and isinstance(calls[0], AnswerCallbackQuery) and calls[0].text is None
+    assert db.connects == 0
+
+
+# Т7
+def test_t7_reply_failure_does_not_raise(caplog):
+    log: list = []
+    db = FakeDb(log)
+
+    async def run():
+        bot = Bot(token=FAKE_TOKEN)
+
+        async def fake_request(_bot, method, timeout=None):
+            if isinstance(method, SendMessage):
+                raise RuntimeError("telegram down")
+            return True
+
+        bot.session.make_request = AsyncMock(side_effect=fake_request)
+        dp = build_dispatcher(make_config(), connect=db)
+        await dp.feed_update(bot, Update(update_id=1, message=_msg("/card abc")))
+        await bot.session.close()
+
+    with caplog.at_level(logging.WARNING, logger="bot.card_handlers"):
+        asyncio.run(run())
+    warnings = [r for r in caplog.records if r.name == "bot.card_handlers" and r.levelno == logging.WARNING]
+    assert any(r.getMessage().startswith("card: ответ не отправлен") for r in warnings)
+    assert db.connects == 0
+
+
+# Т8
+def test_t8_logs_without_ids(caplog):
+    msg = Message(message_id=5, date=datetime.now(), chat=Chat(id=-999, type="supergroup"),
+                  from_user=User(id=BOT_ID, is_bot=True, first_name="Bot"), text="пост")
+    cq = CallbackQuery(id="1", from_user=User(id=ADMIN, is_bot=False, first_name="A"),
+                       chat_instance="ci", data="card:123", message=msg)
+    with caplog.at_level(logging.DEBUG, logger="bot.card_handlers"):
+        log: list = []
+        asyncio.run(_feed(make_config(), Update(update_id=1, callback_query=cq), FakeDb(log), log))
+        log2: list = []
+        asyncio.run(_feed(make_config(), Update(update_id=2, message=_msg("/card #000123")),
+                          FakeDb(log2, fail_audit=True), log2))
+    messages = [r.getMessage() for r in caplog.records if r.name == "bot.card_handlers"]
+    assert messages
+    for text in messages:
+        assert "555" not in text and "000123" not in text and PID not in text
