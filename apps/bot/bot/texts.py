@@ -85,3 +85,52 @@ GROUP_WRITE = "написать"
 GROUP_DAY2_ALERT = "[заглушка] День 2: пришёл, но не отправил.\n{who}"
 # bot.group_reflection — {s}, {m}, {d}: этап, модуль, день; {time}: «дд.мм.гггг чч:мм МСК»; {body}: текст
 GROUP_REFLECTION = "[заглушка] Рефлексия · этап {s} · модуль {m} · день {d} · {time}\n{who}\n\n{body}"
+
+# --- Карточка (bot-i3-1). Заглушки. HTML; подстановки из БД экранирует bot/card.py ---
+
+# bot.card_button — кнопка под постами (ставит bot-i3-2)
+CARD_BUTTON = "📇 Карточка"
+# bot.card_ask_id
+CARD_ASK_ID = "[заглушка] Уточните участника: /card #NNNNNN или ответом на пост бота."
+# bot.card_not_found
+CARD_NOT_FOUND = "[заглушка] Участник не найден."
+# bot.card_try_later
+CARD_TRY_LATER = "[заглушка] Не удалось собрать карточку, попробуйте позже."
+# bot.card_sent
+CARD_SENT = "[заглушка] Карточка отправлена в тему «Карточки»."
+# bot.card_title
+CARD_TITLE = "[заглушка] Карточка участника"
+# bot.card_no_data
+CARD_NO_DATA = "нет данных"
+# bot.card_tz — {tz}: IANA-пояс или «нет данных»
+CARD_TZ = "[заглушка] Часовой пояс: {tz}"
+# bot.card_weight — {start}, {current}: вес или «нет данных»
+CARD_WEIGHT = "[заглушка] Вес: {start} → {current}"
+# bot.card_zone — {start}, {last}: код зоны; {mark}: пометка или пусто
+CARD_ZONE = "[заглушка] Чек-Ап-зона: {start} → {last}{mark}"
+# bot.card_zone_better
+CARD_ZONE_BETTER = "[заглушка] улучшение"
+# bot.card_zone_worse
+CARD_ZONE_WORSE = "[заглушка] ухудшение"
+# bot.card_zone_same
+CARD_ZONE_SAME = "[заглушка] зона прежняя"
+# bot.card_position — {s}, {m}, {d}: этап, модуль, день
+CARD_POSITION = "[заглушка] Позиция: этап {s} · модуль {m}.{d}"
+# bot.card_status_active
+CARD_STATUS_ACTIVE = "Заглушка: активен"
+# bot.card_status_sleeping
+CARD_STATUS_SLEEPING = "Заглушка: спящий"
+# bot.card_status_raw — {code}: lifecycle_phase как есть (экранирован)
+CARD_STATUS_RAW = "статус: {code}"
+# bot.card_lives — {n}: осталось жизней
+CARD_LIVES = "Жизни: осталось {n}"
+# bot.card_lives_log
+CARD_LIVES_LOG = "Заглушка: журнал списаний — позже"
+# bot.card_payments — {value}
+CARD_PAYMENTS = "[заглушка] Оплаты: {value}"
+# bot.card_pauses — {value}
+CARD_PAUSES = "[заглушка] Паузы: {value}"
+# bot.card_returns — {value}
+CARD_RETURNS = "[заглушка] Возвраты на закрепление: {value}"
+# bot.card_registered — {date}: «дд.мм.гггг чч:мм МСК»
+CARD_REGISTERED = "[заглушка] Дата регистрации: {date}"

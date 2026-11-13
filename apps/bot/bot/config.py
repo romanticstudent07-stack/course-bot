@@ -18,6 +18,10 @@ ACCESS_LOCK_HOURS (по умолчанию 24, ≥ 1). access_enabled = BOT_DATA
 REPORTS_TOPIC_ID (тема «Отчёты и активность») — message_thread_id; чат — WORK_GROUP_ID.
 Пусто → None: строки outbox для этой темы уходят в DLQ group_not_configured
 (WARNING при старте воркера — только имена переменных).
+
+Карточка участника (bot-i3-1): CARDS_TOPIC_ID — message_thread_id темы «Карточки» в WORK_GROUP_ID.
+card_enabled = BOT_DATABASE_URL, WORK_GROUP_ID, CARDS_TOPIC_ID и ACCESS_ADMIN_IDS заданы;
+иначе /card выключена (WARNING при старте — только имена переменных).
 """
 from __future__ import annotations
 
@@ -49,6 +53,7 @@ def parse_database_url(env) -> str:
 
 ACCESS_REQUIRED_VARS = ("BOT_DATABASE_URL", "WORK_GROUP_ID", "ACCESS_ADMIN_TOPIC_ID", "ACCESS_ADMIN_IDS")
 GROUP_TOPIC_VARS = ("REFLECTIONS_TOPIC_ID", "REPORTS_TOPIC_ID")
+CARD_REQUIRED_VARS = ("BOT_DATABASE_URL", "WORK_GROUP_ID", "CARDS_TOPIC_ID", "ACCESS_ADMIN_IDS")
 
 
 def _parse_int(env, name: str) -> int | None:
@@ -105,6 +110,7 @@ class BotConfig:
     access_lock_hours: int = 24
     reflections_topic_id: int | None = None  # тема «Рефлексии» (bot-group-1)
     reports_topic_id: int | None = None  # тема «Отчёты и активность» (bot-group-1)
+    cards_topic_id: int | None = None  # тема «Карточки» (bot-i3-1)
 
     @property
     def webapp_enabled(self) -> bool:
@@ -132,6 +138,20 @@ class BotConfig:
         }
         return [name for name in GROUP_TOPIC_VARS if not present[name]]
 
+    def card_missing_vars(self) -> list[str]:
+        """Имена незаданных переменных карточки (без значений)."""
+        present = {
+            "BOT_DATABASE_URL": bool(self.database_url),
+            "WORK_GROUP_ID": self.work_group_id is not None,
+            "CARDS_TOPIC_ID": self.cards_topic_id is not None,
+            "ACCESS_ADMIN_IDS": bool(self.access_admin_ids),
+        }
+        return [name for name in CARD_REQUIRED_VARS if not present[name]]
+
+    @property
+    def card_enabled(self) -> bool:
+        return not self.card_missing_vars()
+
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "BotConfig":
         env = dict(os.environ if env is None else env)
@@ -152,4 +172,5 @@ class BotConfig:
             access_lock_hours=_parse_positive(env, "ACCESS_LOCK_HOURS", 24),
             reflections_topic_id=_parse_int(env, "REFLECTIONS_TOPIC_ID"),
             reports_topic_id=_parse_int(env, "REPORTS_TOPIC_ID"),
+            cards_topic_id=_parse_int(env, "CARDS_TOPIC_ID"),
         )
