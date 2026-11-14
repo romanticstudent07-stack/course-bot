@@ -97,6 +97,27 @@ onboarding_form (0015, db-i3-3) — анкета участника по Р-16, 
   - app_api: INSERT (pid, gender, wellbeing_code), SELECT (pid, gender, wellbeing_code,
     created_at); app_bot и app_projector прав нет; UPDATE / DELETE / TRUNCATE нет ни у кого.
 
+support_questions (0017, db-sup-1) — вопросы в поддержку по Р-19; таблиц после 0017 — 20:
+  - id bigint (support_questions_id_seq, support_questions_pkey), pid → tg_user_registry
+    (support_questions_pid_fkey), topic_code (SUPPORT_TOPIC_CODES: s1…s7 и other; номер
+    темы группы — в .env бота, в БД его нет), body, client_op_id, created_at; updated_at нет;
+  - текст вопроса хранится здесь, в outbox — только id (payload {pid, question_id});
+  - UNIQUE support_questions_pid_client_op_id_key — повтор гасит ON CONFLICT DO NOTHING;
+    индекс support_questions_pid_created_idx (pid, created_at) — не уникальный, для частоты;
+  - CHECK ck_support_questions_* — в миграции 0017, у каждого явный IS NOT NULL: тема из
+    списка, body после btrim не короче SUPPORT_BODY_MIN_LEN и не длиннее SUPPORT_BODY_MAX_LEN,
+    client_op_id от 1 до SUPPORT_CLIENT_OP_ID_MAX_LEN;
+  - SQL (код — api-sup-1 и bot-sup-1):
+      app_api: INSERT INTO support_questions (pid, topic_code, body, client_op_id)
+               VALUES (:pid, :topic, :body, :op)
+               ON CONFLICT (pid, client_op_id) DO NOTHING RETURNING id
+      app_api: SELECT max(created_at) FROM support_questions WHERE pid = :pid
+      app_bot: SELECT pid, topic_code, body, created_at FROM support_questions
+               WHERE id = :question_id
+  - app_api: INSERT (pid, topic_code, body, client_op_id), SELECT (id, pid, client_op_id,
+    created_at), USAGE последовательности; app_bot: SELECT (id, pid, topic_code, body,
+    created_at); app_projector прав нет; UPDATE / DELETE / TRUNCATE нет ни у кого.
+
 participant_state (0001) здесь НЕ моделируется: единственный писатель — проектор
 (E1/INV-1), колонка last_seen_publish_epoch — xid8 (SQLAlchemy его не знает).
 CHECK lifecycle_phase (FSM I2, D-11 «6А») добавлен миграцией 0005.
@@ -172,6 +193,13 @@ WEIGHT_MAX_KG = 300
 # Те же значения — в CHECK ck_onboarding_form_* миграции 0015.
 GENDERS: tuple[str, ...] = ("male", "female")
 WELLBEING_CODE_PATTERN = "^[a-z0-9_]{1,32}$"
+
+# support_questions (0017, db-sup-1): вопросы поддержки по Р-19 (для api-sup-1, bot-sup-1).
+# Те же значения — в CHECK ck_support_questions_* миграции 0017.
+SUPPORT_TOPIC_CODES: tuple[str, ...] = ("s1", "s2", "s3", "s4", "s5", "s6", "s7", "other")
+SUPPORT_BODY_MIN_LEN = 2
+SUPPORT_BODY_MAX_LEN = 2000
+SUPPORT_CLIENT_OP_ID_MAX_LEN = 64
 
 
 def _in_list(column: str, values: tuple[str, ...]) -> str:
@@ -536,4 +564,42 @@ class OnboardingForm(Base):
             f"wellbeing_code ~ '{WELLBEING_CODE_PATTERN}'",
             name="ck_onboarding_form_wellbeing_code",
         ),
+    )
+
+
+class SupportQuestion(Base):
+    __tablename__ = "support_questions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    pid: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tg_user_registry.pid", name="support_questions_pid_fkey"),
+        nullable=False,
+    )
+    topic_code: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    client_op_id: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "topic_code IS NOT NULL AND " + _in_list("topic_code", SUPPORT_TOPIC_CODES),
+            name="ck_support_questions_topic_code",
+        ),
+        CheckConstraint(
+            f"body IS NOT NULL AND char_length(btrim(body)) >= {SUPPORT_BODY_MIN_LEN} "
+            f"AND char_length(body) <= {SUPPORT_BODY_MAX_LEN}",
+            name="ck_support_questions_body_len",
+        ),
+        CheckConstraint(
+            "client_op_id IS NOT NULL AND char_length(client_op_id) "
+            f"BETWEEN 1 AND {SUPPORT_CLIENT_OP_ID_MAX_LEN}",
+            name="ck_support_questions_client_op_id",
+        ),
+        UniqueConstraint(
+            "pid", "client_op_id", name="support_questions_pid_client_op_id_key"
+        ),
+        Index("support_questions_pid_created_idx", "pid", "created_at"),
     )
