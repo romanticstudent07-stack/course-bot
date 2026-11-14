@@ -12,6 +12,7 @@ SQL и права (миграция 0009_app_bot, дополнение 0011; д�
     TEXT            SELECT на text_registry
     GROUP_ADDRESSEE + SELECT (short_no) на tg_user_registry (0011)
     REFLECTION      SELECT на reflections_log (0011)
+    SUPPORT_Q       SELECT (id, pid, topic_code, body, created_at) на support_questions (0017)
 Нет: INSERT в outbox, SELECT outbox_dlq, RETURNING, SELECT *, tx_id. Только параметры %s.
 Отличие от 0009 §7 — LIMIT 1 вместо :n и created_at в списке (для expired).
 
@@ -24,6 +25,11 @@ ladder_day2_alert -> тема «Отчёты и активность» (REPORTS_
 (reflection_not_found; чужой pid -> bad_payload) -> одно сообщение HTML -> MARK.
 Подпись — Р-15: «Участник #NNNNNN (ID N) → написать», ссылка tg://user?id=N; getChat не вызываем.
 Под постом — кнопка «📇 Карточка» (card:<short_no>, bot-i3-2); short_no нет — без кнопки.
+Вопрос поддержки (bot-sup-1, Р-19): support_question -> тема по topic_code строки
+support_questions (8 тем s1…s7, other; BotConfig.support_topic_id). Порядок ветки: шаги 1–3 как
+выше -> только WORK_GROUP_ID (group_not_configured) -> payload {pid, question_id} (bad_payload) ->
+SUPPORT_Q (support_not_found; чужой pid -> bad_payload) -> тема topic_code не задана
+(group_not_configured) -> пост HTML, под ним «📇 Карточка» и «✉️ Ответить» (sup:r:N) -> MARK.
 Ошибки Telegram — как в личке, но частей и прогресса нет. Ветка всегда кончается MARK или
 DLQ+MARK, либо откатом без MARK при временной ошибке.
 
@@ -81,7 +87,9 @@ from aiogram.exceptions import (
 from psycopg.types.json import Jsonb
 
 from bot import texts
+from bot.access import fmt_msk
 from bot.card import card_button
+from bot.support import SUPPORT_Q, question_markup
 from bot.render import MissingVarError, TemplateError, build_html_parts, build_plain_parts
 
 logger = logging.getLogger(__name__)
@@ -100,10 +108,12 @@ GROUP_ADDRESSEE = "SELECT tg_user_id, short_no, tombstoned_at FROM tg_user_regis
 REFLECTION = "SELECT pid, stage_no, module_no, day_no, body, created_at FROM reflections_log WHERE id = %s"
 DAY2 = None  # алерт дня 2: дополнительного SQL нет
 
-# event_type -> (поле BotConfig с темой, дополнительный SQL)
+# event_type -> (поле BotConfig с темой, дополнительный SQL);
+# None вместо поля — тема берётся из topic_code строки support_questions (bot-sup-1).
 GROUP_ROUTES = {
     "reflection_submitted": ("reflections_topic_id", REFLECTION),
     "ladder_day2_alert": ("reports_topic_id", DAY2),
+    "support_question": (None, SUPPORT_Q),
 }
 
 IDLE_SECONDS = 2
@@ -358,10 +368,10 @@ class OutboxWorker:
         # 3. Срок жизни строки.
         if _now() - _aware(created_at) > EXPIRE_AFTER:
             raise _Final("expired")
-        # 4. Чат и тема маршрута.
+        # 4. Чат и тема маршрута (support_question: тема — после SUPPORT_Q, по topic_code).
         chat_id = getattr(self.config, "work_group_id", None)
-        thread_id = getattr(self.config, topic_attr, None)
-        if chat_id is None or thread_id is None:
+        thread_id = None if topic_attr is None else getattr(self.config, topic_attr, None)
+        if chat_id is None or (topic_attr is not None and thread_id is None):
             raise _Final("group_not_configured")
         # 5. Конверт: {pid} или {pid, reflection_id}.
         if not isinstance(payload, dict):
@@ -387,8 +397,6 @@ class OutboxWorker:
             r_pid, stage_no, module_no, day_no, body, r_created = refl
             if str(r_pid) != str(pid):
                 raise _Final("bad_payload")
-            from bot.access import fmt_msk
-
             text = texts.GROUP_REFLECTION.format(
                 s=_esc(stage_no),
                 m=_esc(module_no),
@@ -397,6 +405,31 @@ class OutboxWorker:
                 who=who,
                 body=_esc(body),
             )
+        elif extra_sql is SUPPORT_Q:
+            question_id = payload.get("question_id")
+            if isinstance(question_id, bool) or not isinstance(question_id, int) or question_id <= 0:
+                raise _Final("bad_payload")
+            # 6. Вопрос поддержки и тема по topic_code.
+            cur = await conn.execute(SUPPORT_Q, (question_id,))
+            question = await cur.fetchone()
+            if question is None:
+                raise _Final("support_not_found")
+            q_pid, topic_code, body, q_created = question
+            if str(q_pid) != str(pid):
+                raise _Final("bad_payload")
+            thread_id = None if self.config is None else self.config.support_topic_id(topic_code)
+            if thread_id is None:
+                raise _Final("group_not_configured")
+            text = texts.GROUP_SUPPORT_QUESTION.format(
+                time=_esc(fmt_msk(_aware(q_created))),
+                who=who,
+                body=_esc(body),
+            )
+            markup = question_markup(short_no, question_id)
+            await self._send_group(oid, event_type, chat_id, thread_id, text, reply_markup=markup)
+            await self._mark(conn, oid, event_type)
+            logger.info("outbox %s %s: sent to group", oid, event_type)
+            return
         else:
             text = texts.GROUP_DAY2_ALERT.format(who=who)
         # 7. Одно сообщение в тему.
