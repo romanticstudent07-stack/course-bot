@@ -21,6 +21,7 @@
                                                вес в measurements_log, событие tz_set
   GET  /miniapp/v1/me/card                   — карточка участника (api-i3-3), только чтение
   GET  /miniapp/v1/me/change-map             — Карта изменений на лету (api-i3-3), только чтение
+  POST /miniapp/v1/support/question        — вопрос в поддержку (api-sup-1, Р-19): support_questions + outbox, X-Client-Op-Id
   POST /security/csp-report                  — приёмник CSP-репортов (E2), без initData
                                                (security: [] в miniapp-api-contract.yaml),
                                                без rate-limit
@@ -55,6 +56,7 @@ from app.routers import (
     onboarding,
     onboarding_form,
     security,
+    support,
     texts,
 )
 from app.telegram_init_data import require_init_data
@@ -108,6 +110,7 @@ def create_app() -> FastAPI:
             checkup.router,
             onboarding_form.router,
             me.router,
+            support.router,
         )
     )
 
