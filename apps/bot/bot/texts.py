@@ -134,3 +134,30 @@ CARD_PAUSES = "[заглушка] Паузы: {value}"
 CARD_RETURNS = "[заглушка] Возвраты на закрепление: {value}"
 # bot.card_registered — {date}: «дд.мм.гггг чч:мм МСК»
 CARD_REGISTERED = "[заглушка] Дата регистрации: {date}"
+
+# --- Поддержка (bot-sup-1, Р-19). Заглушки; кнопки — без префикса ---
+
+# bot.group_support_question — HTML; {time}: «дд.мм.гггг чч:мм МСК», {who}: GROUP_WHO, {body}: вопрос (экранирует outbox.py)
+GROUP_SUPPORT_QUESTION = "[заглушка] Вопрос в поддержку · {time}\n{who}\n\n{body}"
+# bot.support_prompt — {n}: номер вопроса; первая строка промпта ✉️ (по ней бот находит N)
+SUPPORT_PROMPT = "[заглушка] Ответ на вопрос {n}: напишите ответом на это сообщение"
+# bot.support_preview — {n}; первая строка предпросмотра, после пустой строки — текст ответа
+SUPPORT_PREVIEW = "[заглушка] Предпросмотр (вопрос {n}):"
+# bot.support_delivered — {n}
+SUPPORT_DELIVERED = "[заглушка] Доставлено (вопрос {n}):"
+# bot.support_not_delivered — {n}
+SUPPORT_NOT_DELIVERED = "[заглушка] Не доставлено (вопрос {n}):"
+# bot.support_send_text
+SUPPORT_SEND_TEXT = "[заглушка] Пришлите ответ текстом."
+# bot.support_too_long
+SUPPORT_TOO_LONG = "[заглушка] Ответ длиннее 2000 знаков."
+# bot.support_try_later
+SUPPORT_TRY_LATER = "[заглушка] Не удалось, попробуйте позже."
+# bot.support_answer_prefix — первая строка ответа участнику в личке
+SUPPORT_ANSWER_PREFIX = "[заглушка] Ответ поддержки:"
+# bot.support_button_reply
+SUPPORT_BUTTON_REPLY = "✉️ Ответить"
+# bot.support_button_send
+SUPPORT_BUTTON_SEND = "Отправить"
+# bot.support_button_cancel
+SUPPORT_BUTTON_CANCEL = "Отмена"
