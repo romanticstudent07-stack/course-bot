@@ -22,17 +22,19 @@
 - §5: образцы — reflections_log (текст в своей таблице, CHECK 2…2000) и measurements_log (UNIQUE (pid, client_op_id), client_op_id 1…64).
 
 ## 5. ЧТО ПРОЧИТАТЬ (по hash из промпта)
-- AGENT-BRIEF.md; эта карточка (≈ 14 КБ).
+- AGENT-BRIEF.md; эта карточка (≈ 15 КБ).
 - apps/api/app/db/models.py — 25,6; apps/api/migrations/versions/2026_11_08_1200-0015_onboarding_form_onboarding_form.py — 4,5;
   apps/api/migrations/versions/2026_10_31_1200-0011_reflections_log_reflections_log.py — 5,8;
-  apps/api/tests/test_db_roles_0015.py — 14,8; apps/api/tests/expected_tables.txt — 1,0.
-- Чтение Агента ≈ 52 КБ + карточка + AGENT-BRIEF.
+  apps/api/tests/test_db_roles_0015.py — 14,8; apps/api/tests/expected_tables.txt — 1,0;
+  apps/api/tests/test_db_models.py — 5,5.
+- Чтение Агента ≈ 57,5 КБ + карточка + AGENT-BRIEF.
 
 ## 6. Файлы
 - Создать: apps/api/migrations/versions/2026_11_14_1200-0017_support_questions_support_questions.py (≈ 120 строк, образец 0015 + последовательность и индекс из 0011).
 - Создать: apps/api/tests/test_db_roles_0017.py (≈ 260 строк, образец test_db_roles_0015.py).
 - Изменить: apps/api/app/db/models.py (+≈ 55: блок docstring, константы, класс SupportQuestion).
 - Изменить: apps/api/tests/expected_tables.txt — полный новый список (раздел 8).
+- Изменить: apps/api/tests/test_db_models.py (≈ +8 строк, раздел 10).
 
 ## 7. Контракт SQL (его проверяют тесты; код — api-sup-1 и bot-sup-1)
 - app_api, запись:
@@ -81,8 +83,8 @@
 
 ## 10. Задетые тесты (правило «Т»)
 - apps/api/tests/expected_tables.txt — полный новый список (раздел 8).
+- apps/api/tests/test_db_models.py: константа TABLES_0017 = {"support_questions"}; тест test_expected_tables_count_after_0015 переименовать в test_expected_tables_count_after_0017, внутри == 20 и TABLES_0017 <= _expected_tables(); test_upgrade_downgrade_upgrade_cycle начинается с command.downgrade(cfg, "0015_onboarding_form") и проверки expected - TABLES_0017, дальше expected = expected - TABLES_0017 и прежние шаги без изменений; docstring модуля: «head → 0015 (без support_questions) → 0014 …». Если раньше смержена 0016 с таблицей — 21 и шаг через неё (сверяет ШТАБ перед промптом). Остальные тесты файла не трогать.
 - Проверено, правка не нужна: test_db_roles_0009.py — права по своим таблицам, полного набора прав нет; test_db_roles_0011.py — фильтр по reflections_log; test_db_roles_0013.py и test_db_roles_0015.py — сверяют PRIVILEGES своего модуля. Их downgrade-тесты от head проходят через downgrade 0017 — он обязан работать.
-- test_db_models.py — сверяет модели со схемой: нужен класс SupportQuestion, сам тест не правится (исследование §7; файл не открыт).
 - Упал тест вне списка → не чинить, «тест X вне списка» в ИТОГ, стоп.
 
 ## 11. Живые проверки (после мержа, при выкате; PLAN §4)
@@ -99,7 +101,7 @@
 Файлы раздела 6; тесты раздела 9; check.sh api зелёный; в PR — «Прочитано» и таблица проверок. Тесты с БД и alembic зелёные — в CI, их смотрит Автор.
 
 ## 14. Оценка
-Часы Автора ≈ 0,5. Кредиты ≈ 440 строк × 0,75–1,0 + 1 файл «Задетых» × 60–100 = 390–540.
+Часы Автора ≈ 0,5. Кредиты ≈ 450 строк × 0,75–1,0 + 2 файла «Задетых» × 60–100 = 460–650.
 
 ## Канон и решения
 (а) Канон: P4 §4.6 (через исследование §1), DECISIONS Р-19. Таблица support_questions в каноне (99-02, 99-03, db-tables-index) — не проверено в этом окне.
