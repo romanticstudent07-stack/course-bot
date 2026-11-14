@@ -22,6 +22,12 @@ REPORTS_TOPIC_ID (тема «Отчёты и активность») — message
 Карточка участника (bot-i3-1): CARDS_TOPIC_ID — message_thread_id темы «Карточки» в WORK_GROUP_ID.
 card_enabled = BOT_DATABASE_URL, WORK_GROUP_ID, CARDS_TOPIC_ID и ACCESS_ADMIN_IDS заданы;
 иначе /card выключена (WARNING при старте — только имена переменных).
+
+Поддержка (bot-sup-1, Р-19): SUPPORT_S1_TOPIC_ID … SUPPORT_S7_TOPIC_ID, SUPPORT_OTHER_TOPIC_ID —
+message_thread_id 8 тем поддержки в WORK_GROUP_ID (topic_code s1…s7, other). Пусто → None:
+вопрос этой темы уходит в DLQ group_not_configured. support_enabled = BOT_DATABASE_URL,
+WORK_GROUP_ID, ACCESS_ADMIN_IDS заданы и задана хотя бы одна тема; иначе роутер ответов ✉️
+не подключается (WARNING «Поддержка выключена…» при старте — только имена переменных).
 """
 from __future__ import annotations
 
@@ -54,6 +60,19 @@ def parse_database_url(env) -> str:
 ACCESS_REQUIRED_VARS = ("BOT_DATABASE_URL", "WORK_GROUP_ID", "ACCESS_ADMIN_TOPIC_ID", "ACCESS_ADMIN_IDS")
 GROUP_TOPIC_VARS = ("REFLECTIONS_TOPIC_ID", "REPORTS_TOPIC_ID")
 CARD_REQUIRED_VARS = ("BOT_DATABASE_URL", "WORK_GROUP_ID", "CARDS_TOPIC_ID", "ACCESS_ADMIN_IDS")
+SUPPORT_REQUIRED_VARS = ("BOT_DATABASE_URL", "WORK_GROUP_ID", "ACCESS_ADMIN_IDS")
+# topic_code -> поле BotConfig с темой поддержки (bot-sup-1)
+SUPPORT_TOPIC_FIELDS = {
+    "s1": "support_s1_topic_id",
+    "s2": "support_s2_topic_id",
+    "s3": "support_s3_topic_id",
+    "s4": "support_s4_topic_id",
+    "s5": "support_s5_topic_id",
+    "s6": "support_s6_topic_id",
+    "s7": "support_s7_topic_id",
+    "other": "support_other_topic_id",
+}
+SUPPORT_TOPIC_VARS = tuple(f"SUPPORT_{code.upper()}_TOPIC_ID" for code in SUPPORT_TOPIC_FIELDS)
 
 
 def _parse_int(env, name: str) -> int | None:
@@ -111,6 +130,14 @@ class BotConfig:
     reflections_topic_id: int | None = None  # тема «Рефлексии» (bot-group-1)
     reports_topic_id: int | None = None  # тема «Отчёты и активность» (bot-group-1)
     cards_topic_id: int | None = None  # тема «Карточки» (bot-i3-1)
+    support_s1_topic_id: int | None = None  # темы поддержки s1…s7, other (bot-sup-1)
+    support_s2_topic_id: int | None = None
+    support_s3_topic_id: int | None = None
+    support_s4_topic_id: int | None = None
+    support_s5_topic_id: int | None = None
+    support_s6_topic_id: int | None = None
+    support_s7_topic_id: int | None = None
+    support_other_topic_id: int | None = None
 
     @property
     def webapp_enabled(self) -> bool:
@@ -152,6 +179,34 @@ class BotConfig:
     def card_enabled(self) -> bool:
         return not self.card_missing_vars()
 
+    def support_topic_id(self, code) -> int | None:
+        """Тема поддержки по topic_code; неизвестный код или тема не задана → None."""
+        name = SUPPORT_TOPIC_FIELDS.get(code) if isinstance(code, str) else None
+        return None if name is None else getattr(self, name)
+
+    def support_thread_ids(self) -> frozenset[int]:
+        """Заданные темы поддержки (message_thread_id)."""
+        values = (getattr(self, name) for name in SUPPORT_TOPIC_FIELDS.values())
+        return frozenset(v for v in values if v is not None)
+
+    def support_missing_vars(self) -> list[str]:
+        """Имена незаданных переменных поддержки: сначала обязательные, затем 8 тем (без значений)."""
+        present = {
+            "BOT_DATABASE_URL": bool(self.database_url),
+            "WORK_GROUP_ID": self.work_group_id is not None,
+            "ACCESS_ADMIN_IDS": bool(self.access_admin_ids),
+        }
+        missing = [name for name in SUPPORT_REQUIRED_VARS if not present[name]]
+        for var, field_name in zip(SUPPORT_TOPIC_VARS, SUPPORT_TOPIC_FIELDS.values()):
+            if getattr(self, field_name) is None:
+                missing.append(var)
+        return missing
+
+    @property
+    def support_enabled(self) -> bool:
+        missing = set(self.support_missing_vars())
+        return not missing.intersection(SUPPORT_REQUIRED_VARS) and bool(self.support_thread_ids())
+
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "BotConfig":
         env = dict(os.environ if env is None else env)
@@ -173,4 +228,8 @@ class BotConfig:
             reflections_topic_id=_parse_int(env, "REFLECTIONS_TOPIC_ID"),
             reports_topic_id=_parse_int(env, "REPORTS_TOPIC_ID"),
             cards_topic_id=_parse_int(env, "CARDS_TOPIC_ID"),
+            **{
+                field_name: _parse_int(env, var)
+                for var, field_name in zip(SUPPORT_TOPIC_VARS, SUPPORT_TOPIC_FIELDS.values())
+            },
         )
