@@ -4,7 +4,8 @@
 //   - на сервер уходит СЫРАЯ строка initData в заголовке X-Telegram-Init-Data;
 //     initDataUnsafe для решений не используется;
 //   - базовый URL — из VITE_API_BASE_URL (пусто = тот же origin, CSP E2 connect-src 'self');
-//   - state-меняющие вызовы несут X-Client-Op-Id (uuid v4) — идемпотентность (D-17).
+//   - state-меняющие вызовы несут X-Client-Op-Id (uuid v4) — идемпотентность (D-17);
+//   - ответ 429: заголовок Retry-After → ApiError.retryAfter (parseRetryAfter, miniapp-sup-1).
 import { retrieveRawInitData } from '@telegram-apps/sdk-react';
 
 export const INIT_DATA_HEADER = 'X-Telegram-Init-Data';
@@ -15,6 +16,8 @@ export class ApiError extends Error {
     public readonly status: number,
     public readonly code: string,
     message: string,
+    /** Секунды из Retry-After (только для 429, только целое > 0); иначе null. */
+    public readonly retryAfter: number | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -29,6 +32,16 @@ export function normalizeBaseUrl(raw: string | undefined): string {
 export function buildUrl(baseUrl: string, path: string): string {
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   return `${normalizeBaseUrl(baseUrl)}${cleanPath}`;
+}
+
+/**
+ * Retry-After в секундах: только строка из цифр, целое > 0 и safe integer; иначе null
+ * (дата HTTP, дробь, ноль, пусто — null).
+ */
+export function parseRetryAfter(v: string | null): number | null {
+  if (v === null || !/^\d+$/.test(v)) return null;
+  const n = Number(v);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
 function readInitData(): string | undefined {
@@ -95,7 +108,8 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const err = (payload ?? {}) as { code?: string; message?: string };
-    throw new ApiError(response.status, err.code ?? 'HTTP_ERROR', err.message ?? response.statusText);
+    const retryAfter = response.status === 429 ? parseRetryAfter(response.headers.get('Retry-After')) : null;
+    throw new ApiError(response.status, err.code ?? 'HTTP_ERROR', err.message ?? response.statusText, retryAfter);
   }
   return payload as T;
 }
@@ -434,3 +448,23 @@ export interface MeChangeMap {
 
 /** Только чтение, без X-Client-Op-Id. Ошибки: 401, 404 PARTICIPANT_NOT_FOUND, 429, 503 SERVICE_UNAVAILABLE. */
 export const getMeChangeMap = () => apiRequest<MeChangeMap>('/miniapp/v1/me/change-map');
+
+// ---- Поддержка (api-sup-1; карточка miniapp-sup-1 §7.1, Р-19) ----
+// Текст вопроса — только тело POST: не в лог, не в адрес, не в query.
+// Сервер: len(text.strip()) >= 2 и len(text) <= 2000 по сырому тексту; NUL → 422.
+
+export type SupportTopicCode = 's1' | 's2' | 's3' | 's4' | 's5' | 's6' | 's7' | 'other';
+
+export interface SupportQuestionBody {
+  topic_code: SupportTopicCode;
+  text: string;
+}
+
+/**
+ * Вопрос в поддержку. clientOpId — один на попытку: повтор той же попытки — с ним же → 201 без
+ * нового поста. 201 {"status":"sent"}. Ошибки: 401; 404 PARTICIPANT_NOT_FOUND; 409 RECONSENT_REQUIRED;
+ * 422 VALIDATION_ERROR / SUPPORT_TOPIC_INVALID / SUPPORT_TEXT_INVALID; 429 RATE_LIMITED /
+ * SUPPORT_TOO_FREQUENT + Retry-After; 503 SERVICE_UNAVAILABLE / SERVICE_MISCONFIGURED.
+ */
+export const postSupportQuestion = (body: SupportQuestionBody, clientOpId: string) =>
+  apiRequest<{ status: 'sent' }>('/miniapp/v1/support/question', { method: 'POST', body, clientOpId });

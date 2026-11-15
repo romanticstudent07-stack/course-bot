@@ -22,14 +22,25 @@
 //                 экран restart анкеты → retry (снова checking);
 //   app         — роутер: экран дня /day; путь «/» и любой другой → /day (З2, вариант А).
 // miniapp-i3-2: маршруты фазы app — список в navigation/routes.tsx; логика фаз не менялась
+// miniapp-sup-1 (Р-19): кнопка «Помощь» внизу — только в фазах later и app (после 18+ и согласий);
+//   в checking, start-error, no-access, number и onboarding её нет. later: SupportScreen поверх
+//   скрытого, но смонтированного LaterSteps (ответы экрана в памяти не теряются, Р-16, Р-18);
+//   app: маршрут /help в этом файле (routes.tsx не трогаем) и HelpBar под Routes.
+//   Черновик вопроса — drafts.ts (createSupportDraftStore), отдельно от черновика шага.
 // OnboardingFlow монтируется ТОЛЬКО в фазе onboarding (он шлёт /texts/bulk при монтировании).
 // «Пускать ли» решает сервер: клиент не смотрит ни initDataUnsafe, ни черновик, ни время.
 // short_no, status и reasons на устройстве не хранятся — только в памяти до закрытия.
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 
 import { getCheckupStatus, getForm, getOnboardingStatus, readTgUserId } from '@/api/client.ts';
-import { createDraftStore, openDraft, type LaterStep } from '@/components/drafts.ts';
+import {
+  createDraftStore,
+  createSupportDraftStore,
+  openDraft,
+  type LaterStep,
+  type SupportDraftStore,
+} from '@/components/drafts.ts';
 import { LaterSteps } from '@/components/LaterSteps.tsx';
 import { OnboardingFlow } from '@/components/OnboardingFlow.tsx';
 import {
@@ -42,11 +53,55 @@ import {
   startErrorMessage,
   startPhase,
 } from '@/components/startup.ts';
+import { SupportScreen } from '@/components/SupportScreen.tsx';
 import { routes } from '@/navigation/routes.tsx';
 
 type Phase = 'checking' | 'start-error' | 'no-access' | 'number' | 'onboarding' | 'later' | 'app';
 
 const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 16, padding: 16 };
+const helpBarStyle: CSSProperties = { position: 'sticky', bottom: 0, padding: 16 };
+
+/** Нижняя панель с кнопкой «Помощь». */
+function HelpButtonBar({ onHelp }: { onHelp: () => void }) {
+  return (
+    <div style={helpBarStyle}>
+      <button type="button" onClick={onHelp}>
+        Помощь
+      </button>
+    </div>
+  );
+}
+
+/** Фаза app: панель «Помощь» под маршрутами; на /help не показывается. */
+function HelpBar() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  if (location.pathname === '/help') return null;
+  return <HelpButtonBar onHelp={() => navigate('/help')}/>;
+}
+
+interface HelpRouteProps {
+  tgUserId: number | null;
+  store: SupportDraftStore;
+  onRestart: () => void;
+}
+
+/** Фаза app, маршрут /help: «Назад» — на прошлый экран; открыли сразу /help — на /day. */
+function HelpRoute({ tgUserId, store, onRestart }: HelpRouteProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <SupportScreen
+      tgUserId={tgUserId}
+      store={store}
+      onRestart={onRestart}
+      onBack={() => {
+        if (location.key === 'default') navigate('/day', { replace: true });
+        else navigate(-1);
+      }}
+    />
+  );
+}
 
 export function App() {
   const [phase, setPhase] = useState<Phase>('checking');
@@ -56,9 +111,11 @@ export function App() {
   const [reconsent, setReconsent] = useState(false);
   const [routing, setRouting] = useState(false);
   const [initialStep, setInitialStep] = useState<LaterStep>('offer');
+  const [helpOpen, setHelpOpen] = useState(false);
   const routingRef = useRef(false);
   const [tgUserId] = useState(() => readTgUserId());
   const [draftStore] = useState(() => createDraftStore());
+  const [supportStore] = useState(() => createSupportDraftStore());
 
   // Один запрос status на попытку (при монтировании и после «Повторить»).
   useEffect(() => {
@@ -93,6 +150,7 @@ export function App() {
     routingRef.current = false;
     setRouting(false);
     setStartError(null);
+    setHelpOpen(false);
     setPhase('checking');
     setAttempt((n) => n + 1);
   };
@@ -188,14 +246,32 @@ export function App() {
   }
 
   if (phase === 'later') {
+    // LaterSteps всегда в одном месте дерева: при «Помощи» он скрыт, но не размонтирован.
     return (
-      <LaterSteps
-        tgUserId={tgUserId}
-        store={draftStore}
-        initialStep={initialStep}
-        onFinish={() => setPhase('app')}
-        onRestart={retry}
-      />
+      <>
+        <div hidden={helpOpen}>
+          <LaterSteps
+            tgUserId={tgUserId}
+            store={draftStore}
+            initialStep={initialStep}
+            onFinish={() => {
+              setHelpOpen(false);
+              setPhase('app');
+            }}
+            onRestart={retry}
+          />
+        </div>
+        {helpOpen ? (
+          <SupportScreen
+            tgUserId={tgUserId}
+            store={supportStore}
+            onBack={() => setHelpOpen(false)}
+            onRestart={retry}
+          />
+        ) : (
+          <HelpButtonBar onHelp={() => setHelpOpen(true)}/>
+        )}
+      </>
     );
   }
 
@@ -203,8 +279,10 @@ export function App() {
     <HashRouter>
       <Routes>
         {routes.map((route) => <Route key={route.path} {...route}/>)}
+        <Route path="/help" element={<HelpRoute tgUserId={tgUserId} store={supportStore} onRestart={retry}/>}/>
         <Route path="*" element={<Navigate to="/day"/>}/>
       </Routes>
+      <HelpBar/>
     </HashRouter>
   );
 }
