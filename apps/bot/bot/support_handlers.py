@@ -4,8 +4,8 @@
 только ACCESS_ADMIN_IDS; чужим колбэкам — answerCallbackQuery без текста + WARNING.
 - «✉️ Ответить» (sup:r:N) → промпт SUPPORT_PROMPT ответом на пост, ForceReply (без selective).
 - Ответ админа reply на промпт бота → предпросмотр SUPPORT_PREVIEW + «\\n\\n» + текст, без parse_mode,
-  кнопки «Отправить» (sup:s:N) / «Отмена» (sup:x:N). Вся проверка — в фильтре: чужие сообщения
-  группы роутер не глотает.
+  кнопки «Отправить» (sup:s:N) / «Отмена» (sup:x:N); после успешного предпросмотра промпт удаляется
+  (bot-sup-2). Вся проверка — в фильтре: чужие сообщения группы роутер не глотает.
 - «Отправить»: N колбэка = N заголовка предпросмотра → SUPPORT_Q → PARTICIPANT; стёрт или нет —
   участнику ничего, «Не доставлено» (I4 P455). Иначе снять кнопки («message is not modified» —
   второе нажатие, стоп) → личка участнику от имени бота → «Доставлено» / «Не доставлено».
@@ -92,11 +92,17 @@ def build_support_router(config: BotConfig, connect=None) -> Router:
         if len(message.text) > MAX_ANSWER_LEN:
             await _safe("ответ не отправлен", message.reply(texts.SUPPORT_TOO_LONG))
             return
-        await _safe(
+        previewed = await _safe(
             "предпросмотр не отправлен",
             message.reply(texts.SUPPORT_PREVIEW.format(n=n) + "\n\n" + message.text,
                           reply_markup=support.preview_markup(n)),
         )
+        if previewed:
+            await _safe(
+                "промпт не удалён",
+                message.bot.delete_message(chat_id=message.chat.id,
+                                           message_id=message.reply_to_message.message_id),
+            )
 
     @router.callback_query(F.data.startswith(f"{support.CALLBACK_PREFIX}:"))
     async def on_button(callback: CallbackQuery) -> None:
