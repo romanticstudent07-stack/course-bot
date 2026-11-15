@@ -386,6 +386,7 @@ def make_tg_bot():
         send_message=AsyncMock(),
         edit_message_reply_markup=AsyncMock(),
         edit_message_text=AsyncMock(),
+        delete_message=AsyncMock(),
     )
 
 
@@ -459,6 +460,7 @@ def test_admin_reply_preview(caplog):
     assert "parse_mode" not in kwargs
     assert [[b.callback_data for b in r] for r in kwargs["reply_markup"].inline_keyboard] == \
         [[f"sup:s:{N}", f"sup:x:{N}"]]
+    assert msg.bot.delete_message.await_args == call(chat_id=WG, message_id=600)
     _no_pii(caplog)
 
 
@@ -468,12 +470,35 @@ def test_admin_reply_not_text_and_too_long():
     assert passes(on_answer, msg)
     run(on_answer, msg)
     assert msg.reply.await_args == call(texts.SUPPORT_SEND_TEXT)
+    msg.bot.delete_message.assert_not_awaited()
     msg = make_message(text="я" * 2001, reply_text=texts.SUPPORT_PROMPT.format(n=N))
     run(on_answer, msg)
     assert msg.reply.await_args == call(texts.SUPPORT_TOO_LONG)
+    msg.bot.delete_message.assert_not_awaited()
     msg = make_message(text="я" * 2000, reply_text=texts.SUPPORT_PROMPT.format(n=N))
     run(on_answer, msg)
     assert msg.reply.await_args.args[0].startswith(texts.SUPPORT_PREVIEW.format(n=N))
+    assert msg.bot.delete_message.await_count == 1
+
+
+def test_prompt_kept_when_preview_failed():
+    _, on_answer, _ = make_router()
+    msg = make_message(reply_text=texts.SUPPORT_PROMPT.format(n=N))
+    msg.reply.side_effect = RuntimeError("down")
+    run(on_answer, msg)
+    msg.bot.delete_message.assert_not_awaited()
+
+
+def test_prompt_delete_failure_logged(caplog):
+    caplog.set_level(logging.DEBUG)
+    _, on_answer, _ = make_router()
+    msg = make_message(reply_text=texts.SUPPORT_PROMPT.format(n=N))
+    msg.bot.delete_message.side_effect = TelegramBadRequest(
+        method=METHOD, message="Bad Request: message to delete not found")
+    run(on_answer, msg)
+    warns = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(w.startswith("support: промпт не удалён (TelegramBadRequest)") for w in warns)
+    _no_pii(caplog)
 
 
 @pytest.mark.parametrize(
@@ -607,3 +632,10 @@ def test_cancel_removes_buttons(caplog):
     assert connect.conns == []
     assert cb.answer.await_args == call()
     _no_pii(caplog)
+
+
+# --- texts (bot-sup-2) ---
+
+def test_card_access_text():
+    assert texts.CARD_PAYMENTS.format(value="x") == "[заглушка] Доступ: x"
+    assert "Оплаты" not in texts.CARD_PAYMENTS

@@ -126,8 +126,8 @@ CARD_STATUS_RAW = "статус: {code}"
 CARD_LIVES = "Жизни: осталось {n}"
 # bot.card_lives_log
 CARD_LIVES_LOG = "Заглушка: журнал списаний — позже"
-# bot.card_payments — {value}
-CARD_PAYMENTS = "[заглушка] Оплаты: {value}"
+# bot.card_access — {value} (15.11, было «Оплаты»; имя константы прежнее)
+CARD_PAYMENTS = "[заглушка] Доступ: {value}"
 # bot.card_pauses — {value}
 CARD_PAUSES = "[заглушка] Паузы: {value}"
 # bot.card_returns — {value}
