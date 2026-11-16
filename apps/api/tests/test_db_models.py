@@ -1,7 +1,7 @@
 """Миграции ⇔ модели ⇔ живая схема. Нужен DATABASE_URL.
 
 - после upgrade head таблицы = apps/api/tests/expected_tables.txt (тот же список, что в CI);
-- цикл: head → 0015 (без support_questions) → 0014 (ещё и без onboarding_form) → 0013 (ещё и без measurements_log)
+- цикл: head → 0017 (без participant_pauses и pause_budgets) → 0015 (ещё и без support_questions) → 0014 (ещё и без onboarding_form) → 0013 (ещё и без measurements_log)
   → 0010 (без reflections_log) → 0009 (без access_grants)
   → 0007 (ещё и без day_marks)
   → 0006 (ещё и без idempotency_keys)
@@ -37,6 +37,7 @@ TABLES_0011 = {"reflections_log"}
 TABLES_0014 = {"measurements_log"}
 TABLES_0015 = {"onboarding_form"}
 TABLES_0017 = {"support_questions"}
+TABLES_0018 = ("participant_pauses", "pause_budgets")
 
 _COUNT_SQL = text(
     "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'alembic_version'"
@@ -74,8 +75,9 @@ def test_expected_tables_file_includes_0001():
     assert _tables_0001() <= _expected_tables()
 
 
-def test_expected_tables_count_after_0017():
-    assert len(_expected_tables()) == 20
+def test_expected_tables_count_after_0018():
+    assert len(_expected_tables()) == 22
+    assert set(TABLES_0018) <= _expected_tables()
     assert TABLES_0017 <= _expected_tables()
     assert TABLES_0015 <= _expected_tables()
     assert TABLES_0014 <= _expected_tables()
@@ -93,6 +95,10 @@ def test_upgrade_downgrade_upgrade_cycle(migrated_db):
     assert _tables(migrated_db) == expected
 
     try:
+        command.downgrade(cfg, "0017_support_questions")
+        assert _tables(migrated_db) == expected - set(TABLES_0018)  # 0018 не ломает 0017
+
+        expected = expected - set(TABLES_0018)  # дальше — как было, без таблиц 0018
         command.downgrade(cfg, "0015_onboarding_form")
         assert _tables(migrated_db) == expected - TABLES_0017  # 0017 не ломает 0015
 
