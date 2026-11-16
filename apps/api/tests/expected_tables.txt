@@ -34,3 +34,6 @@ measurements_log
 onboarding_form
 # 0017_support_questions
 support_questions
+# 0018_pauses
+participant_pauses
+pause_budgets
