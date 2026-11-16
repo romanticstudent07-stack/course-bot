@@ -37,3 +37,5 @@ support_questions
 # 0018_pauses
 participant_pauses
 pause_budgets
+# 0019_life_writeoffs
+life_writeoffs
