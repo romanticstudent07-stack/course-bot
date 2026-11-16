@@ -28,8 +28,8 @@ OLD_DAY = "2001-01-01T00:00:00+00:00"
 NEXT_DAY = datetime(2030, 1, 2, 1, 0, tzinfo=timezone.utc)
 
 
-def test_version_is_4():
-    assert PROJECTOR_VERSION == 4  # projector-i3-2
+def test_version_is_5():
+    assert PROJECTOR_VERSION == 5  # api-sleep-1a
 
 
 def _open_day(engine, tg_user_id: int):

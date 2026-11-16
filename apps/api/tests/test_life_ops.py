@@ -107,6 +107,7 @@ def _run_forever_with(monkeypatch, tick_impl, clock, iterations: int):
 
     monkeypatch.setattr(projector, "_advisory_lock", _fake_lock)
     monkeypatch.setattr(projector, "_drain", drain)
+    monkeypatch.setattr(projector, "_backfill_block_lives", lambda engine: 0)
     monkeypatch.setattr(life_ops, "tick", tick_impl)
     monkeypatch.setattr(day_clock, "utcnow", lambda: clock["now"])
     with pytest.raises(_Stop):
@@ -151,6 +152,7 @@ def test_run_once_without_tick(monkeypatch):
 
     monkeypatch.setattr(projector, "_advisory_lock", _fake_lock)
     monkeypatch.setattr(projector, "_drain", lambda engine: ProjectorResult(0, 0))
+    monkeypatch.setattr(projector, "_backfill_block_lives", lambda engine: 0)
     monkeypatch.setattr(life_ops, "tick", must_not_tick)
     assert run_once(object()) == ProjectorResult(0, 0)  # type: ignore[arg-type]
 
