@@ -192,3 +192,36 @@ LIFE_DONE = "[заглушка] Записано, применит проект�
 LIFE_CANCELLED = "[заглушка] Отменено."
 # bot.life_try_later
 LIFE_TRY_LATER = "[заглушка] Не удалось, попробуйте позже."
+
+# --- Рестарт по промокоду (bot-restart-1, Р-20, Р-2). Заглушки ---
+
+# bot.restart_request — HTML; {num}: номер из 6 цифр, {stage}: Этап, {word}: кодовое слово (экранирует bot/restart.py)
+RESTART_REQUEST = "[заглушка] Заявка на рестарт\nУчастник #{num} · Этап {stage}\nКод: <code>{word}</code>"
+# bot.restart_button_grant
+RESTART_BUTTON_GRANT = "Выдать рестарт"
+# bot.restart_button_deny
+RESTART_BUTTON_DENY = "Запретить"
+# bot.restart_request_sent
+RESTART_REQUEST_SENT = "[заглушка] Заявка на рестарт отправлена, дождитесь ответа."
+# bot.restart_already_today
+RESTART_ALREADY_TODAY = "[заглушка] Заявка на рестарт сегодня уже отправлена."
+# bot.restart_try_later
+RESTART_TRY_LATER = "[заглушка] Не удалось, попробуйте позже."
+# bot.restart_done — {time}: «дд.мм.гггг чч:мм МСК»
+RESTART_DONE = "[заглушка] Рестарт выдан · {time}"
+# bot.restart_denied_admin — {time}
+RESTART_DENIED_ADMIN = "[заглушка] Рестарт запрещён · {time}"
+# bot.restart_granted
+RESTART_GRANTED = "[заглушка] Рестарт выдан: с 00:00 начнётся день 1 модуля 1."
+# bot.restart_denied
+RESTART_DENIED = "[заглушка] Код для рестарта не подошёл."
+# bot.restart_already — {result}: RESTART_RESULT_*
+RESTART_ALREADY = "[заглушка] Уже решено: {result}."
+# bot.restart_result_granted
+RESTART_RESULT_GRANTED = "выдан"
+# bot.restart_result_denied
+RESTART_RESULT_DENIED = "запрещён"
+# bot.restart_refused_phase
+RESTART_REFUSED_PHASE = "[заглушка] Отказ: в этой фазе рестарт выдать нельзя."
+# bot.restart_refused_state
+RESTART_REFUSED_STATE = "[заглушка] Отказ: участник не найден или нет блока жизней."
