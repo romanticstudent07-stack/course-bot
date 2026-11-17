@@ -15,8 +15,9 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
   - I2 fsm_participant: pre_registered → onboarding по mini_app_first_consent (6А, D-11);
   - I2 checkpoint_table: participant_state_checkpoints (pid, last_event_id, at).
 
-Виды событий (PROJECTOR_VERSION 5, api-sleep-1a; выдержки — docs/tasks/life-ops-a.md, раздел 7,
-docs/tasks/projector-i3-2.md, разделы 3–4 и 7, и docs/tasks/api-sleep-1a.md, раздел 4):
+Виды событий (PROJECTOR_VERSION 6, api-sleep-1b; выдержки — docs/tasks/life-ops-a.md, раздел 7,
+docs/tasks/projector-i3-2.md, разделы 3–4 и 7, docs/tasks/api-sleep-1a.md, раздел 4, и
+docs/tasks/api-sleep-1b.md, разделы 4 и 7):
   - mini_app_first_consent — строка состояния, фаза onboarding (без изменений с версии 1);
   - day_entered (iter2-api-2a) — позиция stage_no / module_no / day_no из payload,
     day_started_at = at события, missed_streak = 0; только если позиции ещё нет
@@ -64,6 +65,17 @@ docs/tasks/projector-i3-2.md, разделы 3–4 и 7, и docs/tasks/api-sleep
     1–MAX_TZ_LEN (64), шаблон _TZ_RE (П-4: проверка до ZoneInfo, ZoneInfo открывает файл
     по имени), ZoneInfo(tz) без исключения; иначе «bad payload». Набор поясов анкеты сверяет
     API, не проектор. Фаза, флаги и позиция не упоминаются; tz в лог не идёт.
+  - restart_paid (v6, api-sleep-1b, Р-20: рестарт по промокоду из block_lives) — payload должен
+    быть dict (grant_id не читается), at обязателен; иначе «bad payload». Применяется, только
+    если строка есть, в status_flags есть block_lives и stage_no не NULL; иначе пропуск
+    («no state» / «restart: not blocked or no position»). lives = 3, block_lives снимается,
+    фаза — phase_for_flags (Р2); затем reissue_day(текущий stage, 1, 1) и бюджет пауз
+    (Р-6а): pause_budgets UPSERT — остаток PAUSE_BUDGET_DAYS (14), cycle_start_at = D,
+    restart_no + 1 (SQL дословно из docstring 0018; права app_projector — 0018).
+    author_pause_reason, muted и erased не трогаются. Всё — в SAVEPOINT события.
+  reissue_day(conn, pid, target, at, tz) — внутренняя функция, не событие и не day_entered:
+  позиция = target, missed_streak 0, day_started_at = D = day_clock.next_midnight(at, tz)
+  (Ш2: D из at события, не из payload). До 04:00 даты D окно not_active.
   Порядок в life-ops-c: life_op раньше day_closed (меньший id) — оба видят старый
   day_started_at. Защита от повтора (ревью #111, Н4) — ТОЛЬКО для пары life_op + day_closed:
   после day_closed day_started_at уже другой, и повтор обоих пропускается. Сам по себе
@@ -95,8 +107,9 @@ DataError или IntegrityError → откат только этого savepoint
 kind и именем класса ошибки (без payload и pid), пропуск, checkpoint pid сдвигается на id
 события — одно битое событие не останавливает проектор. Другие SQLAlchemyError — откат
 всей пачки, как раньше.
-participant_events только читается; at и payload читаются для day_entered;
+participant_events только читается; at и payload читаются для day_entered и restart_paid;
 payload — для day_report_submitted, life_op, day_closed и tz_set; в лог не идут.
+pause_budgets (0018) — только SELECT restart_no и UPSERT в restart_paid.
 author_pause_reason и last_seen_publish_epoch не трогаются.
 DSN проектора — Settings.projector_dsn(): PROJECTOR_DATABASE_URL → DATABASE_URL → POSTGRES_*
 (B-3a-2; роль app_projector — миграция 0006). DSN не логируется.
@@ -132,7 +145,7 @@ logger = logging.getLogger("app.projector")
 BATCH_SIZE = 500
 POLL_SECONDS = 1.0
 RETRY_SECONDS = 5.0
-PROJECTOR_VERSION = 5
+PROJECTOR_VERSION = 6
 PHASE_PRE_REGISTERED = "pre_registered"
 PHASE_ONBOARDING = "onboarding"
 # Пишет POST /miniapp/v1/day/test-enter (app/routers/day.py) под замком participant:pid.
@@ -145,6 +158,8 @@ EVENT_KIND_LIFE_OP = "life_op"
 EVENT_KIND_DAY_CLOSED = "day_closed"
 # Пояс из анкеты (projector-i3-2, Р-16); писатель — API анкеты (api-i3-2, после этой задачи).
 EVENT_KIND_TZ_SET = "tz_set"
+# Рестарт по промокоду из block_lives (api-sleep-1b, Р-20); писатель — бот (T6b, позже).
+EVENT_KIND_RESTART_PAID = "restart_paid"
 PHASE_SLEEPING = "sleeping"
 DAY_CLOSED_OUTCOMES = ("came", "silent")
 # life_op: единственные допустимые delta и reason (life-ops-a §7, ревью #111, Н3).
@@ -161,6 +176,9 @@ PHASE_ACTIVE = "active"
 _LIFE_OP_PHASES = (PHASE_ONBOARDING, PHASE_ACTIVE)
 # Граница lives (CHECK ck_participant_state_lives_range, миграция 0007).
 MAX_LIVES = 3
+# Рестарт (Р-20): 3 жизни; бюджет пауз за годовой цикл (Р-6а).
+RESTART_LIVES = MAX_LIVES
+PAUSE_BUDGET_DAYS = 14
 # Верхняя граница stage_no / module_no / day_no (smallint).
 MAX_POSITION_VALUE = 32767
 # Граница длины tz (projector-i3-2, Ш-1).
@@ -350,6 +368,59 @@ _SET_TZ = text(
         projector_version = :version
     WHERE pid = :pid AND day_no IS NULL
     RETURNING pid
+    """
+)
+
+# restart_paid: снять block_lives, 3 жизни, фаза по Р2. Позиция — в reissue_day.
+_APPLY_RESTART = text(
+    """
+    UPDATE participant_state
+    SET lives = :lives,
+        status_flags = CAST(:flags AS text[]),
+        lifecycle_phase = :phase,
+        updated_at = now(),
+        projector_version = :version
+    WHERE pid = :pid
+      AND 'block_lives' = ANY(coalesce(status_flags, CAST('{}' AS text[])))
+      AND stage_no IS NOT NULL
+    RETURNING pid
+    """
+)
+
+_SELECT_RESTART_STATE = text(
+    """
+    SELECT lifecycle_phase, status_flags, stage_no, tz
+    FROM participant_state
+    WHERE pid = :pid
+    """
+)
+
+# reissue_day: перевыдача дня с D (00:00 по поясу). Фаза, флаги, жизни и
+# author_pause_reason не упоминаются.
+_REISSUE_DAY = text(
+    """
+    UPDATE participant_state
+    SET stage_no = :stage_no,
+        module_no = :module_no,
+        day_no = :day_no,
+        day_started_at = :started,
+        missed_streak = 0,
+        updated_at = now(),
+        projector_version = :version
+    WHERE pid = :pid
+    RETURNING pid
+    """
+)
+
+_SELECT_RESTART_NO = text("SELECT restart_no FROM pause_budgets WHERE pid = :pid")
+
+# Бюджет пауз (0018): дословно по docstring миграции.
+_UPSERT_PAUSE_BUDGET = text(
+    """
+    INSERT INTO pause_budgets (pid, days_budget_remaining_annual, cycle_start_at, restart_no)
+    VALUES (:pid, :d, :c, :r) ON CONFLICT (pid) DO UPDATE SET
+    days_budget_remaining_annual = EXCLUDED.days_budget_remaining_annual,
+    cycle_start_at = EXCLUDED.cycle_start_at, restart_no = EXCLUDED.restart_no
     """
 )
 
@@ -755,6 +826,74 @@ def _apply_tz_set(
     return True
 
 
+def reissue_day(
+    conn: Connection,
+    pid: uuid.UUID,
+    target: tuple[int, int, int],
+    at: datetime,
+    tz: str | None,
+) -> datetime:
+    """Перевыдача дня (не событие и не day_entered): позиция = target, missed_streak 0,
+    day_started_at = D = day_clock.next_midnight(at, tz). Возвращает D."""
+    started = day_clock.next_midnight(at, tz)
+    stage_no, module_no, day_no = target
+    conn.execute(
+        _REISSUE_DAY,
+        {
+            "pid": pid,
+            "stage_no": stage_no,
+            "module_no": module_no,
+            "day_no": day_no,
+            "started": started,
+            "version": PROJECTOR_VERSION,
+        },
+    )
+    return started
+
+
+def _apply_restart_paid(
+    conn: Connection,
+    event_id: int,
+    pid: uuid.UUID,
+    kind: str,
+    at: datetime | None,
+    payload: Any,
+) -> bool:
+    if _payload_dict(payload) is None or at is None:
+        _skip(event_id, kind, "bad payload")
+        return False
+    row = conn.execute(_SELECT_RESTART_STATE, {"pid": pid}).first()
+    if row is None:
+        _skip(event_id, kind, "no state")
+        return False
+    phase, status_flags, stage_no, tz = row
+    flag_list = list(status_flags or ())
+    if FLAG_BLOCK_LIVES not in flag_list or stage_no is None:
+        _skip(event_id, kind, "restart: not blocked or no position")
+        return False
+    flags = [flag for flag in flag_list if flag != FLAG_BLOCK_LIVES]
+    applied = conn.execute(
+        _APPLY_RESTART,
+        {
+            "pid": pid,
+            "lives": RESTART_LIVES,
+            "flags": flags,
+            "phase": phase_for_flags(phase, flags),
+            "version": PROJECTOR_VERSION,
+        },
+    ).first()
+    if applied is None:
+        _skip(event_id, kind, "restart: not blocked or no position")
+        return False
+    started = reissue_day(conn, pid, (stage_no, 1, 1), at, tz)
+    restart_no = conn.execute(_SELECT_RESTART_NO, {"pid": pid}).scalar()
+    conn.execute(
+        _UPSERT_PAUSE_BUDGET,
+        {"pid": pid, "d": PAUSE_BUDGET_DAYS, "c": started, "r": (restart_no or 0) + 1},
+    )
+    return True
+
+
 def _apply_event(
     conn: Connection,
     event_id: int,
@@ -776,6 +915,8 @@ def _apply_event(
         return _apply_day_closed(conn, event_id, pid, kind, payload)
     if kind == EVENT_KIND_TZ_SET:
         return _apply_tz_set(conn, event_id, pid, kind, payload)
+    if kind == EVENT_KIND_RESTART_PAID:
+        return _apply_restart_paid(conn, event_id, pid, kind, at, payload)
     _skip(event_id, kind, "unknown kind")
     return False
 
