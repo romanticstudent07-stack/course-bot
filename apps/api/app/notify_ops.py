@@ -12,7 +12,11 @@
 Триггер для дня D = текущий participant_state.day_started_at:
   - после очереди: есть ключ day_queue:{pid}:{dsa(D)} (submit) и now ≥ day_clock.queue_until(pid, D);
     пока очередь не кончилась — ждём;
-  - после онбординга: ключа очереди нет, но есть событие day_entered с at = D (любой источник).
+  - после онбординга: ключа очереди нет, но есть событие day_entered с at = D (любой источник);
+  - после перевыдачи (третий запуск, api-sleep-1b, Р8): ключа очереди и day_entered нет, но есть
+    событие из REISSUE_KINDS (сейчас restart_paid) с day_clock.next_midnight(at, tz) = D.
+    Текст — choose_text_reissue (по дате: местная дата active_from(D) = местная дата now →
+    «сегодня», иначе «завтра»); для двух старых запусков — choose_text.
 Ключ tasks_open:{pid}:{dsa(D)} — один на день: есть → участник не кандидат.
 
 tick_tasks_open(engine, now) → NotifyResult(sent, late, skipped):
@@ -83,6 +87,10 @@ TEXT_TOMORROW = "B9.day_tasks_open_tomorrow"
 # Совпадает с app/projector.py (EVENT_KIND_DAY_ENTERED); сверяет tests/test_notify_ops.py.
 # Импорта проектора нет: проектор импортирует этот модуль.
 EVENT_KIND_DAY_ENTERED = "day_entered"
+# Совпадает с app/projector.py (EVENT_KIND_RESTART_PAID); импорта проектора нет.
+EVENT_KIND_RESTART_PAID = "restart_paid"
+# События перевыдачи дня (api-sleep-1b, Р8); T7 и T2 дополнят.
+REISSUE_KINDS = (EVENT_KIND_RESTART_PAID,)
 
 DECISION_SEND = "send"
 DECISION_LATE = "late"
@@ -141,6 +149,18 @@ _ENTERED_ALL = text(
     FROM participant_events
     WHERE kind = :kind AND pid = ANY(CAST(:pids AS uuid[]))
     """
+)
+
+_REISSUE_ALL = text(
+    """
+    SELECT pid, at
+    FROM participant_events
+    WHERE kind = ANY(CAST(:kinds AS text[])) AND pid = ANY(CAST(:pids AS uuid[]))
+    """
+)
+
+_REISSUE_ONE = text(
+    "SELECT at FROM participant_events WHERE kind = ANY(CAST(:kinds AS text[])) AND pid = :pid"
 )
 
 _HAS_KEY = text("SELECT 1 FROM idempotency_keys WHERE key = :key LIMIT 1")
@@ -202,6 +222,22 @@ def choose_text(now: datetime, tz: str | None) -> str:
     return TEXT_TOMORROW
 
 
+def choose_text_reissue(started: datetime, tz: str | None, now: datetime) -> str:
+    """НП3 после перевыдачи (Р8): местная дата active_from(started) = местная дата now →
+    «сегодня», иначе «завтра»."""
+    if day_clock.active_from(started, tz).date() == _local(now, tz).date():
+        return TEXT_TODAY
+    return TEXT_TOMORROW
+
+
+def is_reissue(started: datetime, tz: str | None, ats: Any) -> bool:
+    """Есть at события из REISSUE_KINDS, для которого next_midnight(at, tz) = started."""
+    return any(
+        at is not None and _utc(day_clock.next_midnight(at, tz)) == _utc(started)
+        for at in ats
+    )
+
+
 def is_late(started: datetime, tz: str | None, now: datetime) -> bool:
     """Задания дня started уже открыты (В4 А): окно не not_active."""
     return day_clock.window(started, tz, now) != day_clock.WINDOW_NOT_ACTIVE
@@ -214,13 +250,18 @@ def decide(
     now: datetime,
     has_queue_key: bool,
     entered: bool,
+    reissued: bool = False,
 ) -> str | None:
-    """None (не сейчас / не нужно) | "send" | "late". started — текущий day_started_at."""
+    """None (не сейчас / не нужно) | "send" | "late". started — текущий day_started_at.
+
+    reissued — третий запуск (перевыдача дня): действует, только если нет ключа очереди
+    и нет entered.
+    """
     _require_aware(now)
     if has_queue_key:
         if _utc(now) < _utc(day_clock.queue_until(pid, started)):
             return None  # очередь ещё идёт
-    elif not entered:
+    elif not entered and not reissued:
         return None
     return DECISION_LATE if is_late(started, tz, now) else DECISION_SEND
 
@@ -247,18 +288,38 @@ def _candidates(engine: Engine, now: datetime) -> list[uuid.UUID]:
             _ENTERED_ALL,
             {"kind": EVENT_KIND_DAY_ENTERED, "pids": [pid for pid, _tz, _s in rows]},
         ).all()
+        entered_at: dict[uuid.UUID, list[datetime]] = {}
+        for pid, at in entered_rows:
+            if at is not None:
+                entered_at.setdefault(pid, []).append(at)
+        # Третий запуск: события перевыдачи — только для pid без ключа очереди и без entered.
+        need_reissue = [
+            pid
+            for pid, _tz, started in rows
+            if key_tasks_open(pid, started) not in existing
+            and key_day_queue(pid, started) not in existing
+            and not any(_same_moment(at, started) for at in entered_at.get(pid, ()))
+        ]
+        reissue_rows = (
+            conn.execute(
+                _REISSUE_ALL, {"kinds": list(REISSUE_KINDS), "pids": need_reissue}
+            ).all()
+            if need_reissue
+            else []
+        )
         conn.rollback()
-    entered_at: dict[uuid.UUID, list[datetime]] = {}
-    for pid, at in entered_rows:
+    reissue_at: dict[uuid.UUID, list[datetime]] = {}
+    for pid, at in reissue_rows:
         if at is not None:
-            entered_at.setdefault(pid, []).append(at)
+            reissue_at.setdefault(pid, []).append(at)
     found: list[uuid.UUID] = []
     for pid, tz, started in rows:
         if key_tasks_open(pid, started) in existing:
             continue
         has_queue = key_day_queue(pid, started) in existing
         entered = any(_same_moment(at, started) for at in entered_at.get(pid, ()))
-        if decide(pid, started, tz, now, has_queue, entered) is None:
+        reissued = is_reissue(started, tz, reissue_at.get(pid, ()))
+        if decide(pid, started, tz, now, has_queue, entered, reissued) is None:
             continue
         found.append(pid)
         if len(found) >= MAX_PER_TICK:
@@ -266,15 +327,17 @@ def _candidates(engine: Engine, now: datetime) -> list[uuid.UUID]:
     return found
 
 
-def _plan(conn: Connection, pid: uuid.UUID, row: Any, now: datetime) -> str | None:
-    """Шаг 2 под замком: None — пропуск (ничего не писать)."""
+def _plan_detail(
+    conn: Connection, pid: uuid.UUID, row: Any, now: datetime
+) -> tuple[str | None, bool]:
+    """Шаг 2 под замком: (решение, сработал ли третий запуск). None — пропуск."""
     if not life_ops._eligible(row):
-        return None
+        return None, False
     if conn.execute(life_ops._PENDING_EVENT, {"pid": pid}).first() is not None:
-        return None  # проектор не догнал pid — следующий тик
+        return None, False  # проектор не догнал pid — следующий тик
     started: datetime = row.day_started_at
     if conn.execute(_HAS_KEY, {"key": key_tasks_open(pid, started)}).first() is not None:
-        return None
+        return None, False
     has_queue = (
         conn.execute(_HAS_KEY, {"key": key_day_queue(pid, started)}).first() is not None
     )
@@ -282,11 +345,33 @@ def _plan(conn: Connection, pid: uuid.UUID, row: Any, now: datetime) -> str | No
         _ENTERED_ONE, {"kind": EVENT_KIND_DAY_ENTERED, "pid": pid}
     ).all()
     entered = any(_same_moment(r[0], started) for r in entered_rows)
-    return decide(pid, started, row.tz, now, has_queue, entered)
+    reissued = False
+    if not has_queue and not entered:
+        reissue_rows = conn.execute(
+            _REISSUE_ONE, {"kinds": list(REISSUE_KINDS), "pid": pid}
+        ).all()
+        reissued = is_reissue(started, row.tz, [r[0] for r in reissue_rows])
+    decision = decide(pid, started, row.tz, now, has_queue, entered, reissued)
+    return decision, reissued and not has_queue and not entered
 
 
-def _write(conn: Connection, pid: uuid.UUID, row: Any, decision: str, now: datetime) -> bool:
-    """Шаг 3: ключ, затем (для "send") строка outbox. Commit делает вызывающий."""
+def _plan(conn: Connection, pid: uuid.UUID, row: Any, now: datetime) -> str | None:
+    """Шаг 2 под замком: None — пропуск (ничего не писать)."""
+    return _plan_detail(conn, pid, row, now)[0]
+
+
+def _write(
+    conn: Connection,
+    pid: uuid.UUID,
+    row: Any,
+    decision: str,
+    now: datetime,
+    reissue: bool = False,
+) -> bool:
+    """Шаг 3: ключ, затем (для "send") строка outbox. Commit делает вызывающий.
+
+    reissue — сработал третий запуск: текст choose_text_reissue, иначе choose_text.
+    """
     inserted = conn.execute(
         _INSERT_KEY,
         {
@@ -298,7 +383,12 @@ def _write(conn: Connection, pid: uuid.UUID, row: Any, decision: str, now: datet
     if inserted is None:
         return False  # ключ уже есть — ничего не пишем
     if decision == DECISION_SEND:
-        payload = {"text_id": choose_text(now, row.tz), "payload_vars": {}, "tier": TIER}
+        text_id = (
+            choose_text_reissue(row.day_started_at, row.tz, now)
+            if reissue
+            else choose_text(now, row.tz)
+        )
+        payload = {"text_id": text_id, "payload_vars": {}, "tier": TIER}
         conn.execute(
             _INSERT_OUTBOX,
             {
@@ -316,8 +406,8 @@ def notify_one(engine: Engine, pid: uuid.UUID, now: datetime) -> str | None:
         conn.execute(_LOCK_TIMEOUT)  # SET LOCAL — только эта транзакция
         lock_participant(conn, pid)
         row = conn.execute(life_ops._STATE, {"pid": pid}).first()
-        decision = None if row is None else _plan(conn, pid, row, now)
-        if decision is None or not _write(conn, pid, row, decision, now):
+        decision, reissue = (None, False) if row is None else _plan_detail(conn, pid, row, now)
+        if decision is None or not _write(conn, pid, row, decision, now, reissue):
             conn.rollback()
             return None
         conn.commit()  # ключ + outbox — один commit
