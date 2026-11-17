@@ -1,4 +1,4 @@
-"""Проектор: kind tz_set (projector-i3-2, PROJECTOR_VERSION 4). С БД — только CI.
+"""Проектор: kind tz_set (projector-i3-2, PROJECTOR_VERSION 5). С БД — только CI.
 
 Номера — docs/tasks/projector-i3-2.md, раздел 9. tg_user_id 4101–4199 (решил ШТАБ, У9).
 Тесты 1–2 — без БД (check.sh api), 3–7 — с БД.
@@ -97,7 +97,7 @@ def test_tz_from_payload():
 
 # 2. Версия и имя kind (без БД).
 def test_version_and_kind():
-    assert PROJECTOR_VERSION == 4
+    assert PROJECTOR_VERSION == 5
     assert EVENT_KIND_TZ_SET == "tz_set"
 
 
@@ -113,7 +113,7 @@ def test_tz_set_before_first_day(db_engine):
     assert run_once(db_engine) == ProjectorResult(processed=1, skipped=0)
     state = _state(db_engine, pid)
     assert state.tz == NEW_TZ
-    assert state.projector_version == 4
+    assert state.projector_version == PROJECTOR_VERSION
     assert state.lifecycle_phase == "onboarding"
     assert list(state.status_flags) == ["block_lives"]
     assert state.day_no is None

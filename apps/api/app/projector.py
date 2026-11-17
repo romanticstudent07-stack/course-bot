@@ -15,8 +15,8 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
   - I2 fsm_participant: pre_registered → onboarding по mini_app_first_consent (6А, D-11);
   - I2 checkpoint_table: participant_state_checkpoints (pid, last_event_id, at).
 
-Виды событий (PROJECTOR_VERSION 4, projector-i3-2; выдержки — docs/tasks/life-ops-a.md, раздел 7,
-и docs/tasks/projector-i3-2.md, разделы 3–4 и 7):
+Виды событий (PROJECTOR_VERSION 5, api-sleep-1a; выдержки — docs/tasks/life-ops-a.md, раздел 7,
+docs/tasks/projector-i3-2.md, разделы 3–4 и 7, и docs/tasks/api-sleep-1a.md, раздел 4):
   - mini_app_first_consent — строка состояния, фаза onboarding (без изменений с версии 1);
   - day_entered (iter2-api-2a) — позиция stage_no / module_no / day_no из payload,
     day_started_at = at события, missed_streak = 0; только если позиции ещё нет
@@ -34,12 +34,23 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
     missed_streak = 0 (условие то же: текущий day_started_at = payload.day_started_at).
     Ни одного поля → поведение v2 (старый payload #103 — только счётчик). Часть полей,
     позиция вне [1, MAX_POSITION_VALUE] или битая строка → WARNING «bad payload», пропуск;
-  - life_op (life-ops-c, В31) — payload {day_started_at, delta, reason}: lives = lives + delta;
-    lives + delta = 0 → lifecycle_phase = 'sleeping' (Р477). Условие — day_started_at
-    совпадает, фаза onboarding или active (В29; muted / sleeping / erased не трогаются,
-    ревью #111, Н2) и 0 ≤ lives + delta ≤ 3. 0 строк → WARNING, пропуск.
-    Payload: только delta == −1 (int, не bool) и reason == "missed_days", иначе
-    «bad payload» (Н3);
+  - life_op — две ветки по payload.reason (v5, api-sleep-1a); прочие reason → «bad payload».
+    Общее (Р3, pause-2 §4, Р-20): lives + delta = 0 → флаг block_lives (без дубля) и
+    lifecycle_phase = 'sleeping'. Фаза пересчитывается только в UPDATE, меняющем флаги.
+    (а) reason "missed_days" (life-ops-c, В31) — payload {day_started_at, delta, reason}:
+    lives = lives + delta. Условие — day_started_at совпадает, фаза onboarding или active
+    (В29; muted / sleeping / erased не трогаются, ревью #111, Н2) и 0 ≤ lives + delta ≤ 3.
+    0 строк → WARNING, пропуск. Payload: только delta == −1 (int, не bool), иначе
+    «bad payload» (Н3). После UPDATE в том же SAVEPOINT — строка журнала life_writeoffs
+    (0019): pid события, event_id = id события, позиция из RETURNING; ON CONFLICT (event_id)
+    DO NOTHING. Позиции нет (NULL) → WARNING «life_writeoffs skipped, no position», строки
+    нет, жизнь списана. IntegrityError на INSERT откатывает весь life_op (Ш6, риск принят).
+    (б) reason "author_cmd" (/life, ШТАБ 16.11 Ш1) — payload {delta, reason}: delta int
+    (не bool), ≠ 0, |delta| ≤ MAX_LIVES; day_started_at не читается. lives = lives + delta;
+    позиция, day_started_at и missed_streak не трогаются (03 §3.6). Условие — фаза onboarding
+    или active, 0 ≤ lives + delta ≤ 3, прибавка только при lives > 0 и без block_lives
+    (оттуда — revive, Р-20). 0 строк → WARNING с причиной (no state, phase not allowed,
+    lives_zero_use_revive, life_above_max, life_below_zero). В журнал не пишет;
   - day_closed (life-ops-c, В31) — payload {day_started_at, outcome came|silent, missed_streak,
     next_day_started_at}: day_started_at = next_day_started_at, missed_streak из payload;
     позиция не меняется. Условие — day_started_at совпадает и next_day_started_at строго
@@ -65,6 +76,10 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
 отчёта — −1 жизнь сразу, clocks-1) и notify_ops.tick (pushi-notify-1, НП3 «Задания откроются …
 в 04:00» — ключ tasks_open и outbox; НП1 noon_nudge (T3, noon-1); лестница ladder_reminder (T2,
 ladder-1) + алерт Автору ladder_day2_alert (clocks-1) — ключи и outbox, без participant_state).
+
+Бэкфилл block_lives (v5): run_once — после lock до прохода; run_forever — сразу после
+«lock acquired», до цикла. Один UPDATE: sleeping, lives = 0, без block_lives → флаг
+block_lives. Лог INFO — только число строк.
 
 Курсор — по pid: события e с e.id > coalesce(c.last_event_id, 0) через LEFT JOIN
 participant_state_checkpoints c USING (pid), ORDER BY e.id, LIMIT 500. Глобальный
@@ -117,7 +132,7 @@ logger = logging.getLogger("app.projector")
 BATCH_SIZE = 500
 POLL_SECONDS = 1.0
 RETRY_SECONDS = 5.0
-PROJECTOR_VERSION = 4
+PROJECTOR_VERSION = 5
 PHASE_PRE_REGISTERED = "pre_registered"
 PHASE_ONBOARDING = "onboarding"
 # Пишет POST /miniapp/v1/day/test-enter (app/routers/day.py) под замком participant:pid.
@@ -135,6 +150,15 @@ DAY_CLOSED_OUTCOMES = ("came", "silent")
 # life_op: единственные допустимые delta и reason (life-ops-a §7, ревью #111, Н3).
 LIFE_OP_DELTAS = (-1,)
 LIFE_OP_REASON = "missed_days"
+# life_op от команды /life (api-sleep-1a, ШТАБ 16.11 Ш1): ±N без дня.
+LIFE_OP_REASON_AUTHOR = "author_cmd"
+FLAG_BLOCK_LIVES = "block_lives"
+# Флаги сна (канон I2 через pause-2 §4); freeze_unpaid — не фаза.
+SLEEP_FLAGS = ("pause_user", "author_pause", "pause_shadow", "block_lives", "ban_mod")
+# Фазы, которые флаги сна не меняют.
+_PHASES_KEEP = ("muted", "erased")
+PHASE_ACTIVE = "active"
+_LIFE_OP_PHASES = (PHASE_ONBOARDING, PHASE_ACTIVE)
 # Граница lives (CHECK ck_participant_state_lives_range, миграция 0007).
 MAX_LIVES = 3
 # Верхняя граница stage_no / module_no / day_no (smallint).
@@ -222,12 +246,18 @@ _ADVANCE_DAY = text(
     """
 )
 
-# life_op: жизни ± delta только для текущего дня, фазы onboarding / active (В29, Н2)
-# и в границах [0, MAX_LIVES]; 0 жизней → sleeping (Р477). status_flags не упоминаются.
+# life_op missed_days: жизни ± delta только для текущего дня, фазы onboarding / active
+# (В29, Н2) и в границах [0, MAX_LIVES]; 0 жизней → block_lives (без дубля) и sleeping
+# (Р477, Р3). RETURNING позиции — для журнала life_writeoffs (Р5).
 _APPLY_LIFE_OP = text(
     """
     UPDATE participant_state
     SET lives = lives + :delta,
+        status_flags = CASE
+            WHEN lives + :delta = 0
+                 AND NOT ('block_lives' = ANY(coalesce(status_flags, CAST('{}' AS text[]))))
+            THEN array_append(coalesce(status_flags, CAST('{}' AS text[])), 'block_lives')
+            ELSE status_flags END,
         lifecycle_phase = CASE WHEN lives + :delta = 0 THEN CAST(:sleeping AS text)
                                ELSE lifecycle_phase END,
         updated_at = now(),
@@ -236,7 +266,62 @@ _APPLY_LIFE_OP = text(
       AND day_started_at = CAST(:day_started_at AS timestamptz)
       AND lifecycle_phase IN ('onboarding', 'active')
       AND lives + :delta BETWEEN 0 AND :max_lives
+    RETURNING pid, stage_no, module_no, day_no
+    """
+)
+
+# life_op author_cmd (/life): ±N без дня; позиция, day_started_at, missed_streak
+# не упоминаются (03 §3.6). Прибавка — только при lives > 0 и без block_lives (Р-20).
+_APPLY_AUTHOR_LIFE_OP = text(
+    """
+    UPDATE participant_state
+    SET lives = lives + :delta,
+        status_flags = CASE
+            WHEN lives + :delta = 0
+                 AND NOT ('block_lives' = ANY(coalesce(status_flags, CAST('{}' AS text[]))))
+            THEN array_append(coalesce(status_flags, CAST('{}' AS text[])), 'block_lives')
+            ELSE status_flags END,
+        lifecycle_phase = CASE WHEN lives + :delta = 0 THEN CAST(:sleeping AS text)
+                               ELSE lifecycle_phase END,
+        updated_at = now(),
+        projector_version = :version
+    WHERE pid = :pid
+      AND lifecycle_phase IN ('onboarding', 'active')
+      AND lives + :delta BETWEEN 0 AND :max_lives
+      AND (:delta < 0
+           OR (lives > 0
+               AND NOT ('block_lives' = ANY(coalesce(status_flags, CAST('{}' AS text[]))))))
     RETURNING pid
+    """
+)
+
+# Причина пропуска author_cmd (0 строк UPDATE).
+_SELECT_LIFE_STATE = text(
+    """
+    SELECT lives, status_flags, lifecycle_phase
+    FROM participant_state
+    WHERE pid = :pid
+    """
+)
+
+# Журнал списаний (0019): дословно по docstring миграции, без RETURNING.
+_INSERT_LIFE_WRITEOFF = text(
+    """
+    INSERT INTO life_writeoffs (pid, event_id, stage_no, module_no, day_no)
+    VALUES (:pid, :event_id, :s, :m, :d) ON CONFLICT (event_id) DO NOTHING
+    """
+)
+
+# Бэкфилл block_lives (Р3): строки sleeping с 0 жизней без флага.
+_BACKFILL_BLOCK_LIVES = text(
+    """
+    UPDATE participant_state
+    SET status_flags = array_append(coalesce(status_flags, CAST('{}' AS text[])), 'block_lives'),
+        updated_at = now(),
+        projector_version = :version
+    WHERE lifecycle_phase = 'sleeping'
+      AND lives = 0
+      AND NOT ('block_lives' = ANY(coalesce(status_flags, CAST('{}' AS text[]))))
     """
 )
 
@@ -390,6 +475,47 @@ def life_op_from_payload(payload: Any) -> tuple[str, int] | None:
     return started, delta
 
 
+def author_life_op_from_payload(payload: Any) -> int | None:
+    """delta из payload life_op author_cmd (/life) или None (битый payload).
+
+    delta — int (не bool), ≠ 0, |delta| ≤ MAX_LIVES; day_started_at не нужен и не читается.
+    reason проверяет вызывающий.
+    """
+    data = _payload_dict(payload)
+    if data is None:
+        return None
+    delta = _int_value(data.get("delta"))
+    if delta is None or delta == 0 or abs(delta) > MAX_LIVES:
+        return None
+    return delta
+
+
+def classify_life_op(lives: int, delta: int, flags: Sequence[str] | None) -> str | None:
+    """Причина отказа life_op author_cmd или None (чистая функция, без pid)."""
+    flag_list = list(flags or ())
+    if delta > 0 and (lives == 0 or FLAG_BLOCK_LIVES in flag_list):
+        return "lives_zero_use_revive"
+    if lives + delta > MAX_LIVES:
+        return "life_above_max"
+    if lives + delta < 0:
+        return "life_below_zero"
+    return None
+
+
+def phase_for_flags(phase: str, flags: Sequence[str] | None) -> str:
+    """Фаза по флагам сна (Р2): muted / erased — без изменений; флаг сна → sleeping;
+    sleeping без флагов сна → active; иначе прежняя. onboarding → active не делает.
+    """
+    if phase in _PHASES_KEEP:
+        return phase
+    flag_list = list(flags or ())
+    if any(flag in SLEEP_FLAGS for flag in flag_list):
+        return PHASE_SLEEPING
+    if phase == PHASE_SLEEPING:
+        return PHASE_ACTIVE
+    return phase
+
+
 def day_closed_from_payload(payload: Any) -> tuple[str, int, str] | None:
     """(day_started_at, missed_streak, next_day_started_at) из payload day_closed или None."""
     data = _payload_dict(payload)
@@ -514,6 +640,19 @@ def _apply_day_report_submitted(
 def _apply_life_op(
     conn: Connection, event_id: int, pid: uuid.UUID, kind: str, payload: Any
 ) -> bool:
+    data = _payload_dict(payload)
+    reason = data.get("reason") if data is not None else None
+    if reason == LIFE_OP_REASON_AUTHOR:
+        return _apply_author_life_op(conn, event_id, pid, kind, payload)
+    if reason != LIFE_OP_REASON:
+        _skip(event_id, kind, "bad payload")
+        return False
+    return _apply_missed_days_life_op(conn, event_id, pid, kind, payload)
+
+
+def _apply_missed_days_life_op(
+    conn: Connection, event_id: int, pid: uuid.UUID, kind: str, payload: Any
+) -> bool:
     parsed = life_op_from_payload(payload)
     if parsed is None:
         _skip(event_id, kind, "bad payload")
@@ -533,7 +672,46 @@ def _apply_life_op(
     if applied is None:
         _skip(event_id, kind, "not current day, phase, lives out of range or no state")
         return False
+    _, stage_no, module_no, day_no = applied
+    if stage_no is None or module_no is None or day_no is None:
+        logger.warning("projector: life_writeoffs skipped, no position, event id=%s", event_id)
+        return True
+    conn.execute(
+        _INSERT_LIFE_WRITEOFF,
+        {"pid": pid, "event_id": event_id, "s": stage_no, "m": module_no, "d": day_no},
+    )
     return True
+
+
+def _apply_author_life_op(
+    conn: Connection, event_id: int, pid: uuid.UUID, kind: str, payload: Any
+) -> bool:
+    delta = author_life_op_from_payload(payload)
+    if delta is None:
+        _skip(event_id, kind, "bad payload")
+        return False
+    applied = conn.execute(
+        _APPLY_AUTHOR_LIFE_OP,
+        {
+            "pid": pid,
+            "delta": delta,
+            "sleeping": PHASE_SLEEPING,
+            "max_lives": MAX_LIVES,
+            "version": PROJECTOR_VERSION,
+        },
+    ).first()
+    if applied is not None:
+        return True
+    row = conn.execute(_SELECT_LIFE_STATE, {"pid": pid}).first()
+    if row is None:
+        _skip(event_id, kind, "no state")
+        return False
+    lives, flags, phase = row
+    if phase not in _LIFE_OP_PHASES:
+        _skip(event_id, kind, "phase not allowed")
+        return False
+    _skip(event_id, kind, classify_life_op(lives, delta, flags) or "not applied")
+    return False
 
 
 def _apply_day_closed(
@@ -680,9 +858,22 @@ def _advisory_lock(engine: Engine) -> Iterator[Connection]:
         conn.close()
 
 
+def _backfill_block_lives(engine: Engine) -> int:
+    """Бэкфилл (Р3): sleeping с 0 жизней без флага → block_lives. Своя транзакция.
+
+    Ошибки не глушатся. В лог — только число строк.
+    """
+    with engine.begin() as conn:
+        count = conn.execute(_BACKFILL_BLOCK_LIVES, {"version": PROJECTOR_VERSION}).rowcount
+    count = max(count or 0, 0)
+    logger.info("projector: backfill block_lives, строк %s", count)
+    return count
+
+
 def run_once(engine: Engine) -> ProjectorResult:
-    """Режим once: lock → проход (все пачки) → unlock."""
+    """Режим once: lock → бэкфилл block_lives → проход (все пачки) → unlock."""
     with _advisory_lock(engine):
+        _backfill_block_lives(engine)
         return _drain(engine)
 
 
@@ -729,7 +920,7 @@ def run_forever(
 ) -> None:
     """Режим run: lock держится всё время; сбой БД → WARNING, пауза, повтор.
 
-    После прохода — шаги «часов» (_life_ops_step, затем _notify_ops_step) под тем же lock
+    После lock — бэкфилл block_lives (один раз на lock). После прохода — шаги «часов» (_life_ops_step, затем _notify_ops_step) под тем же lock
     проектора; once — без них.
     """
     last_tick: datetime | None = None
@@ -738,6 +929,7 @@ def run_forever(
         try:
             with _advisory_lock(engine) as lock_conn:
                 logger.info("projector: lock acquired, running (version %s)", PROJECTOR_VERSION)
+                _backfill_block_lives(engine)
                 while True:
                     result = _drain(engine)
                     if result.processed or result.skipped:

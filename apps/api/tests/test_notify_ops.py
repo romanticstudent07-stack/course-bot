@@ -155,6 +155,7 @@ def test_notify_ops_step_error_warning_loop_alive(monkeypatch, caplog):
 
     monkeypatch.setattr(projector, "_advisory_lock", _fake_lock)
     monkeypatch.setattr(projector, "_drain", drain)
+    monkeypatch.setattr(projector, "_backfill_block_lives", lambda engine: 0)
     monkeypatch.setattr(life_ops, "tick", life_tick)
     monkeypatch.setattr(notify_ops, "tick", broken_tick)
     monkeypatch.setattr(day_clock, "utcnow", lambda: clock["now"])
