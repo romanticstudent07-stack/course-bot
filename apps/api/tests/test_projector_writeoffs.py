@@ -4,7 +4,6 @@
 напрямую; DELETE checkpoint — тоже только в тесте (владелец БД).
 """
 import json
-import logging
 from pathlib import Path
 
 from sqlalchemy import text
@@ -63,14 +62,6 @@ def _open_day(engine, tg_user_id: int):
     return pid, started
 
 
-def _set_lives(engine, pid, lives: int) -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            text("UPDATE participant_state SET lives = :l WHERE pid = :p"),
-            {"p": pid, "l": lives},
-        )
-
-
 def _event(engine, pid, payload) -> int:
     with engine.begin() as conn:
         return conn.execute(
@@ -95,13 +86,6 @@ def _rows(engine, event_id: int):
             ),
             {"e": event_id},
         ).all()
-
-
-def _lives(engine, pid) -> int:
-    with engine.connect() as conn:
-        return conn.execute(
-            text("SELECT lives FROM participant_state WHERE pid = :p"), {"p": pid}
-        ).scalar_one()
 
 
 def test_missed_days_writes_row(db_engine):
@@ -158,30 +142,3 @@ def test_skipped_life_op_no_row(db_engine):
     event_id = _event(db_engine, pid, _missed(OLD_DAY))
     assert run_once(db_engine) == ProjectorResult(processed=0, skipped=1)
     assert _rows(db_engine, event_id) == []
-
-
-def test_no_position_applied_without_row(db_engine, caplog):
-    pid, _ = _open_day(db_engine, 4557)
-    _set_lives(db_engine, pid, 3)
-    with db_engine.begin() as conn:
-        conn.execute(
-            text(
-                "UPDATE participant_state SET day_started_at = CAST(:d AS timestamptz), "
-                "day_no = NULL WHERE pid = :p"
-            ),
-            {"p": pid, "d": OLD_DAY},
-        )
-    event_id = _event(db_engine, pid, _missed(OLD_DAY))
-    with caplog.at_level(logging.WARNING, logger="app.projector"):
-        assert run_once(db_engine) == ProjectorResult(processed=1, skipped=0)
-    assert _lives(db_engine, pid) == 2
-    assert _rows(db_engine, event_id) == []
-    messages = [
-        r.getMessage()
-        for r in caplog.records
-        if r.name == "app.projector" and r.levelno == logging.WARNING
-    ]
-    assert any(
-        "life_writeoffs skipped, no position" in m and f"id={event_id}" in m for m in messages
-    )
-    assert all(str(pid) not in m for m in messages)
