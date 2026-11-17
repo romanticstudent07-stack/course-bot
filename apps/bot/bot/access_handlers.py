@@ -2,6 +2,8 @@
 
 - Личка: текст (не команда) от пользователя без доступа → заявка в админ-тему (bot/access.py);
   не текст и команды, кроме /start, → SEND_TEXT. /start — bot/handlers.py.
+- Личка, текст при вердикте NOTHING (granted): заявка на рестарт (bot/restart.py, bot-restart-1);
+  участник не eligible → тишина, как раньше. Не текст и команды при granted — тишина.
 - Кнопки «acc:g:<id>» / «acc:d:<id>»: только из админ-темы (WORK_GROUP_ID + ACCESS_ADMIN_TOPIC_ID)
   и от ACCESS_ADMIN_IDS; иначе answerCallbackQuery без текста + лог.
 - Команды /access_grant и /access_deny (Command учитывает @BotName): только из темы и от whitelist,
@@ -24,7 +26,7 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from bot import access, texts
+from bot import access, restart, texts
 from bot.config import BotConfig
 from bot.handlers import menu_button, webapp_keyboard
 
@@ -195,6 +197,17 @@ def build_access_router(config: BotConfig, connect=None) -> Router:
         except Exception as exc:  # noqa: BLE001
             logger.error("access: ошибка обработки (%s)", type(exc).__name__)
             kind, until = access.TRY_LATER, None
+        if is_word and kind == access.NOTHING:  # granted: возможно, промокод рестарта (bot-restart-1)
+            try:
+                code = await _with_conn(lambda c: restart.submit_request(
+                    c, message.bot, config, uid, message.text, now))
+            except Exception as exc:  # noqa: BLE001
+                logger.error("restart: ошибка обработки заявки (%s)", type(exc).__name__)
+                code = restart.TRY_LATER
+            text = restart.user_text_for(code)
+            if text:
+                await message.answer(text)
+            return
         text = access.user_text_for(kind, until)
         if text:
             await message.answer(text)
