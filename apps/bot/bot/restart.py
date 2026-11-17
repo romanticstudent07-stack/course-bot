@@ -8,6 +8,8 @@
 сообщение в теме, callback несёт short_no. Одна заявка в сутки — ключ restart_req:{pid}:{дата МСК}.
 Фаза muted или erased → restart_paid не пишется (проектор v6 фазу не проверяет).
 participant_state, outbox, access_grants бот здесь не пишет. RETURNING не используется.
+Кодовое слово — access.clean_word (strip, 1…64 знака); иначе тишина, как при «не eligible» (bot-restart-2).
+Кнопки на заявке старше STALE_HOURS (48 ч, строго больше) в БД не ходят — is_stale (bot-restart-2).
 
 Права app_bot (0009, 0011, 0013, 0018) — SQL ниже использует только их:
     tg_user_registry (pid, tg_user_id, tombstoned_at, short_no) — SELECT
@@ -24,13 +26,13 @@ import html
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from psycopg.types.json import Jsonb
 
 from bot import texts
-from bot.access import MSK, fmt_msk
+from bot.access import MSK, aware, clean_word, fmt_msk
 from bot.life import LOCK, has_flag
 
 logger = logging.getLogger(__name__)
@@ -57,9 +59,10 @@ CALLBACK_PREFIX = "rst"
 GRANT, DENY = "g", "d"
 BIGINT_MAX = 9223372036854775807
 REF_GRANTED, REF_DENIED = "granted", "denied"
+STALE_HOURS = 48               # заявка старше — кнопки в БД не ходят (ровно 48 ч — действует)
 
 # --- Коды заявки ---
-NOTHING = "nothing"            # не eligible → тишина, как раньше
+NOTHING = "nothing"            # не eligible или слово не прошло clean_word → тишина
 SENT = "sent"
 ALREADY_TODAY = "already_today"
 TRY_LATER = "try_later"
@@ -70,13 +73,14 @@ DENIED = "denied"
 ALREADY = "already"
 REFUSED_STATE = "refused_state"
 REFUSED_PHASE = "refused_phase"
+STALE = "stale"                # заявка старше STALE_HOURS → отказ в теме без БД
 
 _CALLBACK_RE = re.compile(rf"{CALLBACK_PREFIX}:([{GRANT}{DENY}]):(\d{{1,19}})")
 
 
 @dataclass(frozen=True)
 class Result:
-    kind: str                      # DONE | DENIED | ALREADY | REFUSED_STATE | REFUSED_PHASE
+    kind: str                      # DONE | DENIED | ALREADY | REFUSED_STATE | REFUSED_PHASE | STALE
     tg_user_id: int | None = None
     ref: str | None = None         # для ALREADY: result_ref записанного решения
 
@@ -95,6 +99,13 @@ def refusal(phase, flags, stage_no) -> str | None:
     if not has_flag(flags, "block_lives") or stage_no is None:
         return REFUSED_STATE
     return None
+
+
+def is_stale(message_date, now: datetime) -> bool:
+    """Заявка старше STALE_HOURS (строго >) → True. Дата не datetime (InaccessibleMessage: 0 / None) → True."""
+    if not isinstance(message_date, datetime):
+        return True
+    return now - aware(message_date) > timedelta(hours=STALE_HOURS)
 
 
 def request_key(pid, now: datetime) -> str:
@@ -153,6 +164,8 @@ def admin_note_for(result: Result, now: datetime) -> str | None:
         return texts.RESTART_REFUSED_PHASE
     if result.kind == REFUSED_STATE:
         return texts.RESTART_REFUSED_STATE
+    if result.kind == STALE:
+        return texts.RESTART_STALE
     return None
 
 
@@ -162,7 +175,7 @@ def already_text(ref: str | None) -> str:
 
 
 def user_text_for_result(result: Result) -> str | None:
-    """Участнику после решения; при отказах и ALREADY — ничего."""
+    """Участнику после решения; при отказах, STALE и ALREADY — ничего."""
     return {DONE: texts.RESTART_GRANTED, DENIED: texts.RESTART_DENIED}.get(result.kind)
 
 
@@ -180,8 +193,11 @@ class _Refused(Exception):
         self.code = code
 
 
-async def submit_request(conn, bot, config, tg_user_id: int, word_text: str, now: datetime) -> str:
+async def submit_request(conn, bot, config, tg_user_id: int, word_text: str | None, now: datetime) -> str:
     """Текст при вердикте доступа NOTHING → код заявки. Запись — одна транзакция."""
+    word = clean_word(word_text)
+    if word is None:
+        return NOTHING
     cur = await conn.execute(FIND_BY_TG, (tg_user_id,))
     found = await cur.fetchone()
     if found is None:
@@ -202,7 +218,7 @@ async def submit_request(conn, bot, config, tg_user_id: int, word_text: str, now
                 await bot.send_message(
                     chat_id=config.work_group_id,
                     message_thread_id=config.access_admin_topic_id,
-                    text=request_text(short_no, stage_no, (word_text or "").strip()),
+                    text=request_text(short_no, stage_no, word),
                     parse_mode="HTML",
                     reply_markup=admin_keyboard(short_no),
                 )

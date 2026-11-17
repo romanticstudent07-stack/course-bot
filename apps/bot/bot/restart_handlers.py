@@ -2,6 +2,8 @@
 
 - Принимаются только из админ-темы (WORK_GROUP_ID + ACCESS_ADMIN_TOPIC_ID) и от ACCESS_ADMIN_IDS;
   иначе answerCallbackQuery без текста + лог, БД не вызывается.
+- Заявка старше 48 ч (restart.STALE_HOURS, по дате сообщения; ровно 48 ч — действует) → в БД не ходить,
+  в теме RESTART_STALE, кнопки снимаются, участнику ничего (bot-restart-2).
 - Решение — bot/restart.py: decide (одна транзакция). Ошибка БД → answer RESTART_TRY_LATER.
 - После COMMIT: к заявке дописывается итог, кнопки снимаются; участнику — RESTART_GRANTED /
   RESTART_DENIED. Отказ (muted, erased, нет block_lives, не найден) — только в теме, участнику ничего.
@@ -79,6 +81,15 @@ def build_restart_router(config: BotConfig, connect=None) -> Router:
             return
         action, short_no = parsed
         now = _now()
+        if restart.is_stale(getattr(msg, "date", None), now):
+            logger.info("restart: заявка устарела")
+            await after_commit(callback.bot, config, restart.Result(restart.STALE), msg.chat.id,
+                               msg.message_id, getattr(msg, "html_text", "") or "", now)
+            try:
+                await callback.answer()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("restart: answerCallbackQuery (%s)", type(exc).__name__)
+            return
         try:
             conn = await connect(config.database_url)
             try:
