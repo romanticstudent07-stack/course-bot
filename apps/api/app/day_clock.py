@@ -167,6 +167,21 @@ def last_midnight(now: datetime, tz: str | None) -> datetime:
     return candidate.astimezone(z)
 
 
+def next_midnight(at: datetime, tz: str | None) -> datetime:
+    """Первая 00:00 по поясу строго позже at (api-sleep-1b, Р-20: день после рестарта — с 00:00).
+
+    Нет 00:00 из-за перевода часов → момент перехода, как у _at_local.
+    """
+    _require_aware(at, "at")
+    z = zone(tz)
+    at_u = _utc(at)
+    day = at_u.astimezone(z).date()
+    candidate = _at_local(day, DEADLINE_TIME, z)
+    if candidate <= at_u:
+        candidate = _at_local(day + timedelta(days=1), DEADLINE_TIME, z)
+    return candidate.astimezone(z)
+
+
 def queue_delay(pid: uuid.UUID | str, started_at: datetime) -> timedelta:
     """Пауза очереди 10–60 мин, детерминирована по (pid, dsa(started_at)) (ЛО-1).
 
