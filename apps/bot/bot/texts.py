@@ -161,3 +161,34 @@ SUPPORT_BUTTON_REPLY = "✉️ Ответить"
 SUPPORT_BUTTON_SEND = "Отправить"
 # bot.support_button_cancel
 SUPPORT_BUTTON_CANCEL = "Отмена"
+
+# --- Жизни: /life +N | -N (bot-life-1, Р-20). Заглушки; участнику ничего не пишется ---
+
+# bot.life_usage
+LIFE_USAGE = "[заглушка] Формат: /life #NNNNNN +N | -N (N = 1…3) или /life +N ответом на пост бота."
+# bot.life_not_found
+LIFE_NOT_FOUND = "[заглушка] Участник не найден."
+# bot.life_preview — {num}: номер из 6 цифр; {before}, {after}: жизни сейчас → после
+LIFE_PREVIEW = "[заглушка] Жизни участника #{num}: {before} → {after}. Подтвердить?"
+# bot.life_button_confirm
+LIFE_BUTTON_CONFIRM = "Подтвердить"
+# bot.life_button_cancel
+LIFE_BUTTON_CANCEL = "Отмена"
+# bot.life_refuse_phase
+LIFE_REFUSE_PHASE = "[заглушка] Отказ: в этой фазе жизни менять нельзя."
+# bot.life_refuse_revive
+LIFE_REFUSE_REVIVE = "[заглушка] Отказ: жизней 0 или блок жизней — используй revive."
+# bot.life_refuse_above_max
+LIFE_REFUSE_ABOVE_MAX = "[заглушка] Отказ: жизней будет больше 3."
+# bot.life_refuse_below_zero
+LIFE_REFUSE_BELOW_ZERO = "[заглушка] Отказ: жизней будет меньше 0."
+# bot.life_stale
+LIFE_STALE = "[заглушка] Предпросмотр устарел, повтори /life."
+# bot.life_already
+LIFE_ALREADY = "[заглушка] Уже записано."
+# bot.life_done
+LIFE_DONE = "[заглушка] Записано, применит проектор."
+# bot.life_cancelled
+LIFE_CANCELLED = "[заглушка] Отменено."
+# bot.life_try_later
+LIFE_TRY_LATER = "[заглушка] Не удалось, попробуйте позже."

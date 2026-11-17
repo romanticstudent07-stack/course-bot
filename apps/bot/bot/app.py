@@ -27,6 +27,8 @@ BOT_DATABASE_URL пуст → воркер не запускается (WARNING)
 Карточка участника (bot-i3-1, bot/card_handlers.py): роутер подключается после /start и ДО роутера
 доступа, только если config.card_enabled; иначе один WARNING с именами переменных (без значений).
 Ловит только Command("card") и callback «card:…».
+/life (bot-life-1, bot/life_handlers.py) подключается сразу после карточки в той же ветке
+config.card_enabled, своего WARNING не пишет. Ловит только Command("life") в группе и callback «life:…».
 
 Поддержка (bot-sup-1, Р-19, bot/support_handlers.py): роутер ответов ✉️ подключается после карточки
 и ДО роутера доступа, только если config.support_enabled. Не заданы переменные поддержки → один
@@ -56,6 +58,9 @@ def build_dispatcher(config: BotConfig, connect=None) -> Dispatcher:
         from bot.card_handlers import build_card_router
 
         dp.include_router(build_card_router(config, connect))
+        from bot.life_handlers import build_life_router
+
+        dp.include_router(build_life_router(config, connect))
     else:
         logger.warning("Карточка выключена: не заданы %s", ", ".join(config.card_missing_vars()))
     if config.support_enabled:
