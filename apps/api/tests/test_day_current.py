@@ -91,6 +91,8 @@ def test_kinds_and_ttl():
         "noon": "3650 days",  # noon-1
         "ladder": "3650 days",  # ladder-1
         "ladder_day2": "3650 days",  # clocks-1
+        "pause_start": "3650 days",  # api-pause-1b
+        "pause_end": "3650 days",  # api-pause-1b
     }
 
 
