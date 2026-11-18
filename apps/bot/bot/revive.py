@@ -129,9 +129,9 @@ def confirm_data(short_no: int, module_no: int, day_no: int, op: str) -> str:
 
 def preview_keyboard(short_no: int, module_no: int, day_no: int, op: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=texts.LIFE_BUTTON_CONFIRM,
+        InlineKeyboardButton(text=texts.REVIVE_BUTTON_CONFIRM,
                              callback_data=confirm_data(short_no, module_no, day_no, op)),
-        InlineKeyboardButton(text=texts.LIFE_BUTTON_CANCEL, callback_data=f"{CALLBACK_PREFIX}:{CANCEL}"),
+        InlineKeyboardButton(text=texts.REVIVE_BUTTON_CANCEL, callback_data=f"{CALLBACK_PREFIX}:{CANCEL}"),
     ]])
 
 

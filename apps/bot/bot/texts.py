@@ -227,3 +227,46 @@ RESTART_REFUSED_PHASE = "[заглушка] Отказ: в этой фазе р�
 RESTART_REFUSED_STATE = "[заглушка] Отказ: участник не найден или нет блока жизней."
 # bot.restart_stale
 RESTART_STALE = "[заглушка] Заявка старше 48 ч — решение не записано."
+
+# --- Revive: /revive (bot-revive-1, Р-20). Заглушки; участнику — только REVIVE_USER при «записано» ---
+
+# bot.revive_usage
+REVIVE_USAGE = "[заглушка] Формат: /revive #NNNNNN [М.Д] или /revive [М.Д] ответом на пост бота (М, Д = 1…999)."
+# bot.revive_not_found
+REVIVE_NOT_FOUND = "[заглушка] Участник не найден."
+# bot.revive_preview — {num}: номер из 6 цифр; {s}, {m}, {d}: позиция сейчас; {ts}, {tm}, {td}: откат;
+# {returned}: lives_returned; {after}: min(3, 1 + returned)
+REVIVE_PREVIEW = (
+    "[заглушка] Revive участника #{num}\n"
+    "Позиция сейчас: {s}.{m}.{d}\n"
+    "Откат на: {ts}.{tm}.{td}\n"
+    "Возврат жизней: {returned}\n"
+    "Станет жизней: {after}\n"
+    "Подтвердить?"
+)
+# bot.revive_button_confirm
+REVIVE_BUTTON_CONFIRM = "Подтвердить"
+# bot.revive_button_cancel
+REVIVE_BUTTON_CANCEL = "Отмена"
+# bot.revive_refuse_phase
+REVIVE_REFUSE_PHASE = "[заглушка] Отказ: в этой фазе revive нельзя."
+# bot.revive_refuse_not_blocked
+REVIVE_REFUSE_NOT_BLOCKED = "[заглушка] Отказ: нет блока жизней; для прибавки — /life."
+# bot.revive_refuse_no_position
+REVIVE_REFUSE_NO_POSITION = "[заглушка] Отказ: позиция участника не задана."
+# bot.revive_refuse_stage
+REVIVE_REFUSE_STAGE = "[заглушка] Отказ: откат только внутри текущего Этапа."
+# bot.revive_refuse_ahead
+REVIVE_REFUSE_AHEAD = "[заглушка] Отказ: точка отката впереди текущей позиции."
+# bot.revive_stale
+REVIVE_STALE = "[заглушка] Предпросмотр устарел, повтори /revive."
+# bot.revive_already
+REVIVE_ALREADY = "[заглушка] Уже записано."
+# bot.revive_done
+REVIVE_DONE = "[заглушка] Записано, применит проектор."
+# bot.revive_cancelled
+REVIVE_CANCELLED = "[заглушка] Отменено."
+# bot.revive_try_later
+REVIVE_TRY_LATER = "[заглушка] Не удалось, попробуйте позже."
+# bot.revive_user — участнику в личку после записи
+REVIVE_USER = "[заглушка] Автор вернул вас в строй. Продолжение — с 00:00 по вашему поясу."
