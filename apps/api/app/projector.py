@@ -178,7 +178,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
 
-from app import day_clock, life_ops, notify_ops, pause_rules
+from app import day_clock, life_ops, notify_ops, pause_ops, pause_rules
 from app.config import get_settings
 from app.db.models import EVENT_KIND_MINI_APP_FIRST_CONSENT
 from app.db.session import get_engine
@@ -189,6 +189,8 @@ BATCH_SIZE = 500
 POLL_SECONDS = 1.0
 RETRY_SECONDS = 5.0
 PROJECTOR_VERSION = 8
+# «Часы» пауз (api-pause-1b, Ч1): тот же интервал, что у life_ops.LIFE_OPS_INTERVAL_S.
+PAUSE_OPS_INTERVAL_S = life_ops.LIFE_OPS_INTERVAL_S
 PHASE_PRE_REGISTERED = "pre_registered"
 PHASE_ONBOARDING = "onboarding"
 # Пишет POST /miniapp/v1/day/test-enter (app/routers/day.py) под замком participant:pid.
@@ -1600,6 +1602,23 @@ def _life_ops_step(engine: Engine, last_tick: datetime | None) -> datetime | Non
     return now
 
 
+def _pause_ops_step(engine: Engine, last_tick: datetime | None) -> datetime | None:
+    """«Часы» пауз (api-pause-1b, Ч1): tick раз в PAUSE_OPS_INTERVAL_S по day_clock.utcnow().
+
+    Любая ошибка tick → WARNING с именем класса, цикл проектора живёт дальше.
+    Часы назад (now < last_tick) → tick сразу. Возвращает момент последнего tick.
+    """
+    now = day_clock.utcnow()
+    interval = timedelta(seconds=PAUSE_OPS_INTERVAL_S)
+    if last_tick is not None and timedelta(0) <= now - last_tick < interval:
+        return last_tick
+    try:
+        pause_ops.tick(engine, now)
+    except Exception as exc:  # noqa: BLE001 — шаг «часов» не роняет проектор
+        logger.warning("projector: pause_ops tick failed (%s)", type(exc).__name__)
+    return now
+
+
 def _notify_ops_step(engine: Engine, last_tick: datetime | None) -> datetime | None:
     """«Часы» НП3 (pushi-notify-1): tick раз в NOTIFY_OPS_INTERVAL_S по day_clock.utcnow().
 
@@ -1631,6 +1650,7 @@ def run_forever(
     """
     last_tick: datetime | None = None
     last_notify: datetime | None = None
+    last_pause: datetime | None = None
     while True:
         try:
             with _advisory_lock(engine) as lock_conn:
@@ -1645,6 +1665,7 @@ def run_forever(
                             result.skipped,
                         )
                     last_tick = _life_ops_step(engine, last_tick)
+                    last_pause = _pause_ops_step(engine, last_pause)  # Ч1: сразу после life_ops
                     last_notify = _notify_ops_step(engine, last_notify)
                     # Проверка, что соединение с lock живо (иначе — повтор с начала).
                     lock_conn.execute(_PING)
