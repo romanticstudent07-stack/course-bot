@@ -180,7 +180,7 @@ def _assert_reissued(state, position, at: datetime = AT) -> None:
     assert (state.stage_no, state.module_no, state.day_no) == position
     assert _u(state.day_started_at) == _u(day_clock.next_midnight(at, MSK_NAME))
     assert state.missed_streak == 0
-    assert state.projector_version == 7
+    assert state.projector_version == 8
 
 
 # V1: lives_returned 1 → lives 2, флаги сняты, active, день (2, 3, 1) с D.

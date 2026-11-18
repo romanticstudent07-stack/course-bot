@@ -29,7 +29,7 @@ NEXT_DAY = datetime(2030, 1, 2, 1, 0, tzinfo=timezone.utc)
 
 
 def test_version_is_7():
-    assert PROJECTOR_VERSION == 7  # api-revive-1
+    assert PROJECTOR_VERSION == 8  # api-revive-1
 
 
 def _open_day(engine, tg_user_id: int):
