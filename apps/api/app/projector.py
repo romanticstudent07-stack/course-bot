@@ -15,9 +15,9 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
   - I2 fsm_participant: pre_registered → onboarding по mini_app_first_consent (6А, D-11);
   - I2 checkpoint_table: participant_state_checkpoints (pid, last_event_id, at).
 
-Виды событий (PROJECTOR_VERSION 6, api-sleep-1b; выдержки — docs/tasks/life-ops-a.md, раздел 7,
+Виды событий (PROJECTOR_VERSION 7, api-revive-1; выдержки — docs/tasks/life-ops-a.md, раздел 7,
 docs/tasks/projector-i3-2.md, разделы 3–4 и 7, docs/tasks/api-sleep-1a.md, раздел 4, и
-docs/tasks/api-sleep-1b.md, разделы 4 и 7):
+docs/tasks/api-sleep-1b.md, разделы 4 и 7, docs/tasks/api-revive-1.md, разделы 4 и 7):
   - mini_app_first_consent — строка состояния, фаза onboarding (без изменений с версии 1);
   - day_entered (iter2-api-2a) — позиция stage_no / module_no / day_no из payload,
     day_started_at = at события, missed_streak = 0; только если позиции ещё нет
@@ -73,6 +73,17 @@ docs/tasks/api-sleep-1b.md, разделы 4 и 7):
     (Р-6а): pause_budgets UPSERT — остаток PAUSE_BUDGET_DAYS (14), cycle_start_at = D,
     restart_no + 1 (SQL дословно из docstring 0018; права app_projector — 0018).
     author_pause_reason, muted и erased не трогаются. Всё — в SAVEPOINT события.
+  - revive_by_author (v7, api-revive-1, Р-20: revive из block_lives) — payload {target:
+    {stage_no, module_no, day_no}, lives_returned}: поля target — int (не bool) ≥ 1,
+    lives_returned — int (не bool) ≥ 0, лишние ключи игнорируются; at обязателен; иначе
+    «bad payload». lives_returned берётся из payload — его считает бот (bot-revive-1, Ш1 = А);
+    проектор life_writeoffs не читает и не пересчитывает. Применяется, только если строка есть,
+    есть block_lives и stage_no не NULL («no state» / «revive: not blocked or no position»),
+    target.stage_no = stage_no («revive: other stage») и (module, day) target не впереди
+    текущих («revive: target ahead»; равенство допустимо). lives = min(MAX_LIVES,
+    1 + lives_returned), block_lives снимается, фаза — phase_for_flags (Р2); затем
+    reissue_day(target). Роль события не проверяется (как у restart_paid). pause_budgets,
+    day_marks, отчёты, рефлексии, life_writeoffs не трогаются. Всё — в SAVEPOINT события.
   reissue_day(conn, pid, target, at, tz) — внутренняя функция, не событие и не day_entered:
   позиция = target, missed_streak 0, day_started_at = D = day_clock.next_midnight(at, tz)
   (Ш2: D из at события, не из payload). До 04:00 даты D окно not_active.
@@ -107,7 +118,8 @@ DataError или IntegrityError → откат только этого savepoint
 kind и именем класса ошибки (без payload и pid), пропуск, checkpoint pid сдвигается на id
 события — одно битое событие не останавливает проектор. Другие SQLAlchemyError — откат
 всей пачки, как раньше.
-participant_events только читается; at и payload читаются для day_entered и restart_paid;
+participant_events только читается; at и payload читаются для day_entered, restart_paid и
+revive_by_author;
 payload — для day_report_submitted, life_op, day_closed и tz_set; в лог не идут.
 pause_budgets (0018) — только SELECT restart_no и UPSERT в restart_paid.
 author_pause_reason и last_seen_publish_epoch не трогаются.
@@ -145,7 +157,7 @@ logger = logging.getLogger("app.projector")
 BATCH_SIZE = 500
 POLL_SECONDS = 1.0
 RETRY_SECONDS = 5.0
-PROJECTOR_VERSION = 6
+PROJECTOR_VERSION = 7
 PHASE_PRE_REGISTERED = "pre_registered"
 PHASE_ONBOARDING = "onboarding"
 # Пишет POST /miniapp/v1/day/test-enter (app/routers/day.py) под замком participant:pid.
@@ -160,6 +172,8 @@ EVENT_KIND_DAY_CLOSED = "day_closed"
 EVENT_KIND_TZ_SET = "tz_set"
 # Рестарт по промокоду из block_lives (api-sleep-1b, Р-20); писатель — бот (T6b, позже).
 EVENT_KIND_RESTART_PAID = "restart_paid"
+# revive из block_lives (api-revive-1, Р-20); писатель — бот (bot-revive-1, позже).
+EVENT_KIND_REVIVE_BY_AUTHOR = "revive_by_author"
 PHASE_SLEEPING = "sleeping"
 DAY_CLOSED_OUTCOMES = ("came", "silent")
 # life_op: единственные допустимые delta и reason (life-ops-a §7, ревью #111, Н3).
@@ -412,6 +426,30 @@ _REISSUE_DAY = text(
     """
 )
 
+# revive_by_author: снять block_lives, lives из payload, фаза по Р2. Позиция — в reissue_day.
+_APPLY_REVIVE = text(
+    """
+    UPDATE participant_state
+    SET lives = :lives,
+        status_flags = CAST(:flags AS text[]),
+        lifecycle_phase = :phase,
+        updated_at = now(),
+        projector_version = :version
+    WHERE pid = :pid
+      AND 'block_lives' = ANY(coalesce(status_flags, CAST('{}' AS text[])))
+      AND stage_no = :s
+    RETURNING pid
+    """
+)
+
+_SELECT_REVIVE_STATE = text(
+    """
+    SELECT lifecycle_phase, status_flags, stage_no, module_no, day_no, tz
+    FROM participant_state
+    WHERE pid = :pid
+    """
+)
+
 _SELECT_RESTART_NO = text("SELECT restart_no FROM pause_budgets WHERE pid = :pid")
 
 # Бюджет пауз (0018): дословно по docstring миграции.
@@ -627,6 +665,30 @@ def tz_from_payload(payload: Any) -> str | None:
     except (ZoneInfoNotFoundError, ValueError, OSError):
         return None
     return tz
+
+
+def revive_from_payload(payload: Any) -> tuple[tuple[int, int, int], int] | None:
+    """((stage_no, module_no, day_no), lives_returned) из payload revive_by_author или None.
+
+    target — dict; каждое поле — int (не bool) ≥ 1; lives_returned — int (не bool) ≥ 0.
+    Лишние ключи игнорируются.
+    """
+    data = _payload_dict(payload)
+    if data is None:
+        return None
+    target = data.get("target")
+    if not isinstance(target, dict):
+        return None
+    values: list[int] = []
+    for field in _POSITION_FIELDS:
+        value = _int_value(target.get(field))
+        if value is None or value < 1:
+            return None
+        values.append(value)
+    lives_returned = _int_value(data.get("lives_returned"))
+    if lives_returned is None or lives_returned < 0:
+        return None
+    return (values[0], values[1], values[2]), lives_returned
 
 
 def _apply_first_consent(conn: Connection, event_id: int, pid: uuid.UUID, kind: str) -> bool:
@@ -894,6 +956,53 @@ def _apply_restart_paid(
     return True
 
 
+def _apply_revive_by_author(
+    conn: Connection,
+    event_id: int,
+    pid: uuid.UUID,
+    kind: str,
+    at: datetime | None,
+    payload: Any,
+) -> bool:
+    parsed = revive_from_payload(payload)
+    if parsed is None or at is None:
+        _skip(event_id, kind, "bad payload")
+        return False
+    target, lives_returned = parsed
+    row = conn.execute(_SELECT_REVIVE_STATE, {"pid": pid}).first()
+    if row is None:
+        _skip(event_id, kind, "no state")
+        return False
+    phase, status_flags, stage_no, module_no, day_no, tz = row
+    flag_list = list(status_flags or ())
+    if FLAG_BLOCK_LIVES not in flag_list or stage_no is None:
+        _skip(event_id, kind, "revive: not blocked or no position")
+        return False
+    if target[0] != stage_no:
+        _skip(event_id, kind, "revive: other stage")
+        return False
+    if (target[1], target[2]) > (module_no, day_no):
+        _skip(event_id, kind, "revive: target ahead")
+        return False
+    flags = [flag for flag in flag_list if flag != FLAG_BLOCK_LIVES]
+    applied = conn.execute(
+        _APPLY_REVIVE,
+        {
+            "pid": pid,
+            "lives": min(MAX_LIVES, 1 + lives_returned),
+            "flags": flags,
+            "phase": phase_for_flags(phase, flags),
+            "s": stage_no,
+            "version": PROJECTOR_VERSION,
+        },
+    ).first()
+    if applied is None:
+        _skip(event_id, kind, "revive: not blocked or no position")
+        return False
+    reissue_day(conn, pid, target, at, tz)
+    return True
+
+
 def _apply_event(
     conn: Connection,
     event_id: int,
@@ -917,6 +1026,8 @@ def _apply_event(
         return _apply_tz_set(conn, event_id, pid, kind, payload)
     if kind == EVENT_KIND_RESTART_PAID:
         return _apply_restart_paid(conn, event_id, pid, kind, at, payload)
+    if kind == EVENT_KIND_REVIVE_BY_AUTHOR:
+        return _apply_revive_by_author(conn, event_id, pid, kind, at, payload)
     _skip(event_id, kind, "unknown kind")
     return False
 
