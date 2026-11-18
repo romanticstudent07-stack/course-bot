@@ -64,7 +64,7 @@ BOT_DENIED_0009: tuple[str, ...] = (
     "SELECT * FROM tg_user_registry",
     "SELECT * FROM participant_state",
     "SELECT missed_streak FROM participant_state",
-    "SELECT id FROM participant_events",
+    "SELECT payload FROM participant_events",
     "DELETE FROM text_registry",
 )
 
