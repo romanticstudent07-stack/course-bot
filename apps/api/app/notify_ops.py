@@ -14,7 +14,7 @@
     пока очередь не кончилась — ждём;
   - после онбординга: ключа очереди нет, но есть событие day_entered с at = D (любой источник);
   - после перевыдачи (третий запуск, api-sleep-1b, Р8): ключа очереди и day_entered нет, но есть
-    событие из REISSUE_KINDS (сейчас restart_paid) с day_clock.next_midnight(at, tz) = D.
+    событие из REISSUE_KINDS (restart_paid, revive_by_author) с day_clock.next_midnight(at, tz) = D.
     Текст — choose_text_reissue (по дате: местная дата active_from(D) = местная дата now →
     «сегодня», иначе «завтра»); для двух старых запусков — choose_text.
 Ключ tasks_open:{pid}:{dsa(D)} — один на день: есть → участник не кандидат.
@@ -89,8 +89,10 @@ TEXT_TOMORROW = "B9.day_tasks_open_tomorrow"
 EVENT_KIND_DAY_ENTERED = "day_entered"
 # Совпадает с app/projector.py (EVENT_KIND_RESTART_PAID); импорта проектора нет.
 EVENT_KIND_RESTART_PAID = "restart_paid"
-# События перевыдачи дня (api-sleep-1b, Р8); T7 и T2 дополнят.
-REISSUE_KINDS = (EVENT_KIND_RESTART_PAID,)
+# Совпадает с app/projector.py (EVENT_KIND_REVIVE_BY_AUTHOR); импорта проектора нет.
+EVENT_KIND_REVIVE_BY_AUTHOR = "revive_by_author"
+# События перевыдачи дня (api-sleep-1b, Р8; api-revive-1); T2 дополнит.
+REISSUE_KINDS = (EVENT_KIND_RESTART_PAID, EVENT_KIND_REVIVE_BY_AUTHOR)
 
 DECISION_SEND = "send"
 DECISION_LATE = "late"

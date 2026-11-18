@@ -97,7 +97,7 @@ def test_tz_from_payload():
 
 # 2. Версия и имя kind (без БД).
 def test_version_and_kind():
-    assert PROJECTOR_VERSION == 6
+    assert PROJECTOR_VERSION == 7
     assert EVENT_KIND_TZ_SET == "tz_set"
 
 
