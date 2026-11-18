@@ -15,14 +15,19 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
   - I2 fsm_participant: pre_registered → onboarding по mini_app_first_consent (6А, D-11);
   - I2 checkpoint_table: participant_state_checkpoints (pid, last_event_id, at).
 
-Виды событий (PROJECTOR_VERSION 7, api-revive-1; выдержки — docs/tasks/life-ops-a.md, раздел 7,
+Виды событий (PROJECTOR_VERSION 8, api-pause-1a; выдержки — docs/tasks/life-ops-a.md, раздел 7,
 docs/tasks/projector-i3-2.md, разделы 3–4 и 7, docs/tasks/api-sleep-1a.md, раздел 4, и
-docs/tasks/api-sleep-1b.md, разделы 4 и 7, docs/tasks/api-revive-1.md, разделы 4 и 7):
+docs/tasks/api-sleep-1b.md, разделы 4 и 7, docs/tasks/api-revive-1.md, разделы 4 и 7,
+docs/tasks/api-pause-1a.md, разделы 2, 4 и 5):
   - mini_app_first_consent — строка состояния, фаза onboarding (без изменений с версии 1);
   - day_entered (iter2-api-2a) — позиция stage_no / module_no / day_no из payload,
     day_started_at = at события, missed_streak = 0; только если позиции ещё нет
     (WHERE day_no IS NULL). 0 строк (позиция уже есть или строки нет) → WARNING, пропуск.
     lifecycle_phase, status_flags и author_pause_reason не трогаются (В21).
+    v8 (api-pause-1a, Р12): в том же SAVEPOINT — строка pause_budgets, если её нет
+    (INSERT … ON CONFLICT (pid) DO NOTHING): остаток 14, cycle_start_at =
+    day_clock.last_midnight(day_clock.active_from(at, tz), tz) — формула бэкфилла 0018,
+    restart_no 0; tz — RETURNING в SQL позиции;
     Граница: каждое из stage_no, module_no, day_no — целое от 1 до MAX_POSITION_VALUE
     (32767, предел smallint); вне границы, не целое или bool → «bad payload», пропуск;
   - day_report_submitted (iter2-api-2b, В18) — missed_streak = 0 при ЛЮБОМ вердикте, только
@@ -84,9 +89,33 @@ docs/tasks/api-sleep-1b.md, разделы 4 и 7, docs/tasks/api-revive-1.md, �
     1 + lives_returned), block_lives снимается, фаза — phase_for_flags (Р2); затем
     reissue_day(target). Роль события не проверяется (как у restart_paid). pause_budgets,
     day_marks, отчёты, рефлексии, life_writeoffs не трогаются. Всё — в SAVEPOINT события.
-  reissue_day(conn, pid, target, at, tz) — внутренняя функция, не событие и не day_entered:
-  позиция = target, missed_streak 0, day_started_at = D = day_clock.next_midnight(at, tz)
-  (Ш2: D из at события, не из payload). До 04:00 даты D окно not_active.
+  - паузы участника (v8, api-pause-1a, Р-6а / Р-20; правила — app/pause_rules.py). Payload:
+    pause_id — int (не bool) ≥ 1; reason — строка из списка; иначе «bad payload». Строка
+    participant_pauses ищется по (id, pid, kind 'user'); статус меняет только UPDATE … WHERE
+    id, pid, kind 'user' и ожидаемый статус (права 0018). Нет строки или не тот статус →
+    WARNING, пропуск. Переходы:
+      pause_approved {pause_id}: requested → approved; at ≥ start_at → cancelled (Р14);
+      pause_rejected {pause_id}: requested → rejected;
+      pause_cancel {pause_id}: requested | approved → cancelled;
+      pause_start_failed {pause_id, reason ∈ pause_rules.REFUSAL_REASONS}: requested |
+        approved → cancelled;
+      pause_started {pause_id}: approved → active. Бюджет — pause_budgets (нет строки → создать
+        тем же SQL, что в day_entered, по первому day_entered), roll_cycle по at (Р9);
+        N = pause_rules.pause_days (плохой период → пропуск); start_refusal (Р15) → cancelled,
+        WARNING «pause_started отклонён: <reason>», флага нет. Иначе: остаток −= N (UPDATE …
+        WHERE остаток ≥ N), stage_no = Этап позиции, restart_no из pause_budgets, флаг
+        pause_user, фаза phase_for_flags (Р4). Повтор — статус уже active → пропуск;
+      pause_ended {pause_id, reason expired | by_participant}: active → ended, ended_at = at;
+        pause_user снимается, фаза phase_for_flags; D: expired — last_midnight(at, tz)
+        (at < planned_end_at → пропуск, Р5), by_participant — next_midnight(at, tz) (Р6);
+        reissue_day(текущая позиция, day_start = D) (Р7); возврат by_participant —
+        pause_rules.refund_days, только если start_at ≥ cycle_start_at после roll_cycle по at,
+        остаток не выше 14 (Р8).
+    Всё — в SAVEPOINT события. Уведомлений (outbox) нет.
+  reissue_day(conn, pid, target, at, tz, day_start=None) — внутренняя функция, не событие и не
+  day_entered: позиция = target, missed_streak 0, day_started_at = D = day_start или
+  day_clock.next_midnight(at, tz) (Ш2: D из at события, не из payload; day_start — паузы v8).
+  До 04:00 даты D окно not_active.
   Порядок в life-ops-c: life_op раньше day_closed (меньший id) — оба видят старый
   day_started_at. Защита от повтора (ревью #111, Н4) — ТОЛЬКО для пары life_op + day_closed:
   после day_closed day_started_at уже другой, и повтор обоих пропускается. Сам по себе
@@ -118,10 +147,12 @@ DataError или IntegrityError → откат только этого savepoint
 kind и именем класса ошибки (без payload и pid), пропуск, checkpoint pid сдвигается на id
 события — одно битое событие не останавливает проектор. Другие SQLAlchemyError — откат
 всей пачки, как раньше.
-participant_events только читается; at и payload читаются для day_entered, restart_paid и
-revive_by_author;
+participant_events только читается; at и payload читаются для day_entered, restart_paid,
+revive_by_author и видов пауз;
 payload — для day_report_submitted, life_op, day_closed и tz_set; в лог не идут.
-pause_budgets (0018) — только SELECT restart_no и UPSERT в restart_paid.
+participant_pauses (0018) — SELECT и UPDATE (status, stage_no, restart_no, ended_at), INSERT нет.
+pause_budgets (0018) — SELECT, INSERT в day_entered и pause_started (ON CONFLICT DO NOTHING),
+UPDATE (остаток, cycle_start_at) в паузах, UPSERT в restart_paid.
 author_pause_reason и last_seen_publish_epoch не трогаются.
 DSN проектора — Settings.projector_dsn(): PROJECTOR_DATABASE_URL → DATABASE_URL → POSTGRES_*
 (B-3a-2; роль app_projector — миграция 0006). DSN не логируется.
@@ -140,14 +171,14 @@ import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
 
-from app import day_clock, life_ops, notify_ops
+from app import day_clock, life_ops, notify_ops, pause_rules
 from app.config import get_settings
 from app.db.models import EVENT_KIND_MINI_APP_FIRST_CONSENT
 from app.db.session import get_engine
@@ -157,7 +188,7 @@ logger = logging.getLogger("app.projector")
 BATCH_SIZE = 500
 POLL_SECONDS = 1.0
 RETRY_SECONDS = 5.0
-PROJECTOR_VERSION = 7
+PROJECTOR_VERSION = 8
 PHASE_PRE_REGISTERED = "pre_registered"
 PHASE_ONBOARDING = "onboarding"
 # Пишет POST /miniapp/v1/day/test-enter (app/routers/day.py) под замком participant:pid.
@@ -174,6 +205,18 @@ EVENT_KIND_TZ_SET = "tz_set"
 EVENT_KIND_RESTART_PAID = "restart_paid"
 # revive из block_lives (api-revive-1, Р-20); писатель — бот (bot-revive-1, позже).
 EVENT_KIND_REVIVE_BY_AUTHOR = "revive_by_author"
+# Паузы участника (api-pause-1a, раздел 5): бот — approved / rejected, API — cancel и
+# ended by_participant, часы T2b — started, start_failed и ended expired.
+EVENT_KIND_PAUSE_APPROVED = "pause_approved"
+EVENT_KIND_PAUSE_REJECTED = "pause_rejected"
+EVENT_KIND_PAUSE_CANCEL = "pause_cancel"
+EVENT_KIND_PAUSE_START_FAILED = "pause_start_failed"
+EVENT_KIND_PAUSE_STARTED = "pause_started"
+EVENT_KIND_PAUSE_ENDED = "pause_ended"
+PAUSE_END_EXPIRED = "expired"
+PAUSE_END_BY_PARTICIPANT = "by_participant"
+PAUSE_END_REASONS = (PAUSE_END_EXPIRED, PAUSE_END_BY_PARTICIPANT)
+FLAG_PAUSE_USER = "pause_user"
 PHASE_SLEEPING = "sleeping"
 DAY_CLOSED_OUTCOMES = ("came", "silent")
 # life_op: единственные допустимые delta и reason (life-ops-a §7, ревью #111, Н3).
@@ -245,7 +288,7 @@ _SET_POSITION = text(
         updated_at = now(),
         projector_version = :version
     WHERE pid = :pid AND day_no IS NULL
-    RETURNING pid
+    RETURNING pid, tz
     """
 )
 
@@ -459,6 +502,125 @@ _UPSERT_PAUSE_BUDGET = text(
     VALUES (:pid, :d, :c, :r) ON CONFLICT (pid) DO UPDATE SET
     days_budget_remaining_annual = EXCLUDED.days_budget_remaining_annual,
     cycle_start_at = EXCLUDED.cycle_start_at, restart_no = EXCLUDED.restart_no
+    """
+)
+
+# Строка бюджета пауз (Р12): остаток 14, restart_no 0 — как бэкфилл 0018; повтор не меняет.
+_INSERT_PAUSE_BUDGET = text(
+    """
+    INSERT INTO pause_budgets (pid, days_budget_remaining_annual, cycle_start_at, restart_no)
+    VALUES (:pid, :d, :c, 0) ON CONFLICT (pid) DO NOTHING
+    """
+)
+
+_SELECT_PAUSE_BUDGET = text(
+    """
+    SELECT days_budget_remaining_annual, cycle_start_at, restart_no
+    FROM pause_budgets
+    WHERE pid = :pid
+    """
+)
+
+# Ленивая смена цикла (Р9) и возврат (Р8): остаток и начало цикла.
+_UPDATE_PAUSE_BUDGET = text(
+    """
+    UPDATE pause_budgets
+    SET days_budget_remaining_annual = :d, cycle_start_at = :c
+    WHERE pid = :pid
+    """
+)
+
+# Списание N при старте паузы (Р8): только если остатка хватает.
+_CHARGE_PAUSE_BUDGET = text(
+    """
+    UPDATE pause_budgets
+    SET days_budget_remaining_annual = days_budget_remaining_annual - :n
+    WHERE pid = :pid AND days_budget_remaining_annual >= :n
+    RETURNING pid
+    """
+)
+
+_SELECT_FIRST_DAY_ENTERED = text(
+    """
+    SELECT at FROM participant_events
+    WHERE pid = :pid AND kind = 'day_entered'
+    ORDER BY id
+    LIMIT 1
+    """
+)
+
+# Строка паузы участника (Р1): только kind 'user'.
+_SELECT_PAUSE = text(
+    """
+    SELECT status, start_at, planned_end_at
+    FROM participant_pauses
+    WHERE id = :id AND pid = :pid AND kind = 'user'
+    """
+)
+
+_SET_PAUSE_STATUS = text(
+    """
+    UPDATE participant_pauses
+    SET status = :to
+    WHERE id = :id AND pid = :pid AND kind = 'user' AND status = :from
+    RETURNING id
+    """
+)
+
+_START_PAUSE = text(
+    """
+    UPDATE participant_pauses
+    SET status = 'active', stage_no = :s, restart_no = :r
+    WHERE id = :id AND pid = :pid AND kind = 'user' AND status = 'approved'
+    RETURNING id
+    """
+)
+
+_END_PAUSE = text(
+    """
+    UPDATE participant_pauses
+    SET status = 'ended', ended_at = :at
+    WHERE id = :id AND pid = :pid AND kind = 'user' AND status = 'active'
+    RETURNING id
+    """
+)
+
+# Пауза Этапа уже взята (Р10): active или ended с тем же (stage_no, restart_no).
+_SELECT_STAGE_TAKEN = text(
+    """
+    SELECT EXISTS (
+        SELECT 1 FROM participant_pauses
+        WHERE pid = :pid AND kind = 'user' AND status IN ('active', 'ended')
+          AND stage_no = :s AND restart_no = :r
+    )
+    """
+)
+
+_SELECT_LAST_PAUSE_END = text(
+    """
+    SELECT max(ended_at) FROM participant_pauses
+    WHERE pid = :pid AND kind = 'user' AND status = 'ended'
+    """
+)
+
+_SELECT_PAUSE_STATE = text(
+    """
+    SELECT lifecycle_phase, status_flags, stage_no, module_no, day_no, tz
+    FROM participant_state
+    WHERE pid = :pid
+    """
+)
+
+# Флаг pause_user и фаза по Р2/Р4. Позиция — в reissue_day.
+_SET_PAUSE_FLAGS = text(
+    """
+    UPDATE participant_state
+    SET status_flags = CAST(:flags AS text[]),
+        lifecycle_phase = :phase,
+        updated_at = now(),
+        projector_version = :version
+    WHERE pid = :pid
+    RETURNING pid
     """
 )
 
@@ -734,7 +896,20 @@ def _apply_day_entered(
     if applied is None:
         _skip(event_id, kind, "position already set or no state")
         return False
+    _insert_pause_budget(conn, pid, at, applied[1])
     return True
+
+
+def _insert_pause_budget(
+    conn: Connection, pid: uuid.UUID, first_day_at: datetime, tz: str | None
+) -> None:
+    """Строка pause_budgets, если её нет (Р12): 14, цикл — формула бэкфилла 0018, restart_no 0."""
+    tz = tz or day_clock.DEFAULT_TZ  # как бэкфилл 0018: нет пояса → Europe/Moscow
+    cycle_start = day_clock.last_midnight(day_clock.active_from(first_day_at, tz), tz)
+    conn.execute(
+        _INSERT_PAUSE_BUDGET,
+        {"pid": pid, "d": pause_rules.BUDGET_DAYS, "c": cycle_start},
+    )
 
 
 def _apply_day_report_submitted(
@@ -894,10 +1069,12 @@ def reissue_day(
     target: tuple[int, int, int],
     at: datetime,
     tz: str | None,
+    day_start: datetime | None = None,
 ) -> datetime:
     """Перевыдача дня (не событие и не day_entered): позиция = target, missed_streak 0,
-    day_started_at = D = day_clock.next_midnight(at, tz). Возвращает D."""
-    started = day_clock.next_midnight(at, tz)
+    day_started_at = D = day_start или day_clock.next_midnight(at, tz) (None — как v7).
+    Возвращает D."""
+    started = day_start if day_start is not None else day_clock.next_midnight(at, tz)
     stage_no, module_no, day_no = target
     conn.execute(
         _REISSUE_DAY,
@@ -1003,6 +1180,260 @@ def _apply_revive_by_author(
     return True
 
 
+def pause_id_from_payload(payload: Any) -> int | None:
+    """payload.pause_id — int (не bool) ≥ 1, или None (битый payload)."""
+    data = _payload_dict(payload)
+    if data is None:
+        return None
+    pause_id = _int_value(data.get("pause_id"))
+    if pause_id is None or pause_id < 1:
+        return None
+    return pause_id
+
+
+def pause_reason_from_payload(payload: Any, allowed: Sequence[str]) -> str | None:
+    """payload.reason из списка allowed или None (битый payload)."""
+    data = _payload_dict(payload)
+    if data is None:
+        return None
+    reason = data.get("reason")
+    if not isinstance(reason, str) or reason not in allowed:
+        return None
+    return reason
+
+
+def _utc(ts: datetime) -> datetime:
+    return ts.astimezone(timezone.utc)
+
+
+def _set_pause_status(
+    conn: Connection,
+    event_id: int,
+    pid: uuid.UUID,
+    kind: str,
+    pause_id: int,
+    allowed_from: Sequence[str],
+    to_status: Callable[[Any], str],
+) -> bool:
+    """Смена статуса строки паузы (Р1): из allowed_from в to_status(row); иначе пропуск."""
+    row = conn.execute(_SELECT_PAUSE, {"id": pause_id, "pid": pid}).first()
+    if row is None:
+        _skip(event_id, kind, "pause: not found")
+        return False
+    if row.status not in allowed_from:
+        _skip(event_id, kind, "pause: status not allowed")
+        return False
+    applied = conn.execute(
+        _SET_PAUSE_STATUS,
+        {"id": pause_id, "pid": pid, "from": row.status, "to": to_status(row)},
+    ).first()
+    if applied is None:
+        _skip(event_id, kind, "pause: status not allowed")
+        return False
+    return True
+
+
+def _apply_pause_approved(
+    conn: Connection,
+    event_id: int,
+    pid: uuid.UUID,
+    kind: str,
+    at: datetime | None,
+    payload: Any,
+) -> bool:
+    pause_id = pause_id_from_payload(payload)
+    if pause_id is None or at is None:
+        _skip(event_id, kind, "bad payload")
+        return False
+
+    def _to(row: Any) -> str:
+        # Р14: одобрение после start_at — заявка сгорает.
+        return "cancelled" if _utc(at) >= _utc(row.start_at) else "approved"
+
+    return _set_pause_status(conn, event_id, pid, kind, pause_id, ("requested",), _to)
+
+
+def _apply_pause_simple(
+    conn: Connection,
+    event_id: int,
+    pid: uuid.UUID,
+    kind: str,
+    payload: Any,
+    allowed_from: Sequence[str],
+    to: str,
+    reasons: Sequence[str] | None = None,
+) -> bool:
+    pause_id = pause_id_from_payload(payload)
+    if pause_id is None or (
+        reasons is not None and pause_reason_from_payload(payload, reasons) is None
+    ):
+        _skip(event_id, kind, "bad payload")
+        return False
+    return _set_pause_status(conn, event_id, pid, kind, pause_id, allowed_from, lambda _r: to)
+
+
+def _pause_budget(
+    conn: Connection, pid: uuid.UUID, at: datetime, tz: str | None
+) -> tuple[datetime, int, int]:
+    """(cycle_start_at, остаток, restart_no) после ленивой смены цикла по at (Р9).
+
+    Строки нет → создать тем же SQL, что в day_entered (Р12, запасной путь): по первому
+    day_entered, а без него — по at события. Смена цикла записывается сразу.
+    """
+    row = conn.execute(_SELECT_PAUSE_BUDGET, {"pid": pid}).first()
+    if row is None:
+        first_at = conn.execute(_SELECT_FIRST_DAY_ENTERED, {"pid": pid}).scalar()
+        _insert_pause_budget(conn, pid, first_at if first_at is not None else at, tz)
+        row = conn.execute(_SELECT_PAUSE_BUDGET, {"pid": pid}).one()
+    days_left, cycle_start, restart_no = row
+    new_start, new_left = pause_rules.roll_cycle(cycle_start, days_left, at, tz)
+    if _utc(new_start) != _utc(cycle_start) or new_left != days_left:
+        conn.execute(_UPDATE_PAUSE_BUDGET, {"pid": pid, "d": new_left, "c": new_start})
+    return new_start, new_left, restart_no
+
+
+def _apply_pause_started(
+    conn: Connection,
+    event_id: int,
+    pid: uuid.UUID,
+    kind: str,
+    at: datetime | None,
+    payload: Any,
+) -> bool:
+    pause_id = pause_id_from_payload(payload)
+    if pause_id is None or at is None:
+        _skip(event_id, kind, "bad payload")
+        return False
+    pause = conn.execute(_SELECT_PAUSE, {"id": pause_id, "pid": pid}).first()
+    if pause is None:
+        _skip(event_id, kind, "pause: not found")
+        return False
+    if pause.status != "approved":
+        _skip(event_id, kind, "pause: status not allowed")
+        return False
+    state = conn.execute(_SELECT_PAUSE_STATE, {"pid": pid}).first()
+    if state is None:
+        _skip(event_id, kind, "no state")
+        return False
+    phase, status_flags, stage_no, _module_no, day_no, tz = state
+    try:
+        days = pause_rules.pause_days(pause.start_at, pause.planned_end_at, tz)
+    except ValueError:
+        _skip(event_id, kind, "pause: bad period")
+        return False
+    _cycle_start, days_left, restart_no = _pause_budget(conn, pid, at, tz)
+    stage_taken = bool(
+        conn.execute(
+            _SELECT_STAGE_TAKEN, {"pid": pid, "s": stage_no, "r": restart_no}
+        ).scalar()
+    )
+    last_ended_at = conn.execute(_SELECT_LAST_PAUSE_END, {"pid": pid}).scalar()
+    flag_list = list(status_flags or ())
+    refusal = pause_rules.start_refusal(
+        status=pause.status,
+        flags=flag_list,
+        phase=phase,
+        day_no=day_no,
+        days=days,
+        days_left=days_left,
+        stage_taken=stage_taken,
+        last_ended_at=last_ended_at,
+        start_at=pause.start_at,
+    )
+    if refusal is None:
+        charged = conn.execute(_CHARGE_PAUSE_BUDGET, {"pid": pid, "n": days}).first()
+        if charged is None:
+            refusal = pause_rules.REASON_NO_BUDGET
+    if refusal is not None:
+        # Р15: правило нарушено → заявка сгорает, флага нет.
+        conn.execute(
+            _SET_PAUSE_STATUS,
+            {"id": pause_id, "pid": pid, "from": "approved", "to": "cancelled"},
+        )
+        logger.warning(
+            "projector: pause_started отклонён: %s, event id=%s", refusal, event_id
+        )
+        return True
+    conn.execute(
+        _START_PAUSE, {"id": pause_id, "pid": pid, "s": stage_no, "r": restart_no}
+    )
+    flags = flag_list if FLAG_PAUSE_USER in flag_list else [*flag_list, FLAG_PAUSE_USER]
+    conn.execute(
+        _SET_PAUSE_FLAGS,
+        {
+            "pid": pid,
+            "flags": flags,
+            "phase": phase_for_flags(phase, flags),
+            "version": PROJECTOR_VERSION,
+        },
+    )
+    return True
+
+
+def _apply_pause_ended(
+    conn: Connection,
+    event_id: int,
+    pid: uuid.UUID,
+    kind: str,
+    at: datetime | None,
+    payload: Any,
+) -> bool:
+    pause_id = pause_id_from_payload(payload)
+    reason = pause_reason_from_payload(payload, PAUSE_END_REASONS)
+    if pause_id is None or reason is None or at is None:
+        _skip(event_id, kind, "bad payload")
+        return False
+    pause = conn.execute(_SELECT_PAUSE, {"id": pause_id, "pid": pid}).first()
+    if pause is None:
+        _skip(event_id, kind, "pause: not found")
+        return False
+    if pause.status != "active":
+        _skip(event_id, kind, "pause: status not allowed")
+        return False
+    state = conn.execute(_SELECT_PAUSE_STATE, {"pid": pid}).first()
+    if state is None:
+        _skip(event_id, kind, "no state")
+        return False
+    phase, status_flags, stage_no, module_no, day_no, tz = state
+    if stage_no is None or module_no is None or day_no is None:
+        _skip(event_id, kind, "pause: no position")
+        return False
+    if reason == PAUSE_END_EXPIRED:
+        if _utc(at) < _utc(pause.planned_end_at):
+            _skip(event_id, kind, "pause: expired before planned end")
+            return False
+        day_start = day_clock.last_midnight(at, tz)  # Р5
+    else:
+        day_start = day_clock.next_midnight(at, tz)  # Р6
+    conn.execute(_END_PAUSE, {"id": pause_id, "pid": pid, "at": at})
+    flags = [flag for flag in (status_flags or ()) if flag != FLAG_PAUSE_USER]
+    conn.execute(
+        _SET_PAUSE_FLAGS,
+        {
+            "pid": pid,
+            "flags": flags,
+            "phase": phase_for_flags(phase, flags),
+            "version": PROJECTOR_VERSION,
+        },
+    )
+    reissue_day(conn, pid, (stage_no, module_no, day_no), at, tz, day_start=day_start)  # Р7
+    if reason == PAUSE_END_BY_PARTICIPANT:
+        refund = pause_rules.refund_days(pause.planned_end_at, day_start, tz)
+        if refund > 0:
+            cycle_start, days_left, _restart_no = _pause_budget(conn, pid, at, tz)
+            # Р8: возврат — только за паузу текущего цикла, остаток не выше 14.
+            if _utc(pause.start_at) >= _utc(cycle_start):
+                conn.execute(
+                    _UPDATE_PAUSE_BUDGET,
+                    {
+                        "pid": pid,
+                        "d": min(pause_rules.BUDGET_DAYS, days_left + refund),
+                        "c": cycle_start,
+                    },
+                )
+    return True
+
+
 def _apply_event(
     conn: Connection,
     event_id: int,
@@ -1028,6 +1459,29 @@ def _apply_event(
         return _apply_restart_paid(conn, event_id, pid, kind, at, payload)
     if kind == EVENT_KIND_REVIVE_BY_AUTHOR:
         return _apply_revive_by_author(conn, event_id, pid, kind, at, payload)
+    if kind == EVENT_KIND_PAUSE_APPROVED:
+        return _apply_pause_approved(conn, event_id, pid, kind, at, payload)
+    if kind == EVENT_KIND_PAUSE_REJECTED:
+        return _apply_pause_simple(conn, event_id, pid, kind, payload, ("requested",), "rejected")
+    if kind == EVENT_KIND_PAUSE_CANCEL:
+        return _apply_pause_simple(
+            conn, event_id, pid, kind, payload, ("requested", "approved"), "cancelled"
+        )
+    if kind == EVENT_KIND_PAUSE_START_FAILED:
+        return _apply_pause_simple(
+            conn,
+            event_id,
+            pid,
+            kind,
+            payload,
+            ("requested", "approved"),
+            "cancelled",
+            pause_rules.REFUSAL_REASONS,
+        )
+    if kind == EVENT_KIND_PAUSE_STARTED:
+        return _apply_pause_started(conn, event_id, pid, kind, at, payload)
+    if kind == EVENT_KIND_PAUSE_ENDED:
+        return _apply_pause_ended(conn, event_id, pid, kind, at, payload)
     _skip(event_id, kind, "unknown kind")
     return False
 
