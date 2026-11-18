@@ -1,7 +1,7 @@
-"""Тесты рестарта по промокоду (bot-restart-1, §9): подделка соединения, Bot API перехвачен; без сети и Postgres."""
+"""Тесты рестарта по промокоду (bot-restart-1 §9, bot-restart-2 §9): подделка соединения, Bot API перехвачен; без сети и Postgres."""
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from uuid import UUID
 
@@ -10,7 +10,7 @@ from aiogram import Bot
 from aiogram.methods import AnswerCallbackQuery, EditMessageReplyMarkup, EditMessageText, GetMe, SendMessage
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
-from bot import access, access_handlers, restart, texts
+from bot import access, access_handlers, restart, restart_handlers, texts
 from bot.app import build_dispatcher
 from bot.config import BotConfig
 from bot.life import LOCK
@@ -22,6 +22,8 @@ PID = UUID("00000000-0000-0000-0000-000000004807")
 WORD = "Рестарт<b>&слово"
 NOW = datetime(2026, 11, 17, 21, 0, tzinfo=timezone.utc)  # граница суток: в МСК уже 18.11
 KEY_TODAY = f"restart_req:{PID}:2026-11-18"
+STALE_DATE = NOW - timedelta(hours=48, seconds=1)
+BOUNDARY_DATE = NOW - timedelta(hours=48)
 
 
 def cfg(**kw) -> BotConfig:
@@ -50,17 +52,26 @@ class _Tx:
         self.conn.pending = {}
 
     async def __aexit__(self, exc_type, exc, tb):
-        self.conn.log.append("rollback" if exc_type else "commit")
-        if not exc_type:
-            self.conn.keys.update(self.conn.pending)
+        if exc_type:
+            self.conn.log.append("rollback")
+            return False
+        if self.conn.fail_commit and self.conn.pending:
+            self.conn.log.append("commit_failed")
+            self.conn.pending = {}
+            raise RuntimeError("commit failed")
+        self.conn.log.append("commit")
+        self.conn.keys.update(self.conn.pending)
         return False
 
 
 class FakeConn:
-    """Ключи idempotency_keys хранятся только после commit (откат их не сохраняет)."""
+    """Ключи idempotency_keys хранятся только после commit (откат их не сохраняет).
 
-    def __init__(self, state=("active", ["block_lives"], STAGE), found=True, keys=None):
-        self.state, self.found = state, found
+    fail_commit=True: COMMIT транзакции, записавшей ключи, падает (RuntimeError), ключи не сохраняются.
+    """
+
+    def __init__(self, state=("active", ["block_lives"], STAGE), found=True, keys=None, fail_commit=False):
+        self.state, self.found, self.fail_commit = state, found, fail_commit
         self.keys, self.pending, self.log, self.closed = dict(keys or {}), {}, [], False
 
     async def execute(self, sql, params=None):
@@ -127,17 +138,18 @@ def _private(text=WORD):
                                                 chat=Chat(id=USER, type="private"), from_user=user, text=text))
 
 
-def _button(action="g", user=ADMIN, chat=GROUP, thread=TOPIC, mid=MID):
+def _button(action="g", user=ADMIN, chat=GROUP, thread=TOPIC, mid=MID, date=NOW):
     return Update(update_id=2, callback_query=CallbackQuery(
         id="cb1", from_user=User(id=user, is_bot=False, first_name="A"), chat_instance="ci",
         data=f"rst:{action}:{SHORT}",
         message=Message(message_id=mid, chat=Chat(id=chat, type="supergroup"), message_thread_id=thread,
-                        text="заявка", date=datetime.now())))
+                        text="заявка", date=date)))
 
 
 @pytest.fixture(autouse=True)
 def _fixed_now(monkeypatch):
     monkeypatch.setattr(access_handlers, "_now", lambda: NOW)
+    monkeypatch.setattr(restart_handlers, "_now", lambda: NOW)
 
 
 def _sends(calls):
@@ -214,6 +226,46 @@ def test_request_send_fail_rollback_try_later():
     assert conn.log[-1] == "rollback" and conn.keys == {}
 
 
+# --- слово через clean_word (bot-restart-2) ---
+
+def _assert_word_silent(text):
+    conn = FakeConn()
+    calls = asyncio.run(_feed(cfg(), _private(text), conn))
+    assert _sends(calls) == []
+    assert restart.FIND_BY_TG not in conn.sqls() and restart.REQUEST_KEY not in conn.sqls()
+    assert conn.keys == {}
+
+
+def test_word_too_long_silent():
+    _assert_word_silent("я" * 65)
+
+
+def test_word_blank_silent():
+    _assert_word_silent("   ")
+
+
+def test_word_64_ok():
+    conn = FakeConn()
+    calls = asyncio.run(_feed(cfg(), _private("я" * 64), conn))
+    sends = _sends(calls)
+    assert [(s.chat_id, s.message_thread_id) for s in sends][0] == (GROUP, TOPIC)
+    assert "я" * 64 in sends[0].text
+    assert (sends[-1].chat_id, sends[-1].text) == (USER, texts.RESTART_REQUEST_SENT)
+    assert conn.keys == {KEY_TODAY: None}
+
+
+# --- сбой COMMIT после отправки в тему (bot-restart-2) ---
+
+def test_commit_fails_after_send():
+    conn = FakeConn(fail_commit=True)
+    calls = asyncio.run(_feed(cfg(), _private(), conn))
+    sends = _sends(calls)
+    assert len(sends) == 2
+    assert (sends[0].chat_id, sends[0].message_thread_id) == (GROUP, TOPIC)
+    assert (sends[1].chat_id, sends[1].text) == (USER, texts.RESTART_TRY_LATER)
+    assert "commit_failed" in conn.log and conn.keys == {}
+
+
 # --- выдача ---
 
 def test_grant_order_payload_actor_no_returning():
@@ -257,6 +309,55 @@ def test_grant_tombstoned_refused():
     calls = asyncio.run(_feed(cfg(), _button("g"), conn))
     assert conn.sqls() == [restart.FIND_BY_SHORT]
     _assert_refused(conn, calls, texts.RESTART_REFUSED_STATE)
+
+
+def test_double_grant_already():
+    mid = 4904
+    conn = FakeConn()
+    calls = asyncio.run(_feed(cfg(), _button("g", mid=mid), conn))
+    assert [(s.chat_id, s.text) for s in _sends(calls)] == [(USER, texts.RESTART_GRANTED)]
+    calls = asyncio.run(_feed(cfg(), _button("g", mid=mid), conn))
+    assert conn.sqls().count(restart.EVENT) == 1
+    assert conn.keys == {f"restart:{PID}:{mid}": "granted"}
+    assert [(s.chat_id, s.text) for s in _sends(calls)] == [
+        (GROUP, texts.RESTART_ALREADY.format(result=texts.RESTART_RESULT_GRANTED))]
+    marks = [c for c in calls if isinstance(c, EditMessageReplyMarkup)]
+    assert len(marks) == 1 and marks[0].reply_markup is None
+
+
+# --- заявка старше 48 ч (bot-restart-2) ---
+
+def _assert_stale(calls, conn):
+    assert conn.log == []
+    edits = [c for c in calls if isinstance(c, EditMessageText)]
+    assert len(edits) == 1 and edits[0].reply_markup is None and texts.RESTART_STALE in edits[0].text
+    assert _sends(calls) == []
+    answers = [c for c in calls if isinstance(c, AnswerCallbackQuery)]
+    assert len(answers) == 1 and answers[0].text is None
+
+
+def test_stale_grant_no_db():
+    conn = FakeConn()
+    calls = asyncio.run(_feed(cfg(), _button("g", mid=4901, date=STALE_DATE), conn))
+    _assert_stale(calls, conn)
+
+
+def test_stale_deny_no_db():
+    conn = FakeConn()
+    calls = asyncio.run(_feed(cfg(), _button("d", mid=4902, date=STALE_DATE), conn))
+    _assert_stale(calls, conn)
+
+
+def test_stale_boundary_48h_valid():
+    conn = FakeConn()
+    calls = asyncio.run(_feed(cfg(), _button("g", mid=4903, date=BOUNDARY_DATE), conn))
+    assert restart.EVENT in conn.sqls()
+    assert [(s.chat_id, s.text) for s in _sends(calls)] == [(USER, texts.RESTART_GRANTED)]
+
+
+def test_is_stale_none():
+    assert restart.is_stale(None, NOW) is True
+    assert restart.is_stale(0, NOW) is True
 
 
 # --- запрет ---

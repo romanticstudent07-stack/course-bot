@@ -225,3 +225,5 @@ RESTART_RESULT_DENIED = "запрещён"
 RESTART_REFUSED_PHASE = "[заглушка] Отказ: в этой фазе рестарт выдать нельзя."
 # bot.restart_refused_state
 RESTART_REFUSED_STATE = "[заглушка] Отказ: участник не найден или нет блока жизней."
+# bot.restart_stale
+RESTART_STALE = "[заглушка] Заявка старше 48 ч — решение не записано."
