@@ -81,7 +81,7 @@ def test_position_from_payload():
     assert position_from_payload({"stage_no": 0, "module_no": 1, "day_no": 1}) is None
     assert position_from_payload({"stage_no": True, "module_no": 1, "day_no": 1}) is None
     assert position_from_payload("not json") is None
-    assert PROJECTOR_VERSION == 6  # api-sleep-1b
+    assert PROJECTOR_VERSION == 7  # api-revive-1
 
 
 def test_position_upper_bound():
