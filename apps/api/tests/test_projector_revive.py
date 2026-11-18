@@ -79,7 +79,7 @@ def test_v9_revive_from_payload():
 # V11: kind совпадает в notify_ops и projector; REISSUE_KINDS — оба вида перевыдачи.
 def test_v11_kind_shared():
     assert notify_ops.EVENT_KIND_REVIVE_BY_AUTHOR == projector.EVENT_KIND_REVIVE_BY_AUTHOR
-    assert notify_ops.REISSUE_KINDS == ("restart_paid", "revive_by_author")
+    assert notify_ops.REISSUE_KINDS == ("restart_paid", "revive_by_author", "pause_ended")
 
 
 # ---------------------------------- с БД ----------------------------------

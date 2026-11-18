@@ -18,7 +18,12 @@
                                 ttl 3650 days, ladder-1; пишет notify_ladder);
   ladder_day2:{pid}:{dsa}     — алерт Автору «день 2 проблемы» (ladder_day2_alert) к дню с этим
                                 day_started_at записан (kind ladder_day2, ttl 3650 days,
-                                clocks-1; пишет notify_ladder).
+                                clocks-1; пишет notify_ladder);
+  pause_start:{pid}:{pause_id} — заявка паузы обработана часами в start_at: pause_started или
+                                pause_start_failed (взаимоисключающие; kind pause_start,
+                                ttl 3650 days, api-pause-1b; пишет pause_ops);
+  pause_end:{pid}:{pause_id}  — пауза закончена по сроку, pause_ended expired записан
+                                (kind pause_end, ttl 3650 days, api-pause-1b; пишет pause_ops).
 
 dsa (Ш4) — day_started_at в UTC, ISO 8601: ts.astimezone(timezone.utc).isoformat().
 Один и тот же момент в любом поясе даёт один и тот же ключ; naive datetime → ValueError
@@ -41,6 +46,8 @@ KIND_TASKS_OPEN = "tasks_open"
 KIND_NOON = "noon"
 KIND_LADDER = "ladder"
 KIND_LADDER_DAY2 = "ladder_day2"
+KIND_PAUSE_START = "pause_start"
+KIND_PAUSE_END = "pause_end"
 
 TTL_DAY_ENTER = "3650 days"
 TTL_DAY_DONE = "3650 days"
@@ -51,6 +58,8 @@ TTL_TASKS_OPEN = "3650 days"
 TTL_NOON = "3650 days"
 TTL_LADDER = "3650 days"
 TTL_LADDER_DAY2 = "3650 days"
+TTL_PAUSE_START = "3650 days"
+TTL_PAUSE_END = "3650 days"
 
 LADDER_STEPS = ("plus1h", "minus2h", "minus30m")
 
@@ -64,6 +73,8 @@ TTL_BY_KIND: dict[str, str] = {
     KIND_NOON: TTL_NOON,
     KIND_LADDER: TTL_LADDER,
     KIND_LADDER_DAY2: TTL_LADDER_DAY2,
+    KIND_PAUSE_START: TTL_PAUSE_START,
+    KIND_PAUSE_END: TTL_PAUSE_END,
 }
 
 
@@ -113,3 +124,13 @@ def key_ladder(pid: uuid.UUID | str, started_at: datetime, step: str) -> str:
 def key_ladder_day2(pid: uuid.UUID | str, started_at: datetime) -> str:
     """Алерт «день 2 проблемы» к дню с этим day_started_at (clocks-1)."""
     return f"{KIND_LADDER_DAY2}:{pid}:{dsa(started_at)}"
+
+
+def key_pause_start(pid: uuid.UUID | str, pause_id: int | str) -> str:
+    """Старт заявки паузы обработан (pause_started или pause_start_failed; api-pause-1b)."""
+    return f"{KIND_PAUSE_START}:{pid}:{pause_id}"
+
+
+def key_pause_end(pid: uuid.UUID | str, pause_id: int | str) -> str:
+    """Пауза закончена по сроку (pause_ended expired; api-pause-1b)."""
+    return f"{KIND_PAUSE_END}:{pid}:{pause_id}"
