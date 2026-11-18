@@ -30,15 +30,15 @@ Hash main: b6cee31 · Область: API · Одна карточка. Оцен
   Часы пишут ключ и событие одним commit под тем же замком — окна гонки нет. life_ops._PENDING_EVENT
   не использовать: у app_api нет прав на participant_events.pid и checkpoints. [ШТАБ-тех, З2 п.2]
 - Д9 now — зависимость FastAPI get_now() → day_clock.utcnow(); тесты подставляют своё время. [ШТАБ-тех, З2 п.6]
-- Д10 C0/C1 (RECONSENT_REQUIRED) не проверяем: пауза — не новые ПДн; сверка с day.py — долг ШТАБа к T5.
-  [ШТАБ-тех, З2 п.5]
+- Д10 C0/C1 (RECONSENT_REQUIRED) не проверяем: пауза — не новые ПДн; сверено ШТАБом по day.py b6cee31:
+  C0/C1 проверяет только test-enter; marks и report/submit — нет; пауза — как marks. [ШТАБ-тех, З2 п.5]
 
 ## 3. Права app_api (проверено ШТАБом по коду b6cee31; миграции не открывать)
 - 0018: participant_pauses — INSERT (pid, kind, status, start_at, planned_end_at, client_op_id),
   SELECT всех колонок, USAGE participant_pauses_id_seq; pause_budgets — SELECT. UPDATE и DELETE нет.
 - 0006: participant_events — INSERT, SELECT (id), USAGE participant_events_id_seq (RETURNING id работает).
 - 0007: idempotency_keys — SELECT, INSERT.
-- participant_state — SELECT колонок из выписки §5.3 (сверяет ШТАБ вместе с выпиской).
+- participant_state — SELECT (член participant_state_reader, 0006); колонки — §5.3.
 
 ## 4. Контракт (выдержка api-pause-1a §5 и решения З2)
 Ошибки — формат errors.py {code, message, details?}. Общие: 401 initData; 404 PARTICIPANT_NOT_FOUND
@@ -52,6 +52,7 @@ GET /pause → 200, ничего не пишет, замок не берёт:
 - cycle_ends_at — pause_rules.anniversary(cycle_start после roll_cycle, tz); строки бюджета нет → null.
 - refusal: есть открытая или активная строка → "already_open" (только в GET); иначе
   start_refusal(days = 1, start_at = завтра 00:00); None → can_request true.
+  "already_open" — константа роутера, только для GET; в REFUSAL_REASONS не добавлять (решил ШТАБ, К-5).
 POST /pause/request — X-Client-Op-Id (UUID4, не-v4 → 422), тело {"days": 1..7} (вне диапазона → 422,
 лишние поля отбрасываются) → 201 {"pause": объект как в GET}:
   1) active_pid_locked;
@@ -91,13 +92,25 @@ cancel/resume после того, как проектор применил со
     VALUES (:pid, 'user', 'requested', :start, :end, :op)
     ON CONFLICT (pid, client_op_id) DO NOTHING RETURNING id
   restart для stage_taken — restart_no из pause_budgets; строки нет → 0.
-5.3 ВЫПИСКА ШТАБА (вставить до промпта, без неё промпт не давать): SELECT состояния, который часы
-  pause_ops.py передают в start_refusal (flags, phase, day_no, этап позиции, tz), и форма INSERT
-  participant_events (колонки, приведение payload, actor, actor_role, at) для событий от участника.
+5.3 Выписка ШТАБа из кода b6cee31 (pause_ops.py _STATE, _INSERT_EVENT; day.py ACTOR_PARTICIPANT):
+    SELECT lifecycle_phase, day_no, tz, status_flags, stage_no
+    FROM participant_state WHERE pid = :pid
+  Строки нет → в start_refusal flags=None, phase=None, day_no=None (откажет по state), tz=None.
+  Аргументы start_refusal — как в pause_ops._plan_start: flags=list(status_flags or ()),
+  phase=lifecycle_phase, day_no, days, days_left, stage_taken (stage = stage_no состояния,
+  restart = restart_no бюджета или 0), last_ended_at, start_at; status="approved".
+  Права: app_api — член participant_state_reader (0006), SELECT всей таблицы.
+    INSERT INTO participant_events (pid, kind, payload, actor, actor_role, at)
+    VALUES (:pid, :kind, CAST(:payload AS jsonb), 'participant', 'participant', :at)
+  at = now из get_now() (ОБЯЗАТЕЛЬНО: проектор считает D выхода по at события — api-pause-1a Р6);
+  payload = json.dumps({...}); RETURNING не нужен.
 5.4 Ключи:
     SELECT 1 FROM idempotency_keys WHERE key = :key
-    INSERT INTO idempotency_keys (key, kind, result_ref) VALUES (:key, :kind, :ref)
-    ON CONFLICT (key) DO NOTHING RETURNING key
+    INSERT INTO idempotency_keys (key, kind, ttl, result_ref)
+    VALUES (:key, :kind, CAST(:ttl AS interval), :ref)
+    ON CONFLICT DO NOTHING RETURNING key
+  ttl = day_keys.TTL_BY_KIND[kind] (обязателен: без него DEFAULT 1 hour — 0007; образец —
+  pause_ops._INSERT_KEY, day.py _INSERT_KEY_SQL).
   result_ref = str(pause_id); payload события — json.dumps({"pause_id": id, ...}).
 
 ## 6. Файлы
@@ -149,7 +162,7 @@ UPDATE участников и pause_budgets нет; ключ и событие 
 ## 11. Вне задачи
 - Статус паузы на /day/current — не делать (ШТАБ З2 п.4, SHTAB 3-Б: day.py 43,8 КБ); T5 берёт его из GET /pause.
 - Бот: одобрение, уведомления, кнопки — T4 bot-pause-1. Экран Mini App — T5.
-- kind author и shadow, /pause_grant, /unpause_user — Панель. RECONSENT — долг ШТАБа к T5.
+- kind author и shadow, /pause_grant, /unpause_user — Панель.
 - packages/shared (там только README.md и .gitkeep) не трогать.
 
 ## 12. Канон и решения
@@ -169,3 +182,4 @@ DESIGNER.md, PACK.md, STATE.md, AGENT-BRIEF.md, DECISIONS.md, CANON-CHECK.md, ap
 pause-2-check.md, pause_rules.py, 0018, support.py, rate_limit.py, participant_lock.py, errors.py — целиком.
 Сверх списка (п.4 нарушен: 5 вместо 3): main.py, day_keys.py, pause_ops.py, test_rate_limit.py, test_api.py.
 docs/architecture/** не открывался.
+З3: правки ШТАБа (5.3, 5.4, Д10, refusal) — по коду, сверенному ШТАБом; новых файлов окно не читало.
