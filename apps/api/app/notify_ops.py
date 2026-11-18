@@ -14,7 +14,9 @@
     пока очередь не кончилась — ждём;
   - после онбординга: ключа очереди нет, но есть событие day_entered с at = D (любой источник);
   - после перевыдачи (третий запуск, api-sleep-1b, Р8): ключа очереди и day_entered нет, но есть
-    событие из REISSUE_KINDS (restart_paid, revive_by_author) с day_clock.next_midnight(at, tz) = D.
+    событие из REISSUE_KINDS (restart_paid, revive_by_author, pause_ended) с ожидаемым D:
+    day_clock.next_midnight(at, tz) = D; для pause_ended с reason expired (api-pause-1b, Ч9; Р5) —
+    day_clock.last_midnight(at, tz) = D (D в payload нет, Ш2: D из at события).
     Текст — choose_text_reissue (по дате: местная дата active_from(D) = местная дата now →
     «сегодня», иначе «завтра»); для двух старых запусков — choose_text.
 Ключ tasks_open:{pid}:{dsa(D)} — один на день: есть → участник не кандидат.
@@ -91,8 +93,11 @@ EVENT_KIND_DAY_ENTERED = "day_entered"
 EVENT_KIND_RESTART_PAID = "restart_paid"
 # Совпадает с app/projector.py (EVENT_KIND_REVIVE_BY_AUTHOR); импорта проектора нет.
 EVENT_KIND_REVIVE_BY_AUTHOR = "revive_by_author"
-# События перевыдачи дня (api-sleep-1b, Р8; api-revive-1); T2 дополнит.
-REISSUE_KINDS = (EVENT_KIND_RESTART_PAID, EVENT_KIND_REVIVE_BY_AUTHOR)
+# Совпадает с app/projector.py (EVENT_KIND_PAUSE_ENDED, PAUSE_END_EXPIRED); импорта проектора нет.
+EVENT_KIND_PAUSE_ENDED = "pause_ended"
+PAUSE_END_EXPIRED = "expired"
+# События перевыдачи дня (api-sleep-1b, Р8; api-revive-1; api-pause-1b, Ч9).
+REISSUE_KINDS = (EVENT_KIND_RESTART_PAID, EVENT_KIND_REVIVE_BY_AUTHOR, EVENT_KIND_PAUSE_ENDED)
 
 DECISION_SEND = "send"
 DECISION_LATE = "late"
@@ -153,16 +158,18 @@ _ENTERED_ALL = text(
     """
 )
 
+# kind и payload.reason — ветка ожидаемого D (Ч9): pause_ended expired → last_midnight.
 _REISSUE_ALL = text(
     """
-    SELECT pid, at
+    SELECT pid, at, kind, payload ->> 'reason' AS reason
     FROM participant_events
     WHERE kind = ANY(CAST(:kinds AS text[])) AND pid = ANY(CAST(:pids AS uuid[]))
     """
 )
 
 _REISSUE_ONE = text(
-    "SELECT at FROM participant_events WHERE kind = ANY(CAST(:kinds AS text[])) AND pid = :pid"
+    "SELECT at, kind, payload ->> 'reason' AS reason FROM participant_events "
+    "WHERE kind = ANY(CAST(:kinds AS text[])) AND pid = :pid"
 )
 
 _HAS_KEY = text("SELECT 1 FROM idempotency_keys WHERE key = :key LIMIT 1")
@@ -232,12 +239,36 @@ def choose_text_reissue(started: datetime, tz: str | None, now: datetime) -> str
     return TEXT_TOMORROW
 
 
-def is_reissue(started: datetime, tz: str | None, ats: Any) -> bool:
-    """Есть at события из REISSUE_KINDS, для которого next_midnight(at, tz) = started."""
+def is_reissue(started: datetime, tz: str | None, ats: Any, expired_ats: Any = ()) -> bool:
+    """Есть at события из REISSUE_KINDS с ожидаемым D = started.
+
+    ats — next_midnight(at, tz) = started (restart_paid, revive_by_author, pause_ended
+    by_participant); expired_ats — pause_ended reason expired: last_midnight(at, tz) = started
+    (Ч9, Р5).
+    """
     return any(
         at is not None and _utc(day_clock.next_midnight(at, tz)) == _utc(started)
         for at in ats
+    ) or any(
+        at is not None and _utc(day_clock.last_midnight(at, tz)) == _utc(started)
+        for at in expired_ats
     )
+
+
+def is_expired_end(kind: str | None, reason: str | None) -> bool:
+    """pause_ended с reason expired — D = last_midnight(at, tz) (Ч9)."""
+    return kind == EVENT_KIND_PAUSE_ENDED and reason == PAUSE_END_EXPIRED
+
+
+def _split_reissue(rows: Any) -> tuple[list[datetime], list[datetime]]:
+    """Строки (at, kind, reason) → (ats для next_midnight, ats для last_midnight)."""
+    ats: list[datetime] = []
+    expired: list[datetime] = []
+    for at, kind, reason in rows:
+        if at is None:
+            continue
+        (expired if is_expired_end(kind, reason) else ats).append(at)
+    return ats, expired
 
 
 def is_late(started: datetime, tz: str | None, now: datetime) -> bool:
@@ -310,17 +341,17 @@ def _candidates(engine: Engine, now: datetime) -> list[uuid.UUID]:
             else []
         )
         conn.rollback()
-    reissue_at: dict[uuid.UUID, list[datetime]] = {}
-    for pid, at in reissue_rows:
-        if at is not None:
-            reissue_at.setdefault(pid, []).append(at)
+    reissue_rows_by_pid: dict[uuid.UUID, list[Any]] = {}
+    for pid, at, kind, reason in reissue_rows:
+        reissue_rows_by_pid.setdefault(pid, []).append((at, kind, reason))
     found: list[uuid.UUID] = []
     for pid, tz, started in rows:
         if key_tasks_open(pid, started) in existing:
             continue
         has_queue = key_day_queue(pid, started) in existing
         entered = any(_same_moment(at, started) for at in entered_at.get(pid, ()))
-        reissued = is_reissue(started, tz, reissue_at.get(pid, ()))
+        ats, expired_ats = _split_reissue(reissue_rows_by_pid.get(pid, ()))
+        reissued = is_reissue(started, tz, ats, expired_ats)
         if decide(pid, started, tz, now, has_queue, entered, reissued) is None:
             continue
         found.append(pid)
@@ -352,7 +383,8 @@ def _plan_detail(
         reissue_rows = conn.execute(
             _REISSUE_ONE, {"kinds": list(REISSUE_KINDS), "pid": pid}
         ).all()
-        reissued = is_reissue(started, row.tz, [r[0] for r in reissue_rows])
+        ats, expired_ats = _split_reissue(reissue_rows)
+        reissued = is_reissue(started, row.tz, ats, expired_ats)
     decision = decide(pid, started, row.tz, now, has_queue, entered, reissued)
     return decision, reissued and not has_queue and not entered
 
