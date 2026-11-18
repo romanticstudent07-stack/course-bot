@@ -158,7 +158,8 @@ def _set_budget(engine, pid, d: int, c: datetime, r: int) -> None:
         conn.execute(
             text(
                 "INSERT INTO pause_budgets (pid, days_budget_remaining_annual, cycle_start_at, "
-                "restart_no) VALUES (:p, :d, :c, :r)"
+                "restart_no) VALUES (:p, :d, :c, :r) ON CONFLICT (pid) DO UPDATE SET "
+                "days_budget_remaining_annual = :d, cycle_start_at = :c, restart_no = :r"
             ),
             {"p": pid, "d": d, "c": c, "r": r},
         )
@@ -221,11 +222,12 @@ def test_r4_not_blocked_skipped(db_engine, caplog):
     pid = _blocked(db_engine, 4604)
     _set(db_engine, pid, lives=2, flags="{}", phase="active")
     before = _state(db_engine, pid)
+    budget_before = _budget(db_engine, pid)
     caplog.set_level(logging.WARNING, logger="app.projector")
     _restart(db_engine, pid)
     assert run_once(db_engine) == ProjectorResult(processed=0, skipped=1)
     assert _state(db_engine, pid) == before
-    assert _budget(db_engine, pid) is None
+    assert _budget(db_engine, pid) == budget_before
     assert any("restart: not blocked or no position" in m for m in _warnings(caplog))
 
 

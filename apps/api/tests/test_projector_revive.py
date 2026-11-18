@@ -233,17 +233,19 @@ def test_v5_pause_budget_untouched(db_engine):
         conn.execute(
             text(
                 "INSERT INTO pause_budgets (pid, days_budget_remaining_annual, cycle_start_at, "
-                "restart_no) VALUES (:p, 5, :c, 0)"
+                "restart_no) VALUES (:p, 5, :c, 0) ON CONFLICT (pid) DO UPDATE SET "
+                "days_budget_remaining_annual = 5, cycle_start_at = :c, restart_no = 0"
             ),
             {"p": pid, "c": OLD_STARTED},
         )
     before = _budget(db_engine, pid)
     other = _blocked(db_engine, 4706)
+    other_before = _budget(db_engine, other)
     _revive(db_engine, pid)
     _revive(db_engine, other)
     assert run_once(db_engine) == ProjectorResult(processed=2, skipped=0)
     assert _budget(db_engine, pid) == before
-    assert _budget(db_engine, other) is None
+    assert _budget(db_engine, other) == other_before
 
 
 # V6: target другого Этапа или впереди текущей позиции → пропуск, состояние прежнее.
