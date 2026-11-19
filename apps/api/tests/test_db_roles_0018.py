@@ -325,6 +325,7 @@ DENIED_CHECKS_0018: tuple[tuple[str, str, bool], ...] = (
         )
         for table in ("participant_pauses", "pause_budgets")
         for verb in ("SELECT", "INSERT", "UPDATE")
+        if (table, verb) != ("participant_pauses", "SELECT")  # SELECT строк — 0021
     ),
     (
         "bot-pauses-seq",
@@ -460,7 +461,7 @@ def test_api_update_pauses_denied_0018(api_engine):
 
 
 def test_bot_select_pauses_denied_0018(bot_engine):
-    _assert_denied(bot_engine, "SELECT id FROM participant_pauses")
+    _assert_denied(bot_engine, "SELECT client_op_id FROM participant_pauses")
 
 
 def test_api_insert_budget_denied_0018(api_engine):
