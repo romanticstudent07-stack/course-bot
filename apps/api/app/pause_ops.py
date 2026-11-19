@@ -1,11 +1,11 @@
-"""«Часы» пауз участника (api-pause-1b, T2b): старт одобренных, сгорание неодобренных, конец по сроку.
+"""«Часы» пауз участника (api-pause-1b, T2b): старт одобренных и неодобренных по молчанию Автора (канон 02 П.2), конец по сроку.
 
 Запуск: шаг tick вызывает app/projector.py из run_forever раз в PAUSE_OPS_INTERVAL_S, сразу после
 шага life_ops (once — без tick). Образец — app/life_ops.py.
 Ручная проверка: python -m app.pause_ops dry-run <pid> — роль проектора (PROJECTOR_DATABASE_URL),
 только SELECT, ROLLBACK; печатает паузы-кандидаты pid и решение «если сейчас».
 
-Источник — docs/tasks/api-pause-1b.md (§2 Ч1–Ч8, §4); решения Р1–Р15 и контракт —
+Источник — docs/tasks/api-pause-1b.md (§2 Ч1–Ч8, §4), docs/tasks/api-pause-3a.md; решения Р1–Р15 и контракт —
 docs/tasks/api-pause-1a.md (разделы 2 и 5). «Часы» пишут ТОЛЬКО ключ idempotency_keys и событие
 participant_events (Ч2); статус паузы, флаг, бюджет и позицию применяет проектор (E1 / INV-1).
 participant_state, participant_pauses, pause_budgets и outbox здесь не пишутся.
@@ -13,8 +13,7 @@ participant_state, participant_pauses, pause_budgets и outbox здесь не �
 tick(engine, now) → TickResult(started, failed, ended, skipped):
   1. Кандидаты (Ч3) — своя транзакция, только чтение; только kind user; не больше MAX_PER_TICK,
      самые старые start_at / planned_end_at:
-       A — status approved, start_at ≤ now;
-       B — status requested, start_at ≤ now;
+       A — status approved или requested, start_at ≤ now;
        C — status active, planned_end_at ≤ now.
   2. Каждая пауза — отдельная транзакция под lock_participant (lock_timeout LOCK_TIMEOUT, Ч4):
      строка паузы и состояние читаются заново; проектор не догнал pid (life_ops._PENDING_EVENT) —
@@ -27,7 +26,7 @@ tick(engine, now) → TickResult(started, failed, ended, skipped):
           restart_no 0 (строку создаст проектор, Р12). None → ключ pause_start + pause_started
           {pause_id}; иначе ключ pause_start + pause_start_failed {pause_id, reason}.
           Плохой период (pause_rules.pause_days → ValueError) — WARNING и пропуск.
-       B (Ч6): ключ pause_start + pause_start_failed {pause_id, reason: "not_approved"}.
+          requested — тем же путём (api-pause-3a, канон 02 П.2).
        C (Ч7): ключ pause_end + pause_ended {pause_id, reason: "expired"}.
   4. Ключ (Ч8: pause_start:{pid}:{pause_id} / pause_end:{pid}:{pause_id}; ON CONFLICT DO NOTHING
      RETURNING; 0 строк → rollback, пропуск), затем событие с at = now — один commit.
@@ -78,6 +77,9 @@ PAUSE_END_EXPIRED = "expired"
 OUTCOME_STARTED = "started"
 OUTCOME_FAILED = "failed"
 OUTCOME_ENDED = "ended"
+
+# канон 02 П.2: молчание Автора — авто-старт (api-pause-3a)
+_START_STATUSES = ("requested", pause_rules.STATUS_APPROVED)
 
 USAGE = "usage: python -m app.pause_ops dry-run <pid>"
 
@@ -228,7 +230,7 @@ def _budget_left(conn: Connection, pid: uuid.UUID, now: datetime, tz: str | None
 def _plan_start(
     conn: Connection, pid: uuid.UUID, pause_id: int, pause: Any, now: datetime
 ) -> PausePlan | None:
-    """A (Ч5): вчерашний день закрыт → start_refusal → started или start_failed."""
+    """A (Ч5, канон 02 П.2): approved или requested; вчерашний день закрыт → start_refusal → started или start_failed."""
     state = conn.execute(_STATE, {"pid": pid}).first()
     if (
         state is not None
@@ -249,7 +251,7 @@ def _plan_start(
     )
     last_ended_at = conn.execute(_LAST_END, {"pid": pid}).scalar()
     refusal = pause_rules.start_refusal(
-        status=pause.status,
+        status=pause_rules.STATUS_APPROVED,
         flags=list(state.status_flags or ()) if state is not None else None,
         phase=state.lifecycle_phase if state is not None else None,
         day_no=state.day_no if state is not None else None,
@@ -278,8 +280,6 @@ def plan(conn: Connection, pid: uuid.UUID, pause_id: int, now: datetime) -> Paus
         return None
     if conn.execute(life_ops._PENDING_EVENT, {"pid": pid}).first() is not None:
         return None  # проектор не догнал pid — следующий тик
-    if pause.status == "requested" and _due(pause.start_at, now):
-        return _failed(pid, pause_id, pause_rules.REASON_NOT_APPROVED)  # Ч6
     if pause.status == "active" and _due(pause.planned_end_at, now):
         return PausePlan(  # Ч7
             OUTCOME_ENDED,
@@ -289,7 +289,7 @@ def plan(conn: Connection, pid: uuid.UUID, pause_id: int, now: datetime) -> Paus
             EVENT_KIND_PAUSE_ENDED,
             {"pause_id": pause_id, "reason": PAUSE_END_EXPIRED},
         )
-    if pause.status == pause_rules.STATUS_APPROVED and _due(pause.start_at, now):
+    if pause.status in _START_STATUSES and _due(pause.start_at, now):
         return _plan_start(conn, pid, pause_id, pause, now)
     return None
 
