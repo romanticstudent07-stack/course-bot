@@ -198,16 +198,16 @@ def test_a_refused_start_failed(db_engine, reason):
     assert "pause_user" not in list(_state(db_engine, pid).status_flags)
 
 
-# B: requested при now ≥ start_at → pause_start_failed not_approved (Р14).
-def test_b_requested_not_approved(db_engine):
+# B: requested при now ≥ start_at → авто-старт (канон 02 П.2).
+def test_b_requested_auto_started(db_engine):
     pid = _active(db_engine, 4903)
     pause_id = _pause(db_engine, pid, status="requested")
-    assert pause_ops.tick(db_engine, TICK_START) == TickResult(0, 1, 0, 0)
-    assert _pause_events(db_engine, pid) == [
-        ("pause_start_failed", {"pause_id": pause_id, "reason": "not_approved"})
-    ]
+    assert pause_ops.tick(db_engine, TICK_START) == TickResult(1, 0, 0, 0)
+    assert _pause_events(db_engine, pid) == [("pause_started", {"pause_id": pause_id})]
     run_once(db_engine)
-    assert _pause_status(db_engine, pause_id) == "cancelled"
+    assert _pause_status(db_engine, pause_id) == "active"
+    assert list(_state(db_engine, pid).status_flags) == ["pause_user"]
+    assert _budget_left(db_engine, pid) == 11
 
 
 # C: active при now ≥ planned_end_at → pause_ended expired; проектор: D = last_midnight (Р5).
@@ -241,18 +241,18 @@ def test_pending_event_skip(db_engine):
 def test_two_ticks_one_event(db_engine):
     pid = _active(db_engine, 4906)
     pause_id = _pause(db_engine, pid, status="requested")
-    assert pause_ops.tick(db_engine, TICK_START).failed == 1
-    assert pause_ops.tick(db_engine, TICK_START).failed == 0
+    assert pause_ops.tick(db_engine, TICK_START).started == 1
+    assert pause_ops.tick(db_engine, TICK_START).started == 0
     assert len(_pause_events(db_engine, pid)) == 1
     key = key_pause_start(pid, pause_id)
     assert _key_count(db_engine, key) == 1
     again = pause_ops.PausePlan(
-        pause_ops.OUTCOME_FAILED,
+        pause_ops.OUTCOME_STARTED,
         key,
         "pause_start",
         "3650 days",
-        "pause_start_failed",
-        {"pause_id": pause_id, "reason": "not_approved"},
+        "pause_started",
+        {"pause_id": pause_id},
     )
     with db_engine.connect() as conn:
         assert pause_ops._write(conn, pid, again, TICK_START) is False
@@ -269,13 +269,11 @@ def test_max_per_tick(db_engine, monkeypatch):
         _pause(db_engine, pid, status="requested", start=s, end=END)
         for pid, s in zip(pids, starts)
     ]
-    assert pause_ops.tick(db_engine, TICK_START) == TickResult(0, 2, 0, 0)
+    assert pause_ops.tick(db_engine, TICK_START) == TickResult(2, 0, 0, 0)
     assert [len(_pause_events(db_engine, pid)) for pid in pids] == [1, 1, 0]
     run_once(db_engine)
-    assert pause_ops.tick(db_engine, TICK_START) == TickResult(0, 1, 0, 0)
-    assert _pause_events(db_engine, pids[2]) == [
-        ("pause_start_failed", {"pause_id": ids[2], "reason": "not_approved"})
-    ]
+    assert pause_ops.tick(db_engine, TICK_START) == TickResult(1, 0, 0, 0)
+    assert _pause_events(db_engine, pids[2]) == [("pause_started", {"pause_id": ids[2]})]
 
 
 # Полный путь: tick → проектор → active → tick → ended → проектор.
