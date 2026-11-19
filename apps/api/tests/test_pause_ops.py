@@ -182,13 +182,14 @@ def test_a_yesterday_open_skip_then_started(db_engine):
 
 # A с отказом start_refusal → pause_start_failed с его reason; проектор гасит заявку.
 @pytest.mark.parametrize("reason", ["block_lives", "no_budget"])
-def test_a_refused_start_failed(db_engine, reason):
+@pytest.mark.parametrize("status", ["approved", "requested"])
+def test_a_refused_start_failed(db_engine, reason, status):
     if reason == "block_lives":
         pid = _active(db_engine, 4902, flags="{block_lives}", phase="sleeping", lives=0)
     else:
         pid = _active(db_engine, 4902)
         _set_budget(db_engine, pid, 2, CYCLE, 0)
-    pause_id = _pause(db_engine, pid)
+    pause_id = _pause(db_engine, pid, status=status)
     assert pause_ops.tick(db_engine, TICK_START) == TickResult(0, 1, 0, 0)
     assert _pause_events(db_engine, pid) == [
         ("pause_start_failed", {"pause_id": pause_id, "reason": reason})
@@ -208,6 +209,15 @@ def test_b_requested_auto_started(db_engine):
     assert _pause_status(db_engine, pause_id) == "active"
     assert list(_state(db_engine, pid).status_flags) == ["pause_user"]
     assert _budget_left(db_engine, pid) == 11
+
+
+# B: requested, вчерашний день не закрыт — пропуск (сначала закрытие дня life_ops).
+def test_b_requested_yesterday_open_skip(db_engine):
+    pid = _active(db_engine, 4907, started=YESTERDAY)
+    pause_id = _pause(db_engine, pid, status="requested")
+    assert pause_ops.tick(db_engine, TICK_START) == TickResult(0, 0, 0, 1)
+    assert _pause_events(db_engine, pid) == []
+    assert _key_count(db_engine, key_pause_start(pid, pause_id)) == 0
 
 
 # C: active при now ≥ planned_end_at → pause_ended expired; проектор: D = last_midnight (Р5).
