@@ -270,3 +270,40 @@ REVIVE_CANCELLED = "[заглушка] Отменено."
 REVIVE_TRY_LATER = "[заглушка] Не удалось, попробуйте позже."
 # bot.revive_user — участнику в личку после записи
 REVIVE_USER = "[заглушка] Автор вернул вас в строй. Продолжение — с 00:00 по вашему поясу."
+
+# --- Паузы (bot-pause-1, Р-6а). Заглушки; даты — «дд.мм», при поясе UTC — с « (UTC)» ---
+
+# bot.pause_card — {who}: «#NNNNNN»; {first}, {last}: даты; {days}: N
+PAUSE_CARD = "[заглушка] Заявка на паузу: {who}, с {first} по {last} включительно ({days} дн.)."
+# bot.pause_btn_approve
+PAUSE_BTN_APPROVE = "[заглушка] ✅ Одобрить"
+# bot.pause_btn_reject
+PAUSE_BTN_REJECT = "[заглушка] ✖ Отклонить"
+# bot.pause_done_approved
+PAUSE_DONE_APPROVED = "[заглушка] Одобрено."
+# bot.pause_done_rejected
+PAUSE_DONE_REJECTED = "[заглушка] Отклонено."
+# bot.pause_already
+PAUSE_ALREADY = "[заглушка] Уже решено."
+# bot.pause_not_open
+PAUSE_NOT_OPEN = "[заглушка] Решение не записано: заявка уже не ждёт ответа."
+# bot.pause_gone
+PAUSE_GONE = "[заглушка] Заявка не найдена."
+# bot.pause_try_later
+PAUSE_TRY_LATER = "[заглушка] Не удалось, попробуйте позже."
+# bot.pause_auto_alert — {who}, {first}, {last}
+PAUSE_AUTO_ALERT = "[заглушка] Пауза {who} началась без решения Автора: с {first} по {last}."
+# bot.pause_user_approved — {first}, {last}
+PAUSE_USER_APPROVED = "[заглушка] Пауза одобрена: с {first} по {last}."
+# bot.pause_user_rejected
+PAUSE_USER_REJECTED = "[заглушка] Заявка на паузу отклонена."
+# bot.pause_user_cancelled
+PAUSE_USER_CANCELLED = "[заглушка] Заявка на паузу не действует."
+# bot.pause_user_active — {last}
+PAUSE_USER_ACTIVE = "[заглушка] Пауза активна до {last} включительно."
+# bot.pause_user_long_warn — при N ≥ 3 дописывается к PAUSE_USER_ACTIVE через пустую строку
+PAUSE_USER_LONG_WARN = "[заглушка] Во время паузы упражнения не выполняются; длительный перерыв рискует прогрессом."
+# bot.pause_user_ending — {resume}: местная дата planned_end_at
+PAUSE_USER_ENDING = "[заглушка] Пауза заканчивается: продолжение с {resume} 00:00 по вашему поясу."
+# bot.pause_user_ended
+PAUSE_USER_ENDED = "[заглушка] Пауза закончилась."
