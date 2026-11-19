@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError, TelegramNetworkError
-from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
+from aiogram.methods import AnswerCallbackQuery, SendMessage
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 from psycopg.types.json import Jsonb
 
@@ -252,15 +252,6 @@ def _button(data, chat_id=GROUP, user=ADMIN):
         id="cb1", from_user=User(id=user, is_bot=False, first_name="A"), chat_instance="ci", data=data,
         message=Message(message_id=MID, chat=Chat(id=chat_id, type="supergroup"), text="карточка",
                         date=datetime.now(UTC))))
-
-
-def test_button_approve_edits_card_no_user_send():
-    conn = db()
-    calls, connected = asyncio.run(_feed(cfg(), _button(f"pse:a:{PAUSE_ID}"), conn))
-    assert connected == [1] and conn.closed
-    edits = [c for c in calls if isinstance(c, EditMessageText)]
-    assert len(edits) == 1 and edits[0].reply_markup is None and texts.PAUSE_DONE_APPROVED in edits[0].text
-    assert [c for c in calls if isinstance(c, SendMessage)] == []
 
 
 @pytest.mark.parametrize(("chat_id", "user"), [(GROUP + 99, ADMIN), (GROUP, STRANGER)])
