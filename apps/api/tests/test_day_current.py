@@ -93,6 +93,8 @@ def test_kinds_and_ttl():
         "ladder_day2": "3650 days",  # clocks-1
         "pause_start": "3650 days",  # api-pause-1b
         "pause_end": "3650 days",  # api-pause-1b
+        "pause_cancel": "3650 days",  # api-pause-2
+        "pause_resume": "3650 days",  # api-pause-2
     }
 
 

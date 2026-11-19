@@ -23,7 +23,12 @@
                                 pause_start_failed (взаимоисключающие; kind pause_start,
                                 ttl 3650 days, api-pause-1b; пишет pause_ops);
   pause_end:{pid}:{pause_id}  — пауза закончена по сроку, pause_ended expired записан
-                                (kind pause_end, ttl 3650 days, api-pause-1b; пишет pause_ops).
+                                (kind pause_end, ttl 3650 days, api-pause-1b; пишет pause_ops);
+  pause_cancel:{pid}:{pause_id} — участник отменил заявку паузы, событие pause_cancel записано
+                                (kind pause_cancel, ttl 3650 days, api-pause-2; пишет routers/pause);
+  pause_resume:{pid}:{pause_id} — участник вышел из паузы досрочно, pause_ended by_participant
+                                записан (kind pause_resume, ttl 3650 days, api-pause-2;
+                                пишет routers/pause).
 
 dsa (Ш4) — day_started_at в UTC, ISO 8601: ts.astimezone(timezone.utc).isoformat().
 Один и тот же момент в любом поясе даёт один и тот же ключ; naive datetime → ValueError
@@ -48,6 +53,8 @@ KIND_LADDER = "ladder"
 KIND_LADDER_DAY2 = "ladder_day2"
 KIND_PAUSE_START = "pause_start"
 KIND_PAUSE_END = "pause_end"
+KIND_PAUSE_CANCEL = "pause_cancel"
+KIND_PAUSE_RESUME = "pause_resume"
 
 TTL_DAY_ENTER = "3650 days"
 TTL_DAY_DONE = "3650 days"
@@ -60,6 +67,8 @@ TTL_LADDER = "3650 days"
 TTL_LADDER_DAY2 = "3650 days"
 TTL_PAUSE_START = "3650 days"
 TTL_PAUSE_END = "3650 days"
+TTL_PAUSE_CANCEL = "3650 days"
+TTL_PAUSE_RESUME = "3650 days"
 
 LADDER_STEPS = ("plus1h", "minus2h", "minus30m")
 
@@ -75,6 +84,8 @@ TTL_BY_KIND: dict[str, str] = {
     KIND_LADDER_DAY2: TTL_LADDER_DAY2,
     KIND_PAUSE_START: TTL_PAUSE_START,
     KIND_PAUSE_END: TTL_PAUSE_END,
+    KIND_PAUSE_CANCEL: TTL_PAUSE_CANCEL,
+    KIND_PAUSE_RESUME: TTL_PAUSE_RESUME,
 }
 
 
@@ -134,3 +145,13 @@ def key_pause_start(pid: uuid.UUID | str, pause_id: int | str) -> str:
 def key_pause_end(pid: uuid.UUID | str, pause_id: int | str) -> str:
     """Пауза закончена по сроку (pause_ended expired; api-pause-1b)."""
     return f"{KIND_PAUSE_END}:{pid}:{pause_id}"
+
+
+def key_pause_cancel(pid: uuid.UUID | str, pause_id: int | str) -> str:
+    """Участник отменил заявку паузы (pause_cancel; api-pause-2)."""
+    return f"{KIND_PAUSE_CANCEL}:{pid}:{pause_id}"
+
+
+def key_pause_resume(pid: uuid.UUID | str, pause_id: int | str) -> str:
+    """Участник вышел из паузы досрочно (pause_ended by_participant; api-pause-2)."""
+    return f"{KIND_PAUSE_RESUME}:{pid}:{pause_id}"
