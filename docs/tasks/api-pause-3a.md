@@ -16,7 +16,7 @@ Hash main: edd15c9 · Область: API (часы pause_ops) · Пачка pau
 - Ч2 Ветка «requested → pause_start_failed not_approved» (Ч6 api-pause-1b, Р14) удаляется. [Автор, канон проверен 02 П.2]
 - Ч3 В _plan_start start_refusal получает status = pause_rules.STATUS_APPROVED (статус проверен в plan) — как API T3 и проектор v9. pause_rules.py не меняется. [ШТАБ-тех, pause-3 §1]
 - Ч4 Кандидаты (_CANDIDATES, _PID_CANDIDATES уже берут requested), ключ pause_start:{pid}:{pause_id}, TickResult, итог тика в логе — как есть. [ШТАБ-тех]
-- Ч5 Сообщение участнику об авто-старте — бот (T4); API не пишет outbox, kind, text_id. Миграции нет: часы ходят под ролью проектора. [Автор; pause-3 §4, §7]
+- Ч5 Алерт Автору об авто-старте (канон 02 П.2) — бот, T4 bot-pause-1; часы не пишут outbox, kind, text_id. Миграции нет: часы ходят под ролью проектора. [Автор, канон 02 П.2; З2 п.3; pause-3 §4, §7]
 
 ## 4. Канон и решения
 (а) 02 П.2: «… если Автор молчит до наступления даты начала — Бот ставит паузу сам + алерт Автору. Молчание Автора = авто-разрешение (не вредит Участнику).» 02 YAML: «on_author_silence: auto_approve_at_start_date». 02 П.3: «Пауза НЕ спасает уже горящий сегодняшний дедлайн» — поэтому сначала закрытие дня life_ops, потом пауза (проверка в _plan_start уже есть).
@@ -61,7 +61,7 @@ AGENT-BRIEF.md 17,1; docs/decisions/DECISIONS.md 7,7; эта карточка �
 - Бэкап не нужен: миграции нет.
 - Логи projector после выката: Traceback 0, WARNING 0.
 - dry-run pause_ops для тестового pid с заявкой requested и прошедшим start_at: decision_if_now — «pause_started {...}» или pause_start_failed с причиной, но не not_approved. Команды — ШТАБ по infra/SERVER-IRONCLAD.md (projector once рядом с run запрещён).
-- Живой авто-старт — только на тестовом участнике и с согласия Автора.
+- Живой авто-старт — только на тестовом участнике и с согласия Автора; алерт Автору до T4 не придёт (это норма).
 
 ## 12. Запреты
 AGENT-BRIEF §3. Плюс: projector.py, pause_rules.py, routers/pause.py, day_keys.py, миграции не трогать; outbox, новых kind и text_id нет; лог без pid, tz, payload.
