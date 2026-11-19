@@ -1,4 +1,4 @@
-"""Проектор v8 (api-pause-1a, раздел 8): паузы участника. С БД — только CI.
+"""Проектор v8–v9 (api-pause-1a раздел 8; api-pause-3b): паузы участника. С БД — только CI.
 
 Фикстуры — по образцу tests/test_projector_restart.py. Строку participant_pauses и события
 пишет тест напрямую владельцем БД (писателей ещё нет: T3, T4, часы T2b); состояние
@@ -171,7 +171,7 @@ def test_p1_path_expired(db_engine):
     state = _state(db_engine, pid)
     assert list(state.status_flags) == ["pause_user"]
     assert state.lifecycle_phase == "sleeping"
-    assert state.projector_version == 8
+    assert state.projector_version == 9
     assert _budget(db_engine, pid).days_budget_remaining_annual == 14 - 3
 
     ended_at = END + timedelta(minutes=5)
@@ -208,13 +208,13 @@ def test_p2_by_participant_refund(db_engine):
     assert _budget(db_engine, pid).days_budget_remaining_annual == 12
 
 
-# P3: pause_approved при at ≥ start_at → cancelled (Р14).
-def test_p3_late_approve_cancelled(db_engine):
+# P3: pause_approved при at ≥ start_at → approved. Р14 отменён (api-pause-3b Д2).
+def test_p3_late_approve_approved(db_engine):
     pid = _active(db_engine, 4803)
     pause_id = _pause(db_engine, pid)
     _event(db_engine, pid, "pause_approved", {"pause_id": pause_id}, START)
     assert run_once(db_engine) == ProjectorResult(processed=1, skipped=0)
-    assert _pause_row(db_engine, pause_id).status == "cancelled"
+    assert _pause_row(db_engine, pause_id).status == "approved"
     assert list(_state(db_engine, pid).status_flags) == []
 
 
