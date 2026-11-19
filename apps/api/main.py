@@ -22,6 +22,10 @@
   GET  /miniapp/v1/me/card                   — карточка участника (api-i3-3), только чтение
   GET  /miniapp/v1/me/change-map             — Карта изменений на лету (api-i3-3), только чтение
   POST /miniapp/v1/support/question        — вопрос в поддержку (api-sup-1, Р-19): support_questions + outbox, X-Client-Op-Id
+  GET  /miniapp/v1/pause                     — бюджет и текущая пауза (api-pause-2), только чтение
+  POST /miniapp/v1/pause/request             — заявка паузы с завтра на 1..7 дн., X-Client-Op-Id
+  POST /miniapp/v1/pause/cancel              — отмена заявки до старта: ключ + событие pause_cancel
+  POST /miniapp/v1/pause/resume              — досрочный выход: ключ + pause_ended by_participant
   POST /security/csp-report                  — приёмник CSP-репортов (E2), без initData
                                                (security: [] в miniapp-api-contract.yaml),
                                                без rate-limit
@@ -55,6 +59,7 @@ from app.routers import (
     me,
     onboarding,
     onboarding_form,
+    pause,
     security,
     support,
     texts,
@@ -111,6 +116,7 @@ def create_app() -> FastAPI:
             onboarding_form.router,
             me.router,
             support.router,
+            pause.router,
         )
     )
 

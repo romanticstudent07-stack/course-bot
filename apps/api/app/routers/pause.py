@@ -1,0 +1,545 @@
+"""Пауза курса из Mini App (api-pause-2, T3; Р-6а / Р-20).
+
+Маршруты (префикс /miniapp/v1, initData → общий rate_limit — main.py; своих лимитов нет):
+  GET  /pause          — бюджет и текущая пауза; ничего не пишет, замок не берёт;
+  POST /pause/request  — заявка «с завтра» на 1..7 дней, X-Client-Op-Id (UUID4) → 201;
+  POST /pause/cancel   — отмена заявки до старта, без тела → 202 {"status": "accepted"};
+  POST /pause/resume   — досрочный выход из активной паузы, без тела → 202.
+API пишет только строку заявки (INSERT participant_pauses), события и ключи idempotency_keys.
+Статус паузы, флаг, бюджет и позицию меняет проектор v8; старт и конец по сроку — pause_ops.
+
+GET /pause:
+  1) участник (find_active_participant, без замка) — нет → 404 PARTICIPANT_NOT_FOUND;
+  2) состояние, бюджет (roll_cycle только для расчёта, без записи), открытая / активная строка;
+  3) refusal: есть строка → "already_open" (константа роутера, только GET); иначе
+     start_refusal(status="approved", days=1, start_at = завтра 00:00 по поясу).
+POST /pause/request:
+  1) active_pid_locked — нет → 404;
+  2) строка (pid, op) есть → commit, 201 с ней (тело повтора не сравнивается);
+  3) открытая или активная строка kind user → 409 PAUSE_ALREADY_OPEN;
+  4) start_at = day_clock.next_midnight(now, tz), planned_end_at = 00:00 местной даты start + N;
+     pause_rules.pause_days — проверка;
+  5) состояние, бюджет, stage_taken, last_ended_at → start_refusal(status="approved");
+     причина → 409 PAUSE_REFUSED, details {"reason"};
+  6) INSERT ON CONFLICT (pid, client_op_id) DO NOTHING RETURNING id; IntegrityError индекса
+     participant_pauses_one_open_user_uq → rollback, 409 PAUSE_ALREADY_OPEN; пусто → как шаг 2;
+  7) commit → 201 {"pause": {...}}.
+POST /pause/cancel (resume — в скобках):
+  active_pid_locked; строка kind user в статусе requested / approved (active) — нет →
+  409 PAUSE_NOT_CANCELLABLE (PAUSE_NOT_ACTIVE); ключ часов pause_start (pause_end) этой паузы
+  есть → тот же 409; INSERT ключа pause_cancel (pause_resume) ON CONFLICT DO NOTHING RETURNING
+  key; пусто → commit, 202 без события; иначе событие pause_cancel {"pause_id"}
+  (pause_ended {"pause_id", "reason": "by_participant"}), at = now → commit → 202.
+  Ключ и событие — одна транзакция, один commit, под замком participant:pid (часы — тот же замок).
+now — зависимость get_now() → day_clock.utcnow() (тесты подменяют). C0/C1 не проверяются (Д10).
+Любая SQLAlchemyError (и на commit) → rollback, 503 SERVICE_UNAVAILABLE; в лог — имя класса.
+
+Права app_api (0018, 0006, 0007): participant_pauses — INSERT (pid, kind, status, start_at,
+planned_end_at, client_op_id), SELECT, USAGE participant_pauses_id_seq; pause_budgets — SELECT;
+participant_events — INSERT; idempotency_keys — SELECT, INSERT; participant_state — SELECT.
+UPDATE / DELETE participant_pauses, запись в pause_budgets, participant_state, outbox — нет.
+Лог (app.pause): INFO только tg_user_id и итог (created / repeat / accepted / код ошибки).
+pid, pause_id, op и tz в логе нет.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import uuid
+from contextlib import suppress
+from datetime import datetime, time, timedelta, timezone
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import UUID4, BaseModel, Field
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.orm import Session
+
+from app import day_clock, day_keys, pause_rules
+from app.db.session import get_db_session
+from app.participant_lock import active_pid_locked
+from app.participants import find_active_participant
+from app.telegram_init_data import InitDataContext, require_init_data
+
+logger = logging.getLogger("app.pause")
+
+# Префикс /miniapp/v1, проверка initData и rate-limit — в main.py (роутер miniapp_v1).
+router = APIRouter(tags=["pause"])
+
+CLIENT_OP_ID_HEADER = "X-Client-Op-Id"
+REFUSAL_ALREADY_OPEN = "already_open"  # только GET; в pause_rules.REFUSAL_REASONS нет
+OPEN_INDEX = "participant_pauses_one_open_user_uq"
+STATUS_REQUESTED = "requested"
+CANCELLABLE = ("requested", "approved")
+ACTIVE = "active"
+EVENT_CANCEL = "pause_cancel"
+EVENT_ENDED = "pause_ended"
+REASON_BY_PARTICIPANT = "by_participant"
+
+# 5.1
+_BUDGET_SQL = text(
+    "SELECT days_budget_remaining_annual, cycle_start_at, restart_no "
+    "FROM pause_budgets WHERE pid = :pid"
+)
+# 5.2 (ORDER BY id DESC — детерминированный порядок, если строк две: active и requested)
+_OPEN_SQL = text(
+    "SELECT id, status, start_at, planned_end_at FROM participant_pauses "
+    "WHERE pid = :pid AND kind = 'user' AND status IN ('requested', 'approved', 'active') "
+    "ORDER BY id DESC"
+)
+_BY_OP_SQL = text(
+    "SELECT id, status, start_at, planned_end_at FROM participant_pauses "
+    "WHERE pid = :pid AND client_op_id = :op"
+)
+_STAGE_TAKEN_SQL = text(
+    "SELECT 1 FROM participant_pauses WHERE pid = :pid AND kind = 'user' "
+    "AND status IN ('active', 'ended') AND stage_no = :stage AND restart_no = :restart"
+)
+_LAST_END_SQL = text(
+    "SELECT max(ended_at) AS last FROM participant_pauses "
+    "WHERE pid = :pid AND kind = 'user' AND status = 'ended'"
+)
+_INSERT_SQL = text(
+    "INSERT INTO participant_pauses (pid, kind, status, start_at, planned_end_at, client_op_id) "
+    "VALUES (:pid, 'user', 'requested', :start, :end, :op) "
+    "ON CONFLICT (pid, client_op_id) DO NOTHING RETURNING id"
+)
+# 5.3
+_STATE_SQL = text(
+    "SELECT lifecycle_phase, day_no, tz, status_flags, stage_no "
+    "FROM participant_state WHERE pid = :pid"
+)
+_INSERT_EVENT_SQL = text(
+    "INSERT INTO participant_events (pid, kind, payload, actor, actor_role, at) "
+    "VALUES (:pid, :kind, CAST(:payload AS jsonb), 'participant', 'participant', :at)"
+)
+# 5.4
+_KEY_EXISTS_SQL = text("SELECT 1 FROM idempotency_keys WHERE key = :key")
+_INSERT_KEY_SQL = text(
+    "INSERT INTO idempotency_keys (key, kind, ttl, result_ref) "
+    "VALUES (:key, :kind, CAST(:ttl AS interval), :ref) "
+    "ON CONFLICT DO NOTHING RETURNING key"
+)
+
+
+def get_now() -> datetime:
+    """«Сейчас» для паузы (Д9); тесты подменяют через dependency_overrides."""
+    return day_clock.utcnow()
+
+
+# ---------------------------- модели ----------------------------
+
+
+class PauseRequestIn(BaseModel):
+    # Лишние поля отбрасываются (pydantic по умолчанию).
+    days: int = Field(ge=1, le=pause_rules.MAX_DAYS)
+
+
+class PauseOut(BaseModel):
+    id: int
+    status: str
+    start_at: datetime
+    planned_end_at: datetime
+
+
+class PauseStatusOut(BaseModel):
+    budget_days_left: int
+    budget_days_total: int
+    cycle_ends_at: datetime | None
+    pause: PauseOut | None
+    can_request: bool
+    refusal: str | None
+
+
+class PauseRequestOut(BaseModel):
+    pause: PauseOut
+
+
+class AcceptedOut(BaseModel):
+    status: str
+
+
+# ---------------------------- ошибки ----------------------------
+
+
+def _error(
+    status_code: int, code: str, message: str, details: dict[str, Any] | None = None
+) -> HTTPException:
+    detail: dict[str, Any] = {"code": code, "message": message}
+    if details is not None:
+        detail["details"] = details
+    return HTTPException(status_code=status_code, detail=detail)
+
+
+def _participant_not_found() -> HTTPException:
+    return _error(
+        status.HTTP_404_NOT_FOUND, "PARTICIPANT_NOT_FOUND", "Участник не найден. Пройдите онбординг."
+    )
+
+
+def _service_unavailable() -> HTTPException:
+    return _error(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "SERVICE_UNAVAILABLE",
+        "Сервис временно недоступен. Попробуйте позже.",
+    )
+
+
+def _already_open() -> HTTPException:
+    return _error(status.HTTP_409_CONFLICT, "PAUSE_ALREADY_OPEN", "Пауза уже запрошена или идёт.")
+
+
+def _not_cancellable() -> HTTPException:
+    return _error(status.HTTP_409_CONFLICT, "PAUSE_NOT_CANCELLABLE", "Заявку уже нельзя отменить.")
+
+
+def _not_active() -> HTTPException:
+    return _error(status.HTTP_409_CONFLICT, "PAUSE_NOT_ACTIVE", "Активной паузы нет.")
+
+
+def _refused(reason: str) -> HTTPException:
+    return _error(
+        status.HTTP_409_CONFLICT, "PAUSE_REFUSED", "Паузу сейчас взять нельзя.", {"reason": reason}
+    )
+
+
+def _rollback(session: Session) -> None:
+    with suppress(Exception):
+        session.rollback()
+
+
+def _released(session: Session, exc: Exception) -> Exception:
+    """rollback (снимает xact-замок) и вернуть exc для raise."""
+    _rollback(session)
+    return exc
+
+
+# ---------------------------- логика ----------------------------
+
+
+def _utc(ts: datetime) -> datetime:
+    return ts.astimezone(timezone.utc)
+
+
+def _pause_out(row: Any) -> PauseOut:
+    return PauseOut(
+        id=row.id,
+        status=row.status,
+        start_at=_utc(row.start_at),
+        planned_end_at=_utc(row.planned_end_at),
+    )
+
+
+def _state(session: Session, pid: uuid.UUID) -> Any:
+    return session.execute(_STATE_SQL, {"pid": pid}).first()
+
+
+def _budget(
+    session: Session, pid: uuid.UUID, now: datetime, tz: str | None
+) -> tuple[int, int, datetime | None]:
+    """(остаток после roll_cycle, restart_no, конец цикла) — без записи (Д5)."""
+    row = session.execute(_BUDGET_SQL, {"pid": pid}).first()
+    if row is None:
+        return pause_rules.BUDGET_DAYS, 0, None
+    start, left = pause_rules.roll_cycle(
+        row.cycle_start_at, row.days_budget_remaining_annual, now, tz
+    )
+    return left, row.restart_no, pause_rules.anniversary(start, tz)
+
+
+def _refusal(
+    session: Session,
+    pid: uuid.UUID,
+    state: Any,
+    days: int,
+    days_left: int,
+    restart: int,
+    start_at: datetime,
+) -> str | None:
+    """start_refusal с аргументами как в pause_ops._plan_start; status="approved" (Д4)."""
+    stage = state.stage_no if state is not None else None
+    stage_taken = False
+    if stage is not None:
+        stage_taken = (
+            session.execute(
+                _STAGE_TAKEN_SQL, {"pid": pid, "stage": stage, "restart": restart}
+            ).first()
+            is not None
+        )
+    last = session.execute(_LAST_END_SQL, {"pid": pid}).one().last
+    return pause_rules.start_refusal(
+        status=pause_rules.STATUS_APPROVED,
+        flags=list(state.status_flags or ()) if state is not None else None,
+        phase=state.lifecycle_phase if state is not None else None,
+        day_no=state.day_no if state is not None else None,
+        days=days,
+        days_left=days_left,
+        stage_taken=stage_taken,
+        last_ended_at=last,
+        start_at=start_at,
+    )
+
+
+def _bounds(now: datetime, tz: str | None, days: int) -> tuple[datetime, datetime]:
+    """Д3: start = следующая 00:00 по поясу; end = 00:00 местной даты start + days."""
+    z = day_clock.zone(tz)
+    start = day_clock.next_midnight(now, tz)
+    end_day = _utc(start).astimezone(z).date() + timedelta(days=days)
+    end = datetime.combine(end_day, time(0, 0), tzinfo=z).astimezone(timezone.utc)
+    pause_rules.pause_days(start, end, tz)
+    return _utc(start), end
+
+
+def read_status(session: Session, tg_user_id: int, now: datetime) -> PauseStatusOut:
+    found = find_active_participant(session, tg_user_id)
+    if found is None:
+        raise _participant_not_found()
+    pid = found[0]
+    state = _state(session, pid)
+    tz = state.tz if state is not None else None
+    days_left, restart, cycle_ends_at = _budget(session, pid, now, tz)
+    open_row = session.execute(_OPEN_SQL, {"pid": pid}).first()
+    if open_row is not None:
+        refusal: str | None = REFUSAL_ALREADY_OPEN
+    else:
+        start_at = day_clock.next_midnight(now, tz)
+        refusal = _refusal(session, pid, state, 1, days_left, restart, start_at)
+    return PauseStatusOut(
+        budget_days_left=days_left,
+        budget_days_total=pause_rules.BUDGET_DAYS,
+        cycle_ends_at=_utc(cycle_ends_at) if cycle_ends_at is not None else None,
+        pause=_pause_out(open_row) if open_row is not None else None,
+        can_request=refusal is None,
+        refusal=refusal,
+    )
+
+
+def request_pause(
+    session: Session, tg_user_id: int, op_id: uuid.UUID, days: int, now: datetime
+) -> tuple[str, PauseOut]:
+    """Шаги 1–7 → (created / repeat, пауза). Ошибки — HTTPException / SQLAlchemyError."""
+    # 1) участник под замком
+    pid = active_pid_locked(session, tg_user_id)
+    if pid is None:
+        raise _released(session, _participant_not_found())
+
+    # 2) повтор того же op — раньше всех проверок
+    op = str(op_id)
+    same = session.execute(_BY_OP_SQL, {"pid": pid, "op": op}).first()
+    if same is not None:
+        session.commit()
+        return "repeat", _pause_out(same)
+
+    # 3) открытая или активная строка
+    if session.execute(_OPEN_SQL, {"pid": pid}).first() is not None:
+        raise _released(session, _already_open())
+
+    # 4) границы
+    state = _state(session, pid)
+    tz = state.tz if state is not None else None
+    start_at, end_at = _bounds(now, tz, days)
+
+    # 5) правила старта
+    days_left, restart, _ = _budget(session, pid, now, tz)
+    reason = _refusal(session, pid, state, days, days_left, restart, start_at)
+    if reason is not None:
+        raise _released(session, _refused(reason))
+
+    # 6) строка заявки
+    try:
+        inserted = session.execute(
+            _INSERT_SQL, {"pid": pid, "start": start_at, "end": end_at, "op": op}
+        ).first()
+    except IntegrityError as exc:
+        constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        if constraint == OPEN_INDEX:
+            raise _released(session, _already_open()) from None
+        raise
+    if inserted is None:
+        same = session.execute(_BY_OP_SQL, {"pid": pid, "op": op}).one()
+        session.commit()
+        return "repeat", _pause_out(same)
+
+    # 7) commit; ответ — только после него
+    session.commit()
+    return "created", PauseOut(
+        id=inserted.id, status=STATUS_REQUESTED, start_at=start_at, planned_end_at=end_at
+    )
+
+
+def _finish_pause(
+    session: Session,
+    tg_user_id: int,
+    now: datetime,
+    *,
+    statuses: tuple[str, ...],
+    clock_key: Any,
+    own_kind: str,
+    own_key: Any,
+    event_kind: str,
+    payload_extra: dict[str, str],
+    refuse: Any,
+) -> str:
+    """cancel / resume → accepted / repeat. Ключ и событие — один commit под замком (Д7, Д8)."""
+    pid = active_pid_locked(session, tg_user_id)
+    if pid is None:
+        raise _released(session, _participant_not_found())
+
+    rows = session.execute(_OPEN_SQL, {"pid": pid}).all()
+    target = next((r for r in rows if r.status in statuses), None)
+    if target is None:
+        raise _released(session, refuse())
+
+    # гонка с часами: ключ часов этой паузы уже есть → поздно
+    if session.execute(_KEY_EXISTS_SQL, {"key": clock_key(pid, target.id)}).first() is not None:
+        raise _released(session, refuse())
+
+    added = session.execute(
+        _INSERT_KEY_SQL,
+        {
+            "key": own_key(pid, target.id),
+            "kind": own_kind,
+            "ttl": day_keys.TTL_BY_KIND[own_kind],
+            "ref": str(target.id),
+        },
+    ).first()
+    if added is None:
+        session.commit()
+        return "repeat"
+
+    session.execute(
+        _INSERT_EVENT_SQL,
+        {
+            "pid": pid,
+            "kind": event_kind,
+            "payload": json.dumps({"pause_id": target.id, **payload_extra}),
+            "at": now,
+        },
+    )
+    session.commit()
+    return "accepted"
+
+
+def cancel_pause(session: Session, tg_user_id: int, now: datetime) -> str:
+    return _finish_pause(
+        session,
+        tg_user_id,
+        now,
+        statuses=CANCELLABLE,
+        clock_key=day_keys.key_pause_start,
+        own_kind=day_keys.KIND_PAUSE_CANCEL,
+        own_key=day_keys.key_pause_cancel,
+        event_kind=EVENT_CANCEL,
+        payload_extra={},
+        refuse=_not_cancellable,
+    )
+
+
+def resume_pause(session: Session, tg_user_id: int, now: datetime) -> str:
+    return _finish_pause(
+        session,
+        tg_user_id,
+        now,
+        statuses=(ACTIVE,),
+        clock_key=day_keys.key_pause_end,
+        own_kind=day_keys.KIND_PAUSE_RESUME,
+        own_key=day_keys.key_pause_resume,
+        event_kind=EVENT_ENDED,
+        payload_extra={"reason": REASON_BY_PARTICIPANT},
+        refuse=_not_active,
+    )
+
+
+def _run(session: Session, tg_user_id: int, name: str, fn: Any, *args: Any) -> Any:
+    """Общая обёртка: rollback и лог при HTTPException, 503 при SQLAlchemyError."""
+    try:
+        return fn(session, tg_user_id, *args)
+    except HTTPException as exc:
+        _rollback(session)
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        logger.info(
+            "%s: tg_user_id=%s status=%s", name, tg_user_id, detail.get("code", exc.status_code)
+        )
+        raise
+    except SQLAlchemyError as exc:
+        _rollback(session)
+        logger.error("%s: ошибка БД (%s) — 503", name, type(exc).__name__)
+        raise _service_unavailable() from None
+
+
+# ---------------------------- маршруты ----------------------------
+
+_COMMON = {
+    404: {"description": "PARTICIPANT_NOT_FOUND"},
+    429: {"description": "RATE_LIMITED, заголовок Retry-After"},
+    503: {"description": "SERVICE_UNAVAILABLE (ошибка БД, в т. ч. commit)"},
+}
+
+
+@router.get("/pause", response_model=PauseStatusOut, responses=_COMMON)
+def get_pause(
+    ctx: InitDataContext = Depends(require_init_data),
+    session: Session = Depends(get_db_session),
+    now: datetime = Depends(get_now),
+) -> PauseStatusOut:
+    result: PauseStatusOut = _run(session, ctx.tg_user_id, "pause", read_status, now)
+    _rollback(session)  # только чтение: транзакцию закрываем без commit
+    return result
+
+
+@router.post(
+    "/pause/request",
+    status_code=status.HTTP_201_CREATED,
+    response_model=PauseRequestOut,
+    responses={
+        **_COMMON,
+        409: {"description": "PAUSE_ALREADY_OPEN / PAUSE_REFUSED (details.reason)"},
+        422: {"description": "VALIDATION_ERROR"},
+    },
+)
+def post_pause_request(
+    body: PauseRequestIn,
+    # Annotated, как в support.py: так FastAPI проверяет версию UUID4 (не-v4 → 422).
+    client_op_id: Annotated[UUID4, Header(alias=CLIENT_OP_ID_HEADER)],
+    ctx: InitDataContext = Depends(require_init_data),
+    session: Session = Depends(get_db_session),
+    now: datetime = Depends(get_now),
+) -> PauseRequestOut:
+    outcome, pause = _run(
+        session, ctx.tg_user_id, "pause/request", request_pause, client_op_id, body.days, now
+    )
+    logger.info("pause/request: tg_user_id=%s status=%s", ctx.tg_user_id, outcome)
+    return PauseRequestOut(pause=pause)
+
+
+@router.post(
+    "/pause/cancel",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=AcceptedOut,
+    responses={**_COMMON, 409: {"description": "PAUSE_NOT_CANCELLABLE"}},
+)
+def post_pause_cancel(
+    ctx: InitDataContext = Depends(require_init_data),
+    session: Session = Depends(get_db_session),
+    now: datetime = Depends(get_now),
+) -> AcceptedOut:
+    outcome = _run(session, ctx.tg_user_id, "pause/cancel", cancel_pause, now)
+    logger.info("pause/cancel: tg_user_id=%s status=%s", ctx.tg_user_id, outcome)
+    return AcceptedOut(status="accepted")
+
+
+@router.post(
+    "/pause/resume",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=AcceptedOut,
+    responses={**_COMMON, 409: {"description": "PAUSE_NOT_ACTIVE"}},
+)
+def post_pause_resume(
+    ctx: InitDataContext = Depends(require_init_data),
+    session: Session = Depends(get_db_session),
+    now: datetime = Depends(get_now),
+) -> AcceptedOut:
+    outcome = _run(session, ctx.tg_user_id, "pause/resume", resume_pause, now)
+    logger.info("pause/resume: tg_user_id=%s status=%s", ctx.tg_user_id, outcome)
+    return AcceptedOut(status="accepted")
