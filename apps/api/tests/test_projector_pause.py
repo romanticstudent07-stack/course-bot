@@ -1,4 +1,4 @@
-"""Проектор v8 (api-pause-1a, раздел 8): паузы участника. С БД — только CI.
+"""Проектор v8–v9 (api-pause-1a раздел 8; api-pause-3b): паузы участника. С БД — только CI.
 
 Фикстуры — по образцу tests/test_projector_restart.py. Строку participant_pauses и события
 пишет тест напрямую владельцем БД (писателей ещё нет: T3, T4, часы T2b); состояние
@@ -171,7 +171,7 @@ def test_p1_path_expired(db_engine):
     state = _state(db_engine, pid)
     assert list(state.status_flags) == ["pause_user"]
     assert state.lifecycle_phase == "sleeping"
-    assert state.projector_version == 8
+    assert state.projector_version == 9
     assert _budget(db_engine, pid).days_budget_remaining_annual == 14 - 3
 
     ended_at = END + timedelta(minutes=5)
@@ -208,13 +208,13 @@ def test_p2_by_participant_refund(db_engine):
     assert _budget(db_engine, pid).days_budget_remaining_annual == 12
 
 
-# P3: pause_approved при at ≥ start_at → cancelled (Р14).
-def test_p3_late_approve_cancelled(db_engine):
+# P3: pause_approved при at ≥ start_at → approved. Р14 отменён (api-pause-3b Д2).
+def test_p3_late_approve_approved(db_engine):
     pid = _active(db_engine, 4803)
     pause_id = _pause(db_engine, pid)
     _event(db_engine, pid, "pause_approved", {"pause_id": pause_id}, START)
     assert run_once(db_engine) == ProjectorResult(processed=1, skipped=0)
-    assert _pause_row(db_engine, pause_id).status == "cancelled"
+    assert _pause_row(db_engine, pause_id).status == "approved"
     assert list(_state(db_engine, pid).status_flags) == []
 
 
@@ -357,3 +357,57 @@ def test_p9_reissue_day_default(db_engine):
     assert (state.stage_no, state.module_no, state.day_no) == (2, 1, 1)
     assert _u(state.day_started_at) == _u(expected)
     assert state.missed_streak == 0
+
+
+# P10: pause_started из requested без pause_approved — авто-старт (канон 02 П.2, api-pause-3b Д1).
+def test_p10_started_from_requested(db_engine):
+    pid = _active(db_engine, 4810)
+    pause_id = _pause(db_engine, pid)
+    _event(db_engine, pid, "pause_started", {"pause_id": pause_id}, STARTED_AT)
+    assert run_once(db_engine) == ProjectorResult(processed=1, skipped=0)
+    row = _pause_row(db_engine, pause_id)
+    assert (row.status, row.stage_no, row.restart_no) == ("active", 2, 0)
+    state = _state(db_engine, pid)
+    assert list(state.status_flags) == ["pause_user"]
+    assert state.lifecycle_phase == "sleeping"
+    assert _budget(db_engine, pid).days_budget_remaining_annual == 11
+
+
+# P11: отказ Р15 гасит заявку requested (api-pause-3b Д4).
+def test_p11_requested_refused_cancelled(db_engine, caplog):
+    pid = _active(db_engine, 4811, flags="{block_lives}", phase="sleeping", lives=0)
+    budget_before = _budget(db_engine, pid)
+    pause_id = _pause(db_engine, pid)
+    caplog.set_level(logging.WARNING, logger="app.projector")
+    _event(db_engine, pid, "pause_started", {"pause_id": pause_id}, STARTED_AT)
+    run_once(db_engine)
+    assert _pause_row(db_engine, pause_id).status == "cancelled"
+    assert "pause_user" not in list(_state(db_engine, pid).status_flags)
+    assert _budget(db_engine, pid) == budget_before
+    assert any("pause_started отклонён: block_lives" in m for m in _warnings(caplog))
+
+
+# P12: кнопки Автора после авто-старта — без смены статуса и без WARNING (api-pause-3b Д5).
+def test_p12_late_buttons_after_auto_start(db_engine, caplog):
+    pid = _active(db_engine, 4812)
+    pause_id = _pause(db_engine, pid)
+    _event(db_engine, pid, "pause_started", {"pause_id": pause_id}, STARTED_AT)
+    assert run_once(db_engine) == ProjectorResult(processed=1, skipped=0)
+    assert _pause_row(db_engine, pause_id).status == "active"
+
+    caplog.clear()
+    caplog.set_level(logging.INFO, logger="app.projector")
+    late = START + timedelta(hours=1)
+    _event(db_engine, pid, "pause_approved", {"pause_id": pause_id}, late)
+    _event(db_engine, pid, "pause_rejected", {"pause_id": pause_id}, late)
+    result = run_once(db_engine)
+    assert result.processed + result.skipped == 2
+    assert _pause_row(db_engine, pause_id).status == "active"
+    assert list(_state(db_engine, pid).status_flags) == ["pause_user"]
+    assert _warnings(caplog) == []
+    infos = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "app.projector" and r.levelno == logging.INFO
+    ]
+    assert any("пропущен: пауза уже active" in m for m in infos)

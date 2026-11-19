@@ -179,7 +179,7 @@ def _assert_restarted(state, budget, restart_no: int) -> None:
     assert (state.stage_no, state.module_no, state.day_no) == (2, 1, 1)
     assert _u(state.day_started_at) == _u(d)
     assert state.missed_streak == 0
-    assert state.projector_version == 8
+    assert state.projector_version == 9
     assert budget is not None
     assert budget.days_budget_remaining_annual == 14
     assert _u(budget.cycle_start_at) == _u(d)

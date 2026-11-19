@@ -77,7 +77,7 @@ def test_author_life_op_from_payload():
 
 
 def test_version_is_7():
-    assert PROJECTOR_VERSION == 8
+    assert PROJECTOR_VERSION == 9
 
 
 def test_run_forever_calls_backfill(monkeypatch):
@@ -208,7 +208,7 @@ def test_missed_days_to_zero_block_lives(db_engine, flags):
     assert state.lives == 0
     assert state.lifecycle_phase == "sleeping"
     assert list(state.status_flags) == ["block_lives"]
-    assert state.projector_version == 8
+    assert state.projector_version == 9
 
 
 def test_author_minus_two_keeps_day(db_engine):
@@ -321,7 +321,7 @@ def test_backfill_n_rows(db_engine, caplog):
     for pid in (a, b):
         state = _state(db_engine, pid)
         assert list(state.status_flags) == ["block_lives"]
-        assert state.projector_version == 8
+        assert state.projector_version == 9
     assert {pid: _state(db_engine, pid) for pid in (c, d)} == others
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="app.projector"):

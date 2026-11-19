@@ -15,10 +15,10 @@ docs/tasks/iter2-api-2a.md, раздел 8, и docs/tasks/iter2-api-2b.md, ра�
   - I2 fsm_participant: pre_registered → onboarding по mini_app_first_consent (6А, D-11);
   - I2 checkpoint_table: participant_state_checkpoints (pid, last_event_id, at).
 
-Виды событий (PROJECTOR_VERSION 8, api-pause-1a; выдержки — docs/tasks/life-ops-a.md, раздел 7,
+Виды событий (PROJECTOR_VERSION 9, api-pause-3b; выдержки — docs/tasks/life-ops-a.md, раздел 7,
 docs/tasks/projector-i3-2.md, разделы 3–4 и 7, docs/tasks/api-sleep-1a.md, раздел 4, и
 docs/tasks/api-sleep-1b.md, разделы 4 и 7, docs/tasks/api-revive-1.md, разделы 4 и 7,
-docs/tasks/api-pause-1a.md, разделы 2, 4 и 5):
+docs/tasks/api-pause-1a.md, разделы 2, 4 и 5, docs/tasks/api-pause-3b.md, разделы 3 и 7):
   - mini_app_first_consent — строка состояния, фаза onboarding (без изменений с версии 1);
   - day_entered (iter2-api-2a) — позиция stage_no / module_no / day_no из payload,
     day_started_at = at события, missed_streak = 0; только если позиции ещё нет
@@ -94,14 +94,18 @@ docs/tasks/api-pause-1a.md, разделы 2, 4 и 5):
     participant_pauses ищется по (id, pid, kind 'user'); статус меняет только UPDATE … WHERE
     id, pid, kind 'user' и ожидаемый статус (права 0018). Нет строки или не тот статус →
     WARNING, пропуск. Переходы:
-      pause_approved {pause_id}: requested → approved; at ≥ start_at → cancelled (Р14);
+      pause_approved {pause_id}: requested → approved (v9: at и start_at не сравниваются);
       pause_rejected {pause_id}: requested → rejected;
+      v9 (api-pause-3b Д5): pause_approved / pause_rejected по заявке active / ended /
+        cancelled (кнопки после старта или отказа) — пропуск, INFO, без WARNING;
       pause_cancel {pause_id}: requested | approved → cancelled;
       pause_start_failed {pause_id, reason ∈ pause_rules.REFUSAL_REASONS}: requested |
         approved → cancelled;
-      pause_started {pause_id}: approved → active. Бюджет — pause_budgets (нет строки → создать
+      pause_started {pause_id}: requested | approved → active (канон 02 П.2: молчание
+        Автора — авто-старт; v9, api-pause-3b). Бюджет — pause_budgets (нет строки → создать
         тем же SQL, что в day_entered, по первому day_entered), roll_cycle по at (Р9);
-        N = pause_rules.pause_days (плохой период → пропуск); start_refusal (Р15) → cancelled,
+        N = pause_rules.pause_days (плохой период → пропуск); start_refusal (Р15, status =
+        STATUS_APPROVED — статус проверен выше) → cancelled из фактического статуса,
         WARNING «pause_started отклонён: <reason>», флага нет. Иначе: остаток −= N (UPDATE …
         WHERE остаток ≥ N), stage_no = Этап позиции, restart_no из pause_budgets, флаг
         pause_user, фаза phase_for_flags (Р4). Повтор — статус уже active → пропуск;
@@ -188,7 +192,7 @@ logger = logging.getLogger("app.projector")
 BATCH_SIZE = 500
 POLL_SECONDS = 1.0
 RETRY_SECONDS = 5.0
-PROJECTOR_VERSION = 8
+PROJECTOR_VERSION = 9
 # «Часы» пауз (api-pause-1b, Ч1): тот же интервал, что у life_ops.LIFE_OPS_INTERVAL_S.
 PAUSE_OPS_INTERVAL_S = life_ops.LIFE_OPS_INTERVAL_S
 PHASE_PRE_REGISTERED = "pre_registered"
@@ -573,10 +577,13 @@ _START_PAUSE = text(
     """
     UPDATE participant_pauses
     SET status = 'active', stage_no = :s, restart_no = :r
-    WHERE id = :id AND pid = :pid AND kind = 'user' AND status = 'approved'
+    WHERE id = :id AND pid = :pid AND kind = 'user' AND status IN ('requested', 'approved')
     RETURNING id
     """
 )
+
+# Д5 api-pause-3b: кнопки Автора после старта или отказа — тихий пропуск.
+_LATE_BUTTON_STATUSES = ("active", "ended", "cancelled")
 
 _END_PAUSE = text(
     """
@@ -1216,6 +1223,7 @@ def _set_pause_status(
     pause_id: int,
     allowed_from: Sequence[str],
     to_status: Callable[[Any], str],
+    quiet_from: Sequence[str] = (),
 ) -> bool:
     """Смена статуса строки паузы (Р1): из allowed_from в to_status(row); иначе пропуск."""
     row = conn.execute(_SELECT_PAUSE, {"id": pause_id, "pid": pid}).first()
@@ -1223,6 +1231,11 @@ def _set_pause_status(
         _skip(event_id, kind, "pause: not found")
         return False
     if row.status not in allowed_from:
+        if row.status in quiet_from:
+            logger.info(
+                "projector: %s пропущен: пауза уже %s, event id=%s", kind, row.status, event_id
+            )
+            return False
         _skip(event_id, kind, "pause: status not allowed")
         return False
     applied = conn.execute(
@@ -1247,12 +1260,10 @@ def _apply_pause_approved(
     if pause_id is None or at is None:
         _skip(event_id, kind, "bad payload")
         return False
-
-    def _to(row: Any) -> str:
-        # Р14: одобрение после start_at — заявка сгорает.
-        return "cancelled" if _utc(at) >= _utc(row.start_at) else "approved"
-
-    return _set_pause_status(conn, event_id, pid, kind, pause_id, ("requested",), _to)
+    return _set_pause_status(
+        conn, event_id, pid, kind, pause_id, ("requested",), lambda _row: "approved",
+        quiet_from=_LATE_BUTTON_STATUSES,
+    )
 
 
 def _apply_pause_simple(
@@ -1264,6 +1275,7 @@ def _apply_pause_simple(
     allowed_from: Sequence[str],
     to: str,
     reasons: Sequence[str] | None = None,
+    quiet_from: Sequence[str] = (),
 ) -> bool:
     pause_id = pause_id_from_payload(payload)
     if pause_id is None or (
@@ -1271,7 +1283,9 @@ def _apply_pause_simple(
     ):
         _skip(event_id, kind, "bad payload")
         return False
-    return _set_pause_status(conn, event_id, pid, kind, pause_id, allowed_from, lambda _r: to)
+    return _set_pause_status(
+        conn, event_id, pid, kind, pause_id, allowed_from, lambda _r: to, quiet_from=quiet_from
+    )
 
 
 def _pause_budget(
@@ -1310,7 +1324,7 @@ def _apply_pause_started(
     if pause is None:
         _skip(event_id, kind, "pause: not found")
         return False
-    if pause.status != "approved":
+    if pause.status not in ("requested", "approved"):
         _skip(event_id, kind, "pause: status not allowed")
         return False
     state = conn.execute(_SELECT_PAUSE_STATE, {"pid": pid}).first()
@@ -1332,7 +1346,7 @@ def _apply_pause_started(
     last_ended_at = conn.execute(_SELECT_LAST_PAUSE_END, {"pid": pid}).scalar()
     flag_list = list(status_flags or ())
     refusal = pause_rules.start_refusal(
-        status=pause.status,
+        status=pause_rules.STATUS_APPROVED,
         flags=flag_list,
         phase=phase,
         day_no=day_no,
@@ -1350,7 +1364,7 @@ def _apply_pause_started(
         # Р15: правило нарушено → заявка сгорает, флага нет.
         conn.execute(
             _SET_PAUSE_STATUS,
-            {"id": pause_id, "pid": pid, "from": "approved", "to": "cancelled"},
+            {"id": pause_id, "pid": pid, "from": pause.status, "to": "cancelled"},
         )
         logger.warning(
             "projector: pause_started отклонён: %s, event id=%s", refusal, event_id
@@ -1464,7 +1478,10 @@ def _apply_event(
     if kind == EVENT_KIND_PAUSE_APPROVED:
         return _apply_pause_approved(conn, event_id, pid, kind, at, payload)
     if kind == EVENT_KIND_PAUSE_REJECTED:
-        return _apply_pause_simple(conn, event_id, pid, kind, payload, ("requested",), "rejected")
+        return _apply_pause_simple(
+            conn, event_id, pid, kind, payload, ("requested",), "rejected",
+            quiet_from=_LATE_BUTTON_STATUSES,
+        )
     if kind == EVENT_KIND_PAUSE_CANCEL:
         return _apply_pause_simple(
             conn, event_id, pid, kind, payload, ("requested", "approved"), "cancelled"
