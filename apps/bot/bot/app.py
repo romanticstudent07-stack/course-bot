@@ -26,6 +26,11 @@ BOT_DATABASE_URL пуст → воркер не запускается (WARNING)
 Рестарт по промокоду (bot-restart-1, bot/restart_handlers.py): роутер кнопок «rst:…» подключается в той же
 ветке config.access_enabled перед роутером доступа, своего WARNING не пишет, личку не ловит
 (заявка — on_private в bot/access_handlers.py).
+Паузы (bot-pause-1, Р-6а): роутер кнопок «pse:…» (bot/pause_handlers.py) подключается в той же ветке
+config.access_enabled сразу перед роутером доступа (после рестарта), своего WARNING не пишет, личку не ловит.
+Наблюдатель пауз (bot/pause_watch.py) — фоновая задача раз в 60 с, только при config.access_enabled,
+стартует после воркера outbox, тот же stop; остановка в finally (ожидание, затем cancel). Карточка заявки
+и алерт «пауза началась без решения Автора» — в админ-тему, уведомления участнику — в личку.
 
 Карточка участника (bot-i3-1, bot/card_handlers.py): роутер подключается после /start и ДО роутера
 доступа, только если config.card_enabled; иначе один WARNING с именами переменных (без значений).
@@ -83,6 +88,9 @@ def build_dispatcher(config: BotConfig, connect=None) -> Dispatcher:
         from bot.restart_handlers import build_restart_router
 
         dp.include_router(build_restart_router(config, connect))
+        from bot.pause_handlers import build_pause_router
+
+        dp.include_router(build_pause_router(config, connect))
         from bot.access_handlers import build_access_router
 
         dp.include_router(build_access_router(config, connect))
@@ -158,8 +166,13 @@ async def run(config: BotConfig) -> None:
     bot = Bot(token=config.bot_token)
     stop = asyncio.Event()
     task = None
+    pause_task = None
     try:
         task = start_outbox_worker(bot, config, stop)
+        if config.access_enabled:
+            from bot.pause_watch import start_pause_watcher
+
+            pause_task = start_pause_watcher(bot, config, stop)
         await wait_until_no_webhook(bot, config.webhook_recheck_seconds)
         dp = build_dispatcher(config)
         logger.info("Старт бота: long polling")
@@ -169,4 +182,8 @@ async def run(config: BotConfig) -> None:
         )
     finally:
         await stop_outbox_worker(task, stop)
+        if pause_task is not None:
+            from bot.pause_watch import stop_pause_watcher
+
+            await stop_pause_watcher(pause_task, stop)
         await bot.session.close()
