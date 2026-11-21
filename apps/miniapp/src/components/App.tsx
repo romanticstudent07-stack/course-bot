@@ -27,6 +27,10 @@
 //   скрытого, но смонтированного LaterSteps (ответы экрана в памяти не теряются, Р-16, Р-18);
 //   app: маршрут /help в этом файле (routes.tsx не трогаем) и HelpBar под Routes.
 //   Черновик вопроса — drafts.ts (createSupportDraftStore), отдельно от черновика шага.
+// miniapp-pause-1: в фазе app экран /day (и «/», и любой путь через fallback) монтируется только
+//   через DayGuard (PausedPage.tsx): один GET /pause при каждом входе на /day; пока не завершён —
+//   дня нет; active → /paused (replace); ошибка/неизвестный status → заглушка и «Повторить».
+//   /help, /me и /paused проверкой не заперты; HelpBar остаётся. Фазы входа не менялись.
 // OnboardingFlow монтируется ТОЛЬКО в фазе onboarding (он шлёт /texts/bulk при монтировании).
 // «Пускать ли» решает сервер: клиент не смотрит ни initDataUnsafe, ни черновик, ни время.
 // short_no, status и reasons на устройстве не хранятся — только в памяти до закрытия.
@@ -55,6 +59,7 @@ import {
 } from '@/components/startup.ts';
 import { SupportScreen } from '@/components/SupportScreen.tsx';
 import { routes } from '@/navigation/routes.tsx';
+import { DayGuard } from '@/pages/PausedPage/PausedPage.tsx';
 
 type Phase = 'checking' | 'start-error' | 'no-access' | 'number' | 'onboarding' | 'later' | 'app';
 
@@ -278,7 +283,13 @@ export function App() {
   return (
     <HashRouter>
       <Routes>
-        {routes.map((route) => <Route key={route.path} {...route}/>)}
+        {routes.map(({ path, Component }) =>
+          path === '/day' ? (
+            <Route key={path} path={path} element={<DayGuard><Component/></DayGuard>}/>
+          ) : (
+            <Route key={path} path={path} Component={Component}/>
+          ),
+        )}
         <Route path="/help" element={<HelpRoute tgUserId={tgUserId} store={supportStore} onRestart={retry}/>}/>
         <Route path="*" element={<Navigate to="/day"/>}/>
       </Routes>
