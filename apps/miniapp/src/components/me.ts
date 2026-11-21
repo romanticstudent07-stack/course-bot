@@ -28,7 +28,6 @@ export const ME_TEXT = {
   wellbeingRecorded: 'Заглушка: ответ записан',
   baselineLabel: 'Заглушка: старт',
   recentLabel: 'Заглушка: последние',
-  pauseLink: 'Заглушка: пауза',
 } as const;
 
 export const NO_DATA = 'Заглушка: нет данных';
