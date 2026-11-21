@@ -5,7 +5,8 @@
 //     initDataUnsafe для решений не используется;
 //   - базовый URL — из VITE_API_BASE_URL (пусто = тот же origin, CSP E2 connect-src 'self');
 //   - state-меняющие вызовы несут X-Client-Op-Id (uuid v4) — идемпотентность (D-17);
-//   - ответ 429: заголовок Retry-After → ApiError.retryAfter (parseRetryAfter, miniapp-sup-1).
+//   - ответ 429: заголовок Retry-After → ApiError.retryAfter (parseRetryAfter, miniapp-sup-1);
+//   - details ошибки → ApiError.details (пятый аргумент, miniapp-pause-1); retryAfter — четвёртый.
 import { retrieveRawInitData } from '@telegram-apps/sdk-react';
 
 export const INIT_DATA_HEADER = 'X-Telegram-Init-Data';
@@ -18,6 +19,8 @@ export class ApiError extends Error {
     message: string,
     /** Секунды из Retry-After (только для 429, только целое > 0); иначе null. */
     public readonly retryAfter: number | null = null,
+    /** details из тела ошибки как есть (unknown); читать только безопасно (miniapp-pause-1 §7). */
+    public readonly details: unknown = undefined,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -107,9 +110,15 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    const err = (payload ?? {}) as { code?: string; message?: string };
+    const err = (payload ?? {}) as { code?: string; message?: string; details?: unknown };
     const retryAfter = response.status === 429 ? parseRetryAfter(response.headers.get('Retry-After')) : null;
-    throw new ApiError(response.status, err.code ?? 'HTTP_ERROR', err.message ?? response.statusText, retryAfter);
+    throw new ApiError(
+      response.status,
+      err.code ?? 'HTTP_ERROR',
+      err.message ?? response.statusText,
+      retryAfter,
+      err.details,
+    );
   }
   return payload as T;
 }
@@ -468,3 +477,47 @@ export interface SupportQuestionBody {
  */
 export const postSupportQuestion = (body: SupportQuestionBody, clientOpId: string) =>
   apiRequest<{ status: 'sent' }>('/miniapp/v1/support/question', { method: 'POST', body, clientOpId });
+
+// ---- Пауза участника (api-pause-*; карточка miniapp-pause-1 §7, Р-6а) ----
+// Ответы живут только в state React: не на устройство, не в лог, не в адрес.
+// Решения «можно ли» принимает только сервер; 202 — событие принято, не новый статус: перечитать GET.
+
+export type PauseStatus = 'requested' | 'approved' | 'active';
+
+export interface PauseInfo {
+  id: number;
+  /** requested / approved / active; прочее клиент считает неизвестным. */
+  status: string;
+  start_at: string;
+  planned_end_at: string;
+}
+
+export interface PauseOverview {
+  budget_days_left: number;
+  budget_days_total: number;
+  cycle_ends_at: string | null;
+  /** Только открытая пауза (requested / approved / active), иначе null. */
+  pause: PauseInfo | null;
+  /** Без открытой паузы — для days=1; не гарантирует выбранных N дней. */
+  can_request: boolean;
+  refusal: string | null;
+}
+
+/** Только чтение, без X-Client-Op-Id. Ошибки: 401, 404 PARTICIPANT_NOT_FOUND, 429, 503. */
+export const getPause = () => apiRequest<PauseOverview>('/miniapp/v1/pause');
+
+/**
+ * Заявка на паузу: days — целое 1..7. clientOpId — один на попытку {days, op-id}: повтор после
+ * неопределённого исхода — с той же парой. 201 {pause}. Ошибки: 409 PAUSE_ALREADY_OPEN /
+ * PAUSE_REFUSED (details.reason); 401, 404, 422, 429, 503.
+ */
+export const postPauseRequest = (days: number, clientOpId: string) =>
+  apiRequest<{ pause: PauseInfo }>('/miniapp/v1/pause/request', { method: 'POST', body: { days }, clientOpId });
+
+/** Отмена requested / approved: без тела и X-Client-Op-Id. 202 {status:"accepted"}; 409 PAUSE_NOT_CANCELLABLE. */
+export const postPauseCancel = () =>
+  apiRequest<{ status: 'accepted' }>('/miniapp/v1/pause/cancel', { method: 'POST' });
+
+/** Досрочное продолжение active: без тела и X-Client-Op-Id. 202 {status:"accepted"}; 409 PAUSE_NOT_ACTIVE. */
+export const postPauseResume = () =>
+  apiRequest<{ status: 'accepted' }>('/miniapp/v1/pause/resume', { method: 'POST' });
