@@ -142,6 +142,69 @@ overrides:
     status: closed
     note: "Раньше считалось «одной из трёх несовместимостей» в 17-author-panel.md и I3. По факту противоречия нет — уточнено оригиналом стр. 293-294, 350."
 
+  # ---------- AD-01 — 409: только доказанная коллизия op-id ----------
+  - id: AD-01
+    source: "normative/I4-wave-d.md, врезка AD-01; решение Автора 21.11.2026, course-bot/docs/decisions/R-2026-11-21.md"
+    path: I4.mini_app_client.R339_indexeddb_cache.conflict_ux.on_server_409
+    old_value:
+      show_error: "локальные данные повреждены; переоткройте Mini App"
+      action: full IndexedDB wipe on next open
+      log: security_audit event client_op_id_conflict
+    canonical:
+      condition: "доказанная коллизия: один client_op_id использован с несовпадающими параметрами"
+      show_error: "локальные данные повреждены; переоткройте Mini App"
+      action: full IndexedDB wipe on next open
+      log: security_audit event client_op_id_conflict
+      business_refusal:
+        behavior: "сообщение и перечитывание состояния, без удаления черновиков"
+        examples:
+          - PAUSE_ALREADY_OPEN
+          - PAUSE_REFUSED
+          - PAUSE_NOT_CANCELLABLE
+          - PAUSE_NOT_ACTIVE
+      unproven_collision: "один HTTP-статус 409 не включает очистку и аудит client_op_id_conflict"
+    rationale: "Автор уточнил область R339 по И2 behavior_on_collision: обычный бизнес-отказ не доказывает несовпадение параметров одного op-id."
+    status: closed
+
+  # ---------- AD-02 — минимальные метаданные очереди пользовательских пауз ----------
+  - id: AD-02
+    source: "normative/I4-wave-d.md, врезка AD-02; решение Автора 21.11.2026, course-bot/docs/decisions/R-2026-11-21.md"
+    path: I4.mini_app_client.R339_indexeddb_cache.write_queue
+    old_value:
+      persistence: IndexedDB (survives page reload)
+      retry_policy: exponential backoff, per client_op_id
+      idempotency: client_op_id from И2 idempotency_keys
+    canonical:
+      persistence: IndexedDB (survives page reload)
+      retry_policy: exponential backoff, per client_op_id
+      idempotency: client_op_id from И2 idempotency_keys
+      user_pause_metadata:
+        allowed_categories:
+          - "вид операции"
+          - "неизменные аргументы"
+          - "op-id"
+          - "привязка владельца"
+          - "расписание повторов"
+        forbidden_categories:
+          - "токены"
+          - "initData"
+          - "содержимое ответов"
+          - "снимок участника"
+        anonymous: false
+        on_operation_completion: delete operation record
+        on_tg_user_id_change: full wipe immediately
+        required_tests:
+          - "удаление записи при завершении операции"
+          - "полная очистка при смене пользователя"
+        remaining_R380_requirements: unchanged
+        implementation_constraints:
+          - "категории данных не утверждают конкретные необязательные поля API"
+          - "часовой срок намерения не вводится"
+          - "выполнение кода на выключенном устройстве не обещается"
+          - "очистка при следующем открытии не равнозначна гарантии удаления за 24 часа"
+    rationale: "Автор подтвердил минимальные служебные метаданные устойчивой очереди пауз. Остальные требования R380 не отменены; TTL снимка не становится сроком намерения."
+    status: closed
+
 # ============================================================
 # КОНЕЦ РЕЕСТРА
 # ============================================================
