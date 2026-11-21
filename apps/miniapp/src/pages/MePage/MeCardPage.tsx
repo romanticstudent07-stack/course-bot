@@ -4,6 +4,7 @@
 // Ответ живёт только в state React: не на устройство, не в лог, не в адрес. Балла Чек-Апа нет.
 // Ссылка «к экрану дня» — в готовом виде и на экране ошибки; на «Загрузка…» её нет.
 // В готовом виде — ссылки на /me/consents и /me/change-map (miniapp-i3-2b §7.3).
+// В готовом виде — ссылка на /paused (miniapp-pause-1 §8), вне MeCardView.
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -90,6 +91,7 @@ export function MeCardPage() {
       <MeCardView card={card}/>
       <Link to="/me/consents">{ME_TEXT.consentsTitle}</Link>
       <Link to="/me/change-map">{ME_TEXT.changeMapTitle}</Link>
+      <Link to="/paused">{ME_TEXT.pauseLink}</Link>
       <Link to="/day">{ME_TEXT.toDay}</Link>
     </div>
   );
