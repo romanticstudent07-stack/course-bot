@@ -36,7 +36,7 @@ contains: [навигация по OVERRIDES.yaml, правило чтения, 
 3. Итоговое значение — из `OVERRIDES.yaml`, не из патча.
 4. Если пути нет в `OVERRIDES.yaml` — значение из патча каноническое.
 
-## Что сейчас в реестре (10 записей)
+## Что сейчас в реестре (12 записей)
 
 | id | Путь | Отменено чем | Каноническое значение | Статус |
 |---|---|---|---|---|
@@ -50,6 +50,8 @@ contains: [навигация по OVERRIDES.yaml, правило чтения, 
 | OPEN_A | `B17.commands.erasure_finalize_before_cooling_off` | И3 (не рассмотрено ERRATA) | недоступна до решения Автора | open_author_decision |
 | OPEN_B | `B17.roles.moderator.card_visibility` | роль не определена | не разграничивать до решения Автора | open_author_decision |
 | OPEN_C | `I3.red_zone.auto_escalation_60s` | разъяснение | разрешена (эскалация в sleeping, не banned) | closed |
+| AD-01 | `I4.mini_app_client.R339_indexeddb_cache.conflict_ux.on_server_409` | Автор 21.11.2026, врезка AD-01 в И4 | очистка и аудит только при доказанной коллизии op-id; бизнес-409 не удаляет черновики | closed |
+| AD-02 | `I4.mini_app_client.R339_indexeddb_cache.write_queue` | Автор 21.11.2026, врезка AD-02 в И4 | минимальные метаданные очереди пауз; удаление при завершении и полный wipe при смене пользователя; остальные требования R380 сохранены | closed |
 
 ## Как связано с другими файлами
 
