@@ -95,6 +95,7 @@ def test_kinds_and_ttl():
         "pause_end": "3650 days",  # api-pause-1b
         "pause_cancel": "3650 days",  # api-pause-2
         "pause_resume": "3650 days",  # api-pause-2
+        "pause_request": "3650 days",  # pause-api-a2
     }
 
 

@@ -80,7 +80,14 @@ def _budget(engine, pid, days: int, cycle_start: datetime) -> None:
         )
 
 
-def _pause_row(engine, pid, status: str, start: datetime, ended_at: datetime | None = None) -> int:
+def _pause_row(
+    engine,
+    pid,
+    status: str,
+    start: datetime,
+    ended_at: datetime | None = None,
+    op: str | None = None,
+) -> int:
     with engine.begin() as conn:
         return conn.execute(
             text(
@@ -94,7 +101,7 @@ def _pause_row(engine, pid, status: str, start: datetime, ended_at: datetime | N
                 "st": start,
                 "end": start + timedelta(days=3),
                 "ea": ended_at,
-                "op": str(uuid.uuid4()),
+                "op": op or str(uuid.uuid4()),
             },
         ).scalar_one()
 
@@ -136,9 +143,35 @@ def _key_exists(engine, key: str) -> bool:
         ).first() is not None
 
 
-def _request(client, user_id: int, days: int = 3, op: str | None = None):
+def _key_hash(engine, key: str):
+    with engine.connect() as conn:
+        return conn.execute(
+            text("SELECT params_hash FROM idempotency_keys WHERE key = :k"), {"k": key}
+        ).first()
+
+
+def _security_events(engine, pid) -> list:
+    """security_events читает владелец (db_engine): у app_api SELECT нет."""
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                "SELECT event_type, op_kind, client_op_id FROM security_events "
+                "WHERE pid = :p ORDER BY 1"
+            ),
+            {"p": pid},
+        ).all()
+
+
+def _request(
+    client,
+    user_id: int,
+    days: int = 3,
+    op: str | None = None,
+    start_date: str | None = TOMORROW.date().isoformat(),
+):
     headers = {**_init(user_id), "X-Client-Op-Id": op or str(uuid.uuid4())}
-    return client.post(PREFIX + "/pause/request", json={"days": days}, headers=headers)
+    body = {"days": days, "start_date": start_date}
+    return client.post(PREFIX + "/pause/request", json=body, headers=headers)
 
 
 def _get(client, user_id: int):
@@ -181,15 +214,18 @@ def test_request_created(client, db_engine):
     assert datetime.fromisoformat(got["planned_end_at"]) == row.planned_end_at
 
 
-def test_request_repeat_same_op(client, db_engine):
+def test_request_repeat_same_params(client, db_engine):
     pid = _participant(client, db_engine, 8812)
     op = str(uuid.uuid4())
     first = _request(client, 8812, op=op)
     assert first.status_code == 201, first.text
-    again = _request(client, 8812, days=5, op=op)
+    again = _request(client, 8812, op=op)
     assert again.status_code == 201, again.text
     assert again.json()["pause"]["id"] == first.json()["pause"]["id"]
     assert len(_rows(db_engine, pid)) == 1
+    key = _key_hash(db_engine, day_keys.key_pause_request(pid, op))
+    assert key is not None and key.params_hash is not None
+    assert _security_events(db_engine, pid) == []
 
 
 def test_request_other_op_already_open(client, db_engine):
@@ -387,3 +423,98 @@ def test_log_has_no_pid_or_op(client, db_engine, caplog):
     for word in (str(pid), op, f"pause_id={pause_id}", TZ):
         assert word not in joined
     assert json.dumps(str(pid)) not in joined
+
+
+# ============================ pause-api-a2: повтор, коллизия, start_date ============================
+
+
+@pytest.mark.parametrize(
+    ("user_id", "changed"),
+    [(8831, {"days": 5}), (8832, {"start_date": "2026-11-22"})],
+    ids=["other_days", "other_start_date"],
+)
+def test_request_collision_409_and_audit(client, db_engine, user_id, changed):
+    pid = _participant(client, db_engine, user_id)
+    op = str(uuid.uuid4())
+    first = _request(client, user_id, op=op)
+    assert first.status_code == 201, first.text
+    before = _rows(db_engine, pid)
+    r = _request(client, user_id, op=op, **changed)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "IDEMPOTENCY_CONFLICT"
+    assert _security_events(db_engine, pid) == [("client_op_id_conflict", "pause_request", op)]
+    after = _rows(db_engine, pid)
+    assert len(after) == 1
+    assert after == before
+
+
+def test_request_row_without_key_is_repeat(client, db_engine):
+    pid = _participant(client, db_engine, 8833)
+    op = str(uuid.uuid4())
+    row_id = _pause_row(db_engine, pid, "requested", TOMORROW, op=op)
+    r = _request(client, 8833, op=op)
+    assert r.status_code == 201, r.text
+    assert r.json()["pause"]["id"] == row_id
+    assert not _key_exists(db_engine, day_keys.key_pause_request(pid, op))
+    assert _security_events(db_engine, pid) == []
+
+
+@pytest.mark.parametrize(
+    ("user_id", "start_date"),
+    [(8834, "2026-11-20"), (8835, "2026-11-22")],
+    ids=["today", "day_after_tomorrow"],
+)
+def test_request_start_date_mismatch(client, db_engine, user_id, start_date):
+    pid = _participant(client, db_engine, user_id)
+    op = str(uuid.uuid4())
+    _refused(_request(client, user_id, op=op, start_date=start_date), "start_date_passed")
+    assert _rows(db_engine, pid) == []
+    assert not _key_exists(db_engine, day_keys.key_pause_request(pid, op))
+    assert _security_events(db_engine, pid) == []
+
+
+def test_business_409_no_audit(client, db_engine):
+    pid = _participant(client, db_engine, 8836)
+    assert _request(client, 8836).status_code == 201
+    r = _request(client, 8836)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "PAUSE_ALREADY_OPEN"
+    assert _security_events(db_engine, pid) == []
+    refused_pid = _participant(client, db_engine, 8837, flags="{block_lives}")
+    _refused(_request(client, 8837), "block_lives")
+    assert _security_events(db_engine, refused_pid) == []
+
+
+def test_audit_failed_still_409(client, db_engine, monkeypatch):
+    _participant(client, db_engine, 8838)
+    op = str(uuid.uuid4())
+    assert _request(client, 8838, op=op).status_code == 201
+    monkeypatch.setattr(pause, "record_security_event", lambda *a, **k: False)
+    r = _request(client, 8838, days=5, op=op)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "IDEMPOTENCY_CONFLICT"
+
+
+def test_audit_after_rollback(client, db_engine, monkeypatch):
+    _participant(client, db_engine, 8839)
+    op = str(uuid.uuid4())
+    assert _request(client, 8839, op=op).status_code == 201
+    calls: list[str] = []
+    original = pause._rollback
+
+    def rollback(session):
+        calls.append("rollback")
+        original(session)
+
+    def audit(*args, **kwargs):
+        calls.append("audit")
+        return True
+
+    monkeypatch.setattr(pause, "_rollback", rollback)
+    monkeypatch.setattr(pause, "record_security_event", audit)
+    r = _request(client, 8839, days=5, op=op)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "IDEMPOTENCY_CONFLICT"
+    assert "audit" in calls
+    idx = calls.index("audit")
+    assert idx > 0 and calls[idx - 1] == "rollback"
