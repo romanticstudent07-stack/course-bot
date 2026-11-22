@@ -39,3 +39,5 @@ participant_pauses
 pause_budgets
 # 0019_life_writeoffs
 life_writeoffs
+# 0022_security_events
+security_events
