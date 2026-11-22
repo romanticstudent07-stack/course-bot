@@ -63,8 +63,8 @@ TEXT_FOR = {
     DONE: texts.LIFE_DONE,
 }
 
-_ARGS_RE = re.compile(r"(?:#(\d+)\s+)?([+-])(\d{1,3})")
-_CONFIRM_RE = re.compile(rf"{CALLBACK_PREFIX}:{CONFIRM}:(\d{{1,19}}):([+-][1-3]):([0-9a-f]{{16}})")
+_ARGS_RE = re.compile(r"(?:#(\d+)\s+)?([+-])(\d{1,3})", re.ASCII)
+_CONFIRM_RE = re.compile(rf"{CALLBACK_PREFIX}:{CONFIRM}:(\d{{1,19}}):([+-][1-3]):([0-9a-f]{{16}})", re.ASCII)
 
 
 def parse_args(args: str | None) -> tuple[str, int | None, int | None]:
