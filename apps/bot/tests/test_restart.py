@@ -236,8 +236,11 @@ def _assert_word_silent(text):
     assert conn.keys == {}
 
 
-def test_word_too_long_silent():
+def test_word_too_long_silent(caplog):
+    caplog.set_level(logging.DEBUG)
     _assert_word_silent("я" * 65)
+    assert str(USER) not in caplog.text and str(PID) not in caplog.text
+    assert "я" * 65 not in caplog.text
 
 
 def test_word_blank_silent():
@@ -263,7 +266,8 @@ def test_commit_fails_after_send():
     assert len(sends) == 2
     assert (sends[0].chat_id, sends[0].message_thread_id) == (GROUP, TOPIC)
     assert (sends[1].chat_id, sends[1].text) == (USER, texts.RESTART_TRY_LATER)
-    assert "commit_failed" in conn.log and conn.keys == {}
+    assert conn.log.count("commit_failed") == 1 and conn.keys == {}
+    assert conn.log.index((restart.REQUEST_KEY, (KEY_TODAY,))) < conn.log.index("commit_failed")
 
 
 # --- выдача ---
@@ -336,10 +340,12 @@ def _assert_stale(calls, conn):
     assert len(answers) == 1 and answers[0].text is None
 
 
-def test_stale_grant_no_db():
+def test_stale_grant_no_db(caplog):
+    caplog.set_level(logging.DEBUG)
     conn = FakeConn()
     calls = asyncio.run(_feed(cfg(), _button("g", mid=4901, date=STALE_DATE), conn))
     _assert_stale(calls, conn)
+    assert str(USER) not in caplog.text and str(PID) not in caplog.text
 
 
 def test_stale_deny_no_db():
