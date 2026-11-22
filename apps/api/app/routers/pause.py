@@ -2,10 +2,12 @@
 
 Маршруты (префикс /miniapp/v1, initData → общий rate_limit — main.py; своих лимитов нет):
   GET  /pause          — бюджет и текущая пауза; ничего не пишет, замок не берёт;
-  POST /pause/request  — заявка «с завтра» на 1..7 дней, X-Client-Op-Id (UUID4) → 201;
+  POST /pause/request  — заявка «с завтра» на 1..7 дней, тело {"days", "start_date"},
+                         X-Client-Op-Id (UUID4) → 201;
   POST /pause/cancel   — отмена заявки до старта, без тела → 202 {"status": "accepted"};
   POST /pause/resume   — досрочный выход из активной паузы, без тела → 202.
-API пишет только строку заявки (INSERT participant_pauses), события и ключи idempotency_keys.
+API пишет только строку заявки (INSERT participant_pauses), события, ключи idempotency_keys
+и (только при доказанной коллизии op-id) security_events.
 Статус паузы, флаг, бюджет и позицию меняет проектор v8; старт и конец по сроку — pause_ops.
 
 GET /pause:
@@ -13,17 +15,27 @@ GET /pause:
   2) состояние, бюджет (roll_cycle только для расчёта, без записи), открытая / активная строка;
   3) refusal: есть строка → "already_open" (константа роутера, только GET); иначе
      start_refusal(status="approved", days=1, start_at = завтра 00:00 по поясу).
-POST /pause/request:
+POST /pause/request (всё под замком participant:pid, одна транзакция; pause-api-a2):
   1) active_pid_locked — нет → 404;
-  2) строка (pid, op) есть → commit, 201 с ней (тело повтора не сравнивается);
+  2) h = _params_hash(days, start_date), ключ pause_request:{pid}:{op}. Ключ есть: params_hash
+     равен h → строка по op, commit, 201 «repeat»; не равен (в том числе NULL) → _OpIdConflict
+     (доказанная коллизия). Ключа нет, строка (pid, op) есть → commit, 201 с ней без аудита
+     (коллизия не доказана);
   3) открытая или активная строка kind user → 409 PAUSE_ALREADY_OPEN;
   4) start_at = day_clock.next_midnight(now, tz), planned_end_at = 00:00 местной даты start + N;
-     pause_rules.pause_days — проверка;
+     pause_rules.pause_days — проверка; местная дата start_at ≠ start_date → 409 PAUSE_REFUSED
+     {"reason": "start_date_passed"}, ничего не пишется (дата не сдвигается, R-2026-11-21);
   5) состояние, бюджет, stage_taken, last_ended_at → start_refusal(status="approved");
      причина → 409 PAUSE_REFUSED, details {"reason"};
   6) INSERT ON CONFLICT (pid, client_op_id) DO NOTHING RETURNING id; IntegrityError индекса
      participant_pauses_one_open_user_uq → rollback, 409 PAUSE_ALREADY_OPEN; пусто → как шаг 2;
-  7) commit → 201 {"pause": {...}}.
+  7) INSERT ключа pause_request (ref = id строки, params_hash = h) без ON CONFLICT;
+     конфликт ключа → IntegrityError → 503 (под замком невозможен);
+  8) commit → 201 {"pause": {...}}.
+  _OpIdConflict в _run: сначала rollback сессии запроса (замок снят, соединение в пуле),
+  затем record_security_event(session.get_bind(), client_op_id_conflict) — своё соединение
+  и своя транзакция; при любом итоге записи → 409 IDEMPOTENCY_CONFLICT.
+  Бизнес-409 (PAUSE_ALREADY_OPEN, PAUSE_REFUSED) — без аудита (OVERRIDES §AD-01).
 POST /pause/cancel (resume — в скобках):
   active_pid_locked; строка kind user в статусе requested / approved (active) — нет →
   409 PAUSE_NOT_CANCELLABLE (PAUSE_NOT_ACTIVE); ключ часов pause_start (pause_end) этой паузы
@@ -36,18 +48,20 @@ now — зависимость get_now() → day_clock.utcnow() (тесты по
 
 Права app_api (0018, 0006, 0007): participant_pauses — INSERT (pid, kind, status, start_at,
 planned_end_at, client_op_id), SELECT, USAGE participant_pauses_id_seq; pause_budgets — SELECT;
-participant_events — INSERT; idempotency_keys — SELECT, INSERT; participant_state — SELECT.
+participant_events — INSERT; idempotency_keys — SELECT, INSERT; participant_state — SELECT;
+security_events — только INSERT (0022), без SELECT и RETURNING.
 UPDATE / DELETE participant_pauses, запись в pause_budgets, participant_state, outbox — нет.
-Лог (app.pause): INFO только tg_user_id и итог (created / repeat / accepted / код ошибки).
-pid, pause_id, op и tz в логе нет.
+Лог (app.pause): INFO только tg_user_id и итог (created / repeat / accepted / код ошибки;
+для IDEMPOTENCY_CONFLICT ещё audit=ok|failed). pid, pause_id, op, tz и start_date в логе нет.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
 from contextlib import suppress
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -60,6 +74,7 @@ from app import day_clock, day_keys, pause_rules
 from app.db.session import get_db_session
 from app.participant_lock import active_pid_locked
 from app.participants import find_active_participant
+from app.security_events import CLIENT_OP_ID_CONFLICT, record_security_event
 from app.telegram_init_data import InitDataContext, require_init_data
 
 logger = logging.getLogger("app.pause")
@@ -69,6 +84,8 @@ router = APIRouter(tags=["pause"])
 
 CLIENT_OP_ID_HEADER = "X-Client-Op-Id"
 REFUSAL_ALREADY_OPEN = "already_open"  # только GET; в pause_rules.REFUSAL_REASONS нет
+REFUSAL_START_DATE_PASSED = "start_date_passed"  # как already_open: в pause_rules нет
+OP_KIND_REQUEST = "pause_request"
 OPEN_INDEX = "participant_pauses_one_open_user_uq"
 STATUS_REQUESTED = "requested"
 CANCELLABLE = ("requested", "approved")
@@ -121,6 +138,21 @@ _INSERT_KEY_SQL = text(
     "VALUES (:key, :kind, CAST(:ttl AS interval), :ref) "
     "ON CONFLICT DO NOTHING RETURNING key"
 )
+# pause-api-a2: ключ заявки с params_hash (0007); без ON CONFLICT — конфликт → IntegrityError → 503
+_KEY_HASH_SQL = text("SELECT params_hash FROM idempotency_keys WHERE key = :key")
+_INSERT_REQUEST_KEY_SQL = text(
+    "INSERT INTO idempotency_keys (key, kind, ttl, result_ref, params_hash) "
+    "VALUES (:key, :kind, CAST(:ttl AS interval), :ref, :h)"
+)
+
+
+class _OpIdConflict(Exception):
+    """Доказанная коллизия op-id (не HTTPException): _run откатывает, пишет аудит, 409."""
+
+    def __init__(self, pid: uuid.UUID, op: str) -> None:
+        super().__init__("client_op_id_conflict")
+        self.pid = pid
+        self.op = op
 
 
 def get_now() -> datetime:
@@ -134,6 +166,7 @@ def get_now() -> datetime:
 class PauseRequestIn(BaseModel):
     # Лишние поля отбрасываются (pydantic по умолчанию).
     days: int = Field(ge=1, le=pause_rules.MAX_DAYS)
+    start_date: date  # местная дата начала, подтверждённая участником (R-2026-11-21)
 
 
 class PauseOut(BaseModel):
@@ -201,6 +234,14 @@ def _not_active() -> HTTPException:
 def _refused(reason: str) -> HTTPException:
     return _error(
         status.HTTP_409_CONFLICT, "PAUSE_REFUSED", "Паузу сейчас взять нельзя.", {"reason": reason}
+    )
+
+
+def _idempotency_conflict() -> HTTPException:
+    return _error(
+        status.HTTP_409_CONFLICT,
+        "IDEMPOTENCY_CONFLICT",
+        "Операция уже выполнена с другими параметрами. Обновите экран.",
     )
 
 
@@ -281,6 +322,29 @@ def _refusal(
     )
 
 
+def _params_hash(days: int, start_date: date) -> str:
+    """sha256 каноничного JSON параметров заявки — сверка повтора (pause-api-a2)."""
+    payload = json.dumps(
+        {"days": days, "start_date": start_date.isoformat()},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _repeat(session: Session, pid: uuid.UUID, op: str, h: str) -> Any:
+    """Шаг 2: прежняя строка по op, None — нет; ключ с другим params_hash → _OpIdConflict."""
+    key_row = session.execute(
+        _KEY_HASH_SQL, {"key": day_keys.key_pause_request(pid, op)}
+    ).first()
+    if key_row is not None:
+        if key_row.params_hash != h:
+            raise _OpIdConflict(pid, op)
+        return session.execute(_BY_OP_SQL, {"pid": pid, "op": op}).one()
+    # ключа нет: строка по op — прежний результат без аудита (коллизия не доказана)
+    return session.execute(_BY_OP_SQL, {"pid": pid, "op": op}).first()
+
+
 def _bounds(now: datetime, tz: str | None, days: int) -> tuple[datetime, datetime]:
     """Д3: start = следующая 00:00 по поясу; end = 00:00 местной даты start + days."""
     z = day_clock.zone(tz)
@@ -316,17 +380,24 @@ def read_status(session: Session, tg_user_id: int, now: datetime) -> PauseStatus
 
 
 def request_pause(
-    session: Session, tg_user_id: int, op_id: uuid.UUID, days: int, now: datetime
+    session: Session,
+    tg_user_id: int,
+    op_id: uuid.UUID,
+    days: int,
+    start_date: date,
+    now: datetime,
 ) -> tuple[str, PauseOut]:
-    """Шаги 1–7 → (created / repeat, пауза). Ошибки — HTTPException / SQLAlchemyError."""
+    """Шаги 1–8 → (created / repeat, пауза). Ошибки — HTTPException / _OpIdConflict /
+    SQLAlchemyError."""
     # 1) участник под замком
     pid = active_pid_locked(session, tg_user_id)
     if pid is None:
         raise _released(session, _participant_not_found())
 
-    # 2) повтор того же op — раньше всех проверок
+    # 2) повтор того же op — раньше всех проверок; сверка params_hash
     op = str(op_id)
-    same = session.execute(_BY_OP_SQL, {"pid": pid, "op": op}).first()
+    h = _params_hash(days, start_date)
+    same = _repeat(session, pid, op, h)
     if same is not None:
         session.commit()
         return "repeat", _pause_out(same)
@@ -339,6 +410,9 @@ def request_pause(
     state = _state(session, pid)
     tz = state.tz if state is not None else None
     start_at, end_at = _bounds(now, tz, days)
+    if start_at.astimezone(day_clock.zone(tz)).date() != start_date:
+        # дата не сдвигается молча (R-2026-11-21): отказ и новое подтверждение
+        raise _released(session, _refused(REFUSAL_START_DATE_PASSED))
 
     # 5) правила старта
     days_left, restart, _ = _budget(session, pid, now, tz)
@@ -357,11 +431,25 @@ def request_pause(
             raise _released(session, _already_open()) from None
         raise
     if inserted is None:
-        same = session.execute(_BY_OP_SQL, {"pid": pid, "op": op}).one()
+        same = _repeat(session, pid, op, h)
+        if same is None:
+            same = session.execute(_BY_OP_SQL, {"pid": pid, "op": op}).one()
         session.commit()
         return "repeat", _pause_out(same)
 
-    # 7) commit; ответ — только после него
+    # 7) ключ заявки с params_hash (конфликт → IntegrityError → 503)
+    session.execute(
+        _INSERT_REQUEST_KEY_SQL,
+        {
+            "key": day_keys.key_pause_request(pid, op),
+            "kind": day_keys.KIND_PAUSE_REQUEST,
+            "ttl": day_keys.TTL_BY_KIND[day_keys.KIND_PAUSE_REQUEST],
+            "ref": str(inserted.id),
+            "h": h,
+        },
+    )
+
+    # 8) commit; ответ — только после него
     session.commit()
     return "created", PauseOut(
         id=inserted.id, status=STATUS_REQUESTED, start_at=start_at, planned_end_at=end_at
@@ -452,9 +540,26 @@ def resume_pause(session: Session, tg_user_id: int, now: datetime) -> str:
 
 
 def _run(session: Session, tg_user_id: int, name: str, fn: Any, *args: Any) -> Any:
-    """Общая обёртка: rollback и лог при HTTPException, 503 при SQLAlchemyError."""
+    """Общая обёртка: rollback и лог при HTTPException, 503 при SQLAlchemyError;
+    _OpIdConflict → rollback, затем аудит в отдельной транзакции, 409 IDEMPOTENCY_CONFLICT."""
     try:
         return fn(session, tg_user_id, *args)
+    except _OpIdConflict as exc:
+        _rollback(session)  # сначала откат: соединение уходит в пул, замок снят
+        saved = record_security_event(
+            session.get_bind(),
+            event_type=CLIENT_OP_ID_CONFLICT,
+            pid=exc.pid,
+            op_kind=OP_KIND_REQUEST,
+            client_op_id=exc.op,
+        )
+        logger.info(
+            "%s: tg_user_id=%s status=IDEMPOTENCY_CONFLICT audit=%s",
+            name,
+            tg_user_id,
+            "ok" if saved else "failed",
+        )
+        raise _idempotency_conflict() from None  # 409 при любом saved
     except HTTPException as exc:
         _rollback(session)
         detail = exc.detail if isinstance(exc.detail, dict) else {}
@@ -494,7 +599,10 @@ def get_pause(
     response_model=PauseRequestOut,
     responses={
         **_COMMON,
-        409: {"description": "PAUSE_ALREADY_OPEN / PAUSE_REFUSED (details.reason)"},
+        409: {
+            "description": "PAUSE_ALREADY_OPEN / PAUSE_REFUSED (details.reason: причины "
+            "pause_rules или start_date_passed) / IDEMPOTENCY_CONFLICT"
+        },
         422: {"description": "VALIDATION_ERROR"},
     },
 )
@@ -507,7 +615,14 @@ def post_pause_request(
     now: datetime = Depends(get_now),
 ) -> PauseRequestOut:
     outcome, pause = _run(
-        session, ctx.tg_user_id, "pause/request", request_pause, client_op_id, body.days, now
+        session,
+        ctx.tg_user_id,
+        "pause/request",
+        request_pause,
+        client_op_id,
+        body.days,
+        body.start_date,
+        now,
     )
     logger.info("pause/request: tg_user_id=%s status=%s", ctx.tg_user_id, outcome)
     return PauseRequestOut(pause=pause)
