@@ -102,6 +102,12 @@ def test_parse_args(args, expected):
     assert life.parse_args(args) == expected
 
 
+def test_parse_non_ascii_digits_rejected():
+    assert life.parse_args("+٣") == (life.USAGE, None, None)
+    assert life.parse_args("#١٢٣ +1") == (life.USAGE, None, None)
+    assert life.parse_callback("life:y:١٢٣:-1:0123456789abcdef") is None
+
+
 # --- check и has_flag ---
 
 def test_check_codes_and_order():
@@ -228,6 +234,28 @@ def test_preview_refusal_text_no_buttons():
     calls, _ = asyncio.run(_feed(cfg(), _cmd("/life #004708 +2"), db(state=("active", [], 2))))
     sends = [c for c in calls if isinstance(c, SendMessage)]
     assert [s.text for s in sends] == [texts.LIFE_REFUSE_ABOVE_MAX] and sends[0].reply_markup is None
+    _no_send_to_participant(calls)
+
+
+def _db_error():
+    def answer(sql, params):
+        raise RuntimeError("db down")
+    return FakeConn(answer)
+
+
+def test_preview_db_error_try_later():
+    calls, _ = asyncio.run(_feed(cfg(), _cmd("/life #004708 -1"), _db_error()))
+    sends = [c for c in calls if isinstance(c, SendMessage)]
+    assert len(sends) == 1 and sends[0].chat_id == GROUP
+    assert sends[0].text == texts.LIFE_TRY_LATER and sends[0].reply_markup is None
+    _no_send_to_participant(calls)
+
+
+def test_confirm_db_error_try_later_buttons_stay():
+    calls, _ = asyncio.run(_feed(cfg(), _button(life.confirm_data(SHORT, -1, OP)), _db_error()))
+    answers = [c for c in calls if isinstance(c, AnswerCallbackQuery)]
+    assert len(answers) == 1 and answers[0].text == texts.LIFE_TRY_LATER
+    assert not any(isinstance(c, EditMessageText) for c in calls)
     _no_send_to_participant(calls)
 
 
