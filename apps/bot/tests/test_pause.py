@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError, TelegramNetworkError
-from aiogram.methods import AnswerCallbackQuery, SendMessage
+from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 from psycopg.types.json import Jsonb
 
@@ -262,6 +262,26 @@ def test_button_stranger_without_db(chat_id, user):
     assert connected == [] and conn.log == []
 
 
+def test_button_admin_approve_edits_card():
+    conn = db()
+    calls, _ = asyncio.run(_feed(cfg(), _button(f"pse:a:{PAUSE_ID}"), conn))
+    edits = [c for c in calls if isinstance(c, EditMessageText)]
+    answers = [c for c in calls if isinstance(c, AnswerCallbackQuery)]
+    assert len(edits) == 1 and edits[0].reply_markup is None
+    assert texts.PAUSE_DONE_APPROVED in edits[0].text
+    assert len(answers) == 1 and answers[0].text is None
+    assert not [c for c in calls if isinstance(c, SendMessage)]
+
+
+def test_button_admin_try_later_buttons_stay():
+    conn = db(fail_on=EVENT)
+    calls, _ = asyncio.run(_feed(cfg(), _button(f"pse:r:{PAUSE_ID}"), conn))
+    answers = [c for c in calls if isinstance(c, AnswerCallbackQuery)]
+    assert len(answers) == 1 and answers[0].text == texts.PAUSE_TRY_LATER
+    assert not [c for c in calls if isinstance(c, EditMessageText)]
+    assert not [c for c in calls if isinstance(c, SendMessage)]
+
+
 # --- тик наблюдателя ---
 
 class FakeBot:
@@ -315,6 +335,25 @@ def test_tick_forbidden_commit():
     bot = FakeBot(TelegramForbiddenError(method=method, message="blocked"))
     counts = _tick(conn, bot)
     assert counts["dropped"] == 1 and conn.log[-1] == "commit"
+
+
+def test_tick_active_not_decided_sends_auto_alert():
+    r = row("active", now=START + timedelta(hours=1), open_=False)
+    conn = db(watch_rows=[r], decided=False)
+    bot = FakeBot()
+    _tick(conn, bot)
+    alert = texts.PAUSE_AUTO_ALERT.format(who="#004408", first="20.11", last="22.11")
+    assert any(m["chat_id"] == GROUP and m["text"] == alert for m in bot.sent)
+    assert KEY_EXISTS in conn.sqls()
+
+
+def test_tick_active_decided_no_auto_alert():
+    r = row("active", now=START + timedelta(hours=1), open_=False)
+    conn = db(watch_rows=[r], decided=True)
+    bot = FakeBot()
+    _tick(conn, bot)
+    alert = texts.PAUSE_AUTO_ALERT.format(who="#004408", first="20.11", last="22.11")
+    assert all(m["text"] != alert for m in bot.sent)
 
 
 # --- тексты ---
