@@ -603,3 +603,36 @@ class SupportQuestion(Base):
         ),
         Index("support_questions_pid_created_idx", "pid", "created_at"),
     )
+
+# security_events (0022, pause-api-a1, R-2026-11-21): pid без FK; пишет
+# app/security_events.py отдельной транзакцией. Те же CHECK — в миграции 0022.
+SECURITY_EVENT_TYPES: tuple[str, ...] = ("client_op_id_conflict",)
+
+
+class SecurityEvent(Base):
+    __tablename__ = "security_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    pid: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    op_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    client_op_id: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "event_type IS NOT NULL AND " + _in_list("event_type", SECURITY_EVENT_TYPES),
+            name="ck_security_events_event_type",
+        ),
+        CheckConstraint(
+            "op_kind IS NOT NULL AND char_length(op_kind) BETWEEN 1 AND 64",
+            name="ck_security_events_op_kind",
+        ),
+        CheckConstraint(
+            "client_op_id IS NOT NULL AND char_length(client_op_id) BETWEEN 1 AND 64",
+            name="ck_security_events_client_op_id",
+        ),
+        Index("security_events_created_at_idx", "created_at"),
+    )
