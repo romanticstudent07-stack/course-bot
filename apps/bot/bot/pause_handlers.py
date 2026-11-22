@@ -76,4 +76,3 @@ def build_pause_router(config: BotConfig, connect=None) -> Router:
         await _answer(callback)
 
     return router
-
