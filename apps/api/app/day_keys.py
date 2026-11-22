@@ -28,7 +28,10 @@
                                 (kind pause_cancel, ttl 3650 days, api-pause-2; пишет routers/pause);
   pause_resume:{pid}:{pause_id} — участник вышел из паузы досрочно, pause_ended by_participant
                                 записан (kind pause_resume, ttl 3650 days, api-pause-2;
-                                пишет routers/pause).
+                                пишет routers/pause);
+  pause_request:{pid}:{op_id} — заявка паузы по client_op_id создана, result_ref — id строки,
+                                params_hash — хеш параметров (kind pause_request, ttl 3650 days,
+                                pause-api-a2; пишет routers/pause).
 
 dsa (Ш4) — day_started_at в UTC, ISO 8601: ts.astimezone(timezone.utc).isoformat().
 Один и тот же момент в любом поясе даёт один и тот же ключ; naive datetime → ValueError
@@ -55,6 +58,7 @@ KIND_PAUSE_START = "pause_start"
 KIND_PAUSE_END = "pause_end"
 KIND_PAUSE_CANCEL = "pause_cancel"
 KIND_PAUSE_RESUME = "pause_resume"
+KIND_PAUSE_REQUEST = "pause_request"
 
 TTL_DAY_ENTER = "3650 days"
 TTL_DAY_DONE = "3650 days"
@@ -69,6 +73,7 @@ TTL_PAUSE_START = "3650 days"
 TTL_PAUSE_END = "3650 days"
 TTL_PAUSE_CANCEL = "3650 days"
 TTL_PAUSE_RESUME = "3650 days"
+TTL_PAUSE_REQUEST = "3650 days"
 
 LADDER_STEPS = ("plus1h", "minus2h", "minus30m")
 
@@ -86,6 +91,7 @@ TTL_BY_KIND: dict[str, str] = {
     KIND_PAUSE_END: TTL_PAUSE_END,
     KIND_PAUSE_CANCEL: TTL_PAUSE_CANCEL,
     KIND_PAUSE_RESUME: TTL_PAUSE_RESUME,
+    KIND_PAUSE_REQUEST: TTL_PAUSE_REQUEST,
 }
 
 
@@ -155,3 +161,8 @@ def key_pause_cancel(pid: uuid.UUID | str, pause_id: int | str) -> str:
 def key_pause_resume(pid: uuid.UUID | str, pause_id: int | str) -> str:
     """Участник вышел из паузы досрочно (pause_ended by_participant; api-pause-2)."""
     return f"{KIND_PAUSE_RESUME}:{pid}:{pause_id}"
+
+
+def key_pause_request(pid: uuid.UUID | str, op_id: uuid.UUID | str) -> str:
+    """Заявка паузы по client_op_id (params_hash — сверка повтора; pause-api-a2)."""
+    return f"{KIND_PAUSE_REQUEST}:{pid}:{op_id}"
