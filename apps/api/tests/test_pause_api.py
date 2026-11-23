@@ -10,10 +10,12 @@ import pytest
 
 from app.day_keys import (
     KIND_PAUSE_CANCEL,
+    KIND_PAUSE_OP,
     KIND_PAUSE_REQUEST,
     KIND_PAUSE_RESUME,
     TTL_BY_KIND,
     key_pause_cancel,
+    key_pause_op,
     key_pause_request,
     key_pause_resume,
 )
@@ -36,7 +38,11 @@ def _init(user_id: int) -> str:
 
 @pytest.mark.parametrize(("method", "path"), ROUTES)
 def test_no_init_data_is_401(api_client, method, path):
-    kwargs = {"json": {"days": 1, "start_date": "2026-11-21"}} if path == "/pause/request" else {}
+    kwargs: dict = {}
+    if path == "/pause/request":
+        kwargs = {"json": {"days": 1, "start_date": "2026-11-21"}}
+    elif path in ("/pause/cancel", "/pause/resume"):
+        kwargs = {"json": {"pause_id": 1}}
     headers = {"X-Client-Op-Id": str(uuid.uuid4())}
     r = getattr(api_client, method)(PREFIX + path, headers=headers, **kwargs)
     assert r.status_code == 401, r.text
@@ -80,3 +86,37 @@ def test_key_formats():
     assert key_pause_request(PID, op) == f"pause_request:{PID}:{op}"
     assert KIND_PAUSE_REQUEST == "pause_request"
     assert TTL_BY_KIND[KIND_PAUSE_REQUEST] == "3650 days"
+    assert key_pause_op(PID, op) == f"pause_op:{PID}:{op}"
+    assert KIND_PAUSE_OP == "pause_op"
+    assert TTL_BY_KIND[KIND_PAUSE_OP] == "3650 days"
+
+
+# ---------------------------- pause-api-a4 ----------------------------
+
+_TARGET_CASES = (
+    ("no_op", None, {"pause_id": 1}),
+    ("op_v1", str(uuid.uuid1()), {"pause_id": 1}),
+    ("no_body", "v4", None),
+    ("pause_id_str", "v4", {"pause_id": "x"}),
+)
+
+
+@pytest.mark.parametrize("path", ["/pause/cancel", "/pause/resume"])
+@pytest.mark.parametrize(
+    ("case", "op", "body"), _TARGET_CASES, ids=[c[0] for c in _TARGET_CASES]
+)
+def test_target_validation_is_422(api_client, path, case, op, body):
+    headers = {INIT_DATA_HEADER: _init(8805)}
+    if op is not None:
+        headers["X-Client-Op-Id"] = str(uuid.uuid4()) if op == "v4" else op
+    kwargs = {"json": body} if body is not None else {}
+    r = api_client.post(PREFIX + path, headers=headers, **kwargs)
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.parametrize("path", ["/pause/cancel", "/pause/resume"])
+def test_no_init_data_without_body_is_401(api_client, path):
+    r = api_client.post(PREFIX + path)
+    assert r.status_code == 401, r.text
+    assert r.json()["code"] == "TG_INIT_MISSING"

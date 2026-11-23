@@ -178,12 +178,14 @@ def _get(client, user_id: int):
     return client.get(PREFIX + "/pause", headers=_init(user_id))
 
 
-def _cancel(client, user_id: int):
-    return client.post(PREFIX + "/pause/cancel", headers=_init(user_id))
+def _cancel(client, user_id: int, pause_id: int, op: str | None = None):
+    headers = {**_init(user_id), "X-Client-Op-Id": op or str(uuid.uuid4())}
+    return client.post(PREFIX + "/pause/cancel", json={"pause_id": pause_id}, headers=headers)
 
 
-def _resume(client, user_id: int):
-    return client.post(PREFIX + "/pause/resume", headers=_init(user_id))
+def _resume(client, user_id: int, pause_id: int, op: str | None = None):
+    headers = {**_init(user_id), "X-Client-Op-Id": op or str(uuid.uuid4())}
+    return client.post(PREFIX + "/pause/resume", json={"pause_id": pause_id}, headers=headers)
 
 
 def _refused(r, reason: str) -> None:
@@ -327,7 +329,8 @@ def test_get_open_request(client, db_engine):
 def test_cancel_and_repeat(client, db_engine):
     pid = _participant(client, db_engine, 8823)
     pause_id = _request(client, 8823).json()["pause"]["id"]
-    r = _cancel(client, 8823)
+    op = str(uuid.uuid4())
+    r = _cancel(client, 8823, pause_id, op=op)
     assert r.status_code == 202, r.text
     assert r.json() == {"status": "accepted"}
     events = _events(db_engine, pid, "pause_cancel")
@@ -335,7 +338,8 @@ def test_cancel_and_repeat(client, db_engine):
     assert events[0].payload == {"pause_id": pause_id}
     assert events[0].at == NOW
     assert _key_exists(db_engine, day_keys.key_pause_cancel(pid, pause_id))
-    again = _cancel(client, 8823)
+    assert _key_exists(db_engine, day_keys.key_pause_op(pid, op))
+    again = _cancel(client, 8823, pause_id, op=op)
     assert again.status_code == 202, again.text
     assert len(_events(db_engine, pid, "pause_cancel")) == 1
 
@@ -344,7 +348,7 @@ def test_cancel_after_clock_start_key(client, db_engine):
     pid = _participant(client, db_engine, 8824)
     pause_id = _request(client, 8824).json()["pause"]["id"]
     _key(db_engine, day_keys.key_pause_start(pid, pause_id), day_keys.KIND_PAUSE_START)
-    r = _cancel(client, 8824)
+    r = _cancel(client, 8824, pause_id)
     assert r.status_code == 409, r.text
     assert r.json()["code"] == "PAUSE_NOT_CANCELLABLE"
     assert _events(db_engine, pid, "pause_cancel") == []
@@ -352,7 +356,7 @@ def test_cancel_after_clock_start_key(client, db_engine):
 
 def test_cancel_without_open(client, db_engine):
     _participant(client, db_engine, 8825)
-    r = _cancel(client, 8825)
+    r = _cancel(client, 8825, 999999)  # строки нет
     assert r.status_code == 409, r.text
     assert r.json()["code"] == "PAUSE_NOT_CANCELLABLE"
 
@@ -363,14 +367,15 @@ def test_cancel_without_open(client, db_engine):
 def test_resume_and_repeat(client, db_engine):
     pid = _participant(client, db_engine, 8826)
     pause_id = _pause_row(db_engine, pid, "active", NOW - timedelta(hours=9))
-    r = _resume(client, 8826)
+    op = str(uuid.uuid4())
+    r = _resume(client, 8826, pause_id, op=op)
     assert r.status_code == 202, r.text
     assert r.json() == {"status": "accepted"}
     events = _events(db_engine, pid, "pause_ended")
     assert len(events) == 1
     assert events[0].payload == {"pause_id": pause_id, "reason": "by_participant"}
     assert events[0].at == NOW
-    again = _resume(client, 8826)
+    again = _resume(client, 8826, pause_id, op=op)
     assert again.status_code == 202, again.text
     assert len(_events(db_engine, pid, "pause_ended")) == 1
 
@@ -379,7 +384,7 @@ def test_resume_after_clock_end_key(client, db_engine):
     pid = _participant(client, db_engine, 8827)
     pause_id = _pause_row(db_engine, pid, "active", NOW - timedelta(hours=9))
     _key(db_engine, day_keys.key_pause_end(pid, pause_id), day_keys.KIND_PAUSE_END)
-    r = _resume(client, 8827)
+    r = _resume(client, 8827, pause_id)
     assert r.status_code == 409, r.text
     assert r.json()["code"] == "PAUSE_NOT_ACTIVE"
     assert _events(db_engine, pid, "pause_ended") == []
@@ -387,8 +392,9 @@ def test_resume_after_clock_end_key(client, db_engine):
 
 def test_resume_not_active(client, db_engine):
     _participant(client, db_engine, 8828)
-    assert _request(client, 8828).status_code == 201  # requested, не active
-    r = _resume(client, 8828)
+    created = _request(client, 8828)  # requested, не active
+    assert created.status_code == 201
+    r = _resume(client, 8828, created.json()["pause"]["id"])
     assert r.status_code == 409, r.text
     assert r.json()["code"] == "PAUSE_NOT_ACTIVE"
 
@@ -400,10 +406,12 @@ def test_db_error_is_503_and_rolls_back(client, db_engine, monkeypatch):
     pid = _participant(client, db_engine, 8829)
     pause_id = _request(client, 8829).json()["pause"]["id"]
     monkeypatch.setattr(pause, "_INSERT_EVENT_SQL", text("SELECT 1/0"))
-    r = _cancel(client, 8829)
+    op = str(uuid.uuid4())
+    r = _cancel(client, 8829, pause_id, op=op)
     assert r.status_code == 503, r.text
     assert r.json()["code"] == "SERVICE_UNAVAILABLE"
     assert not _key_exists(db_engine, day_keys.key_pause_cancel(pid, pause_id))
+    assert not _key_exists(db_engine, day_keys.key_pause_op(pid, op))
     assert _events(db_engine, pid, "pause_cancel") == []
 
 
@@ -414,7 +422,7 @@ def test_log_has_no_pid_or_op(client, db_engine, caplog):
     pause_id = _request(client, 8830, op=op).json()["pause"]["id"]
     assert _request(client, 8830, op=op).status_code == 201
     assert _request(client, 8830).status_code == 409
-    assert _cancel(client, 8830).status_code == 202
+    assert _cancel(client, 8830, pause_id).status_code == 202
     records = [r.getMessage() for r in caplog.records if r.name == LOGGER]
     joined = "\n".join(records)
     assert "tg_user_id=8830" in joined
@@ -513,6 +521,107 @@ def test_audit_after_rollback(client, db_engine, monkeypatch):
     monkeypatch.setattr(pause, "_rollback", rollback)
     monkeypatch.setattr(pause, "record_security_event", audit)
     r = _request(client, 8839, days=5, op=op)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "IDEMPOTENCY_CONFLICT"
+    assert "audit" in calls
+    idx = calls.index("audit")
+    assert idx > 0 and calls[idx - 1] == "rollback"
+
+
+# ============================ pause-api-a4: цель pause_id и X-Client-Op-Id ============================
+
+
+def test_cancel_other_op_same_pause_no_event(client, db_engine):
+    pid = _participant(client, db_engine, 8841)
+    pause_id = _request(client, 8841).json()["pause"]["id"]
+    op1, op2 = str(uuid.uuid4()), str(uuid.uuid4())
+    assert _cancel(client, 8841, pause_id, op=op1).status_code == 202
+    r = _cancel(client, 8841, pause_id, op=op2)
+    assert r.status_code == 202, r.text
+    assert r.json() == {"status": "accepted"}
+    assert len(_events(db_engine, pid, "pause_cancel")) == 1
+    assert _key_exists(db_engine, day_keys.key_pause_op(pid, op1))
+    assert _key_exists(db_engine, day_keys.key_pause_op(pid, op2))
+    assert _security_events(db_engine, pid) == []
+
+
+def test_op_collision_other_pause_id(client, db_engine):
+    pid = _participant(client, db_engine, 8842)
+    pause_id = _request(client, 8842).json()["pause"]["id"]
+    op = str(uuid.uuid4())
+    assert _cancel(client, 8842, pause_id, op=op).status_code == 202
+    r = _cancel(client, 8842, pause_id + 1, op=op)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "IDEMPOTENCY_CONFLICT"
+    assert _security_events(db_engine, pid) == [("client_op_id_conflict", "pause_cancel", op)]
+    assert len(_events(db_engine, pid, "pause_cancel")) == 1
+
+
+def test_op_collision_cancel_then_resume(client, db_engine):
+    pid = _participant(client, db_engine, 8843)
+    pause_id = _request(client, 8843).json()["pause"]["id"]
+    op = str(uuid.uuid4())
+    assert _cancel(client, 8843, pause_id, op=op).status_code == 202
+    r = _resume(client, 8843, pause_id, op=op)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "IDEMPOTENCY_CONFLICT"
+    assert _security_events(db_engine, pid) == [("client_op_id_conflict", "pause_resume", op)]
+    assert _events(db_engine, pid, "pause_ended") == []
+
+
+def test_foreign_pause_409_no_audit(client, db_engine):
+    # A — заявка requested, A2 — активная пауза (две строки разных участников: индекс
+    # participant_pauses_one_open_user_uq не мешает); B бьёт по их pause_id
+    pid_a = _participant(client, db_engine, 8844)
+    requested_id = _request(client, 8844).json()["pause"]["id"]
+    pid_a2 = _participant(client, db_engine, 8846)
+    active_id = _pause_row(db_engine, pid_a2, "active", NOW - timedelta(hours=9))
+    pid_b = _participant(client, db_engine, 8845)
+    r = _cancel(client, 8845, requested_id)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "PAUSE_NOT_CANCELLABLE"
+    r = _resume(client, 8845, active_id)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "PAUSE_NOT_ACTIVE"
+    assert _events(db_engine, pid_a, "pause_cancel") == []
+    assert _events(db_engine, pid_a2, "pause_ended") == []
+    assert not _key_exists(db_engine, day_keys.key_pause_cancel(pid_a, requested_id))
+    assert not _key_exists(db_engine, day_keys.key_pause_resume(pid_a2, active_id))
+    assert _security_events(db_engine, pid_b) == []
+
+
+def test_target_is_given_pause(client, db_engine):
+    pid = _participant(client, db_engine, 8847)
+    ended_id = _pause_row(
+        db_engine, pid, "ended", NOW - timedelta(days=20), ended_at=NOW - timedelta(days=17)
+    )
+    requested_id = _pause_row(db_engine, pid, "requested", TOMORROW)
+    r = _cancel(client, 8847, ended_id)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "PAUSE_NOT_CANCELLABLE"
+    assert not _key_exists(db_engine, day_keys.key_pause_cancel(pid, requested_id))
+    assert _events(db_engine, pid, "pause_cancel") == []
+
+
+def test_target_audit_after_rollback(client, db_engine, monkeypatch):
+    _participant(client, db_engine, 8848)
+    pause_id = _request(client, 8848).json()["pause"]["id"]
+    op = str(uuid.uuid4())
+    assert _cancel(client, 8848, pause_id, op=op).status_code == 202
+    calls: list[str] = []
+    original = pause._rollback
+
+    def rollback(session):
+        calls.append("rollback")
+        original(session)
+
+    def audit(*args, **kwargs):
+        calls.append("audit")
+        return True
+
+    monkeypatch.setattr(pause, "_rollback", rollback)
+    monkeypatch.setattr(pause, "record_security_event", audit)
+    r = _cancel(client, 8848, pause_id + 1, op=op)
     assert r.status_code == 409, r.text
     assert r.json()["code"] == "IDEMPOTENCY_CONFLICT"
     assert "audit" in calls
