@@ -444,7 +444,7 @@ describe('дата и анкета не уходят в хранилище (D-19
     }
   });
 
-  it.each([...NO_STORAGE_FILES, './drafts.ts'])('%s: нет innerHTML и аналогов (R342)', (path) => {
+  it.each([...NO_STORAGE_FILES, './drafts.ts', './pauseQueueStore.ts'])('%s: нет innerHTML и аналогов (R342)', (path) => {
     const text = source(path);
     for (const banned of BANNED_HTML) {
       expect(text.includes(banned), `${path}: ${banned}`).toBe(false);
@@ -465,6 +465,26 @@ describe('дата и анкета не уходят в хранилище (D-19
       'gender',
       'weight',
       'wellbeing',
+    ]) {
+      expect(text.includes(banned), banned).toBe(false);
+    }
+  });
+});
+
+describe('очередь пауз не хранит лишнего (miniapp-pause-b1)', () => {
+  it('pauseQueueStore.ts: нет initData, токенов и console', () => {
+    const text = source('./pauseQueueStore.ts');
+    for (const banned of [
+      'initdata',
+      'init_data',
+      'token',
+      'console.',
+      'localstorage',
+      'sessionstorage',
+      'document.cookie',
+      'dexie',
+      'birth',
+      'short_no',
     ]) {
       expect(text.includes(banned), banned).toBe(false);
     }
