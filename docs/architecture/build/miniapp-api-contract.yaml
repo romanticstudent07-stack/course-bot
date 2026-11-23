@@ -352,31 +352,65 @@ paths:
 
   /miniapp/v1/pause/cancel:
     post:
-      summary: "Отмена заявки на паузу до старта (без тела и без X-Client-Op-Id)"
+      summary: "Отмена заявки на паузу до старта (цель pause_id, X-Client-Op-Id; pause-api-a4)"
+      parameters:
+        - { in: header, name: X-Client-Op-Id, required: true, description: "UUID версии 4; иная версия → 422", schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pause_id]
+              properties:
+                pause_id: { type: integer, minimum: 1, description: "id паузы из GET /pause (pause.id) — неизменная цель операции" }
       description: |
         Пауза kind user в статусе requested или approved, старт часами ещё не выполнен →
-        событие pause_cancel {pause_id}. Повтор → тот же 202 без нового события.
+        событие pause_cancel {pause_id}. Пауза ищется по pid из initData, pause_id и kind user;
+        чужая или несуществующая пауза → тот же 409 без аудита (чужие паузы не раскрываются).
+        Идемпотентность: ключ pause_op:{pid}:{client_op_id}, хэш цели (действие, pause_id).
+        Тот же op и та же цель → 202 без нового события; тот же op с другой целью или другим
+        действием → 409 IDEMPOTENCY_CONFLICT, событие client_op_id_conflict в security_events
+        после отката запроса (OVERRIDES AD-01). Действие уже выполнено другим op → 202 без события.
         Уточнено реализацией course-bot (pause.py).
       responses:
         "202": { description: "Принято или повтор", content: { application/json: { schema: { type: object, required: [status], properties: { status: { type: string, enum: [accepted] } } } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: "PARTICIPANT_NOT_FOUND", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "409": { description: "PAUSE_NOT_CANCELLABLE", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "PAUSE_NOT_CANCELLABLE / IDEMPOTENCY_CONFLICT", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "VALIDATION_ERROR (нет тела, pause_id не целое или < 1, нет op-id или не UUID4)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { $ref: "#/components/responses/RateLimited" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /miniapp/v1/pause/resume:
     post:
-      summary: "Досрочный выход из активной паузы (без тела и без X-Client-Op-Id)"
+      summary: "Досрочный выход из активной паузы (цель pause_id, X-Client-Op-Id; pause-api-a4)"
+      parameters:
+        - { in: header, name: X-Client-Op-Id, required: true, description: "UUID версии 4; иная версия → 422", schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pause_id]
+              properties:
+                pause_id: { type: integer, minimum: 1, description: "id паузы из GET /pause (pause.id) — неизменная цель операции" }
       description: |
         Пауза kind user в статусе active, конец часами ещё не выполнен → событие
-        pause_ended {pause_id, reason: by_participant}. Повтор → тот же 202 без нового события.
+        pause_ended {pause_id, reason: by_participant}. Пауза ищется по pid из initData, pause_id и kind user;
+        чужая или несуществующая пауза → тот же 409 без аудита (чужие паузы не раскрываются).
+        Идемпотентность: ключ pause_op:{pid}:{client_op_id}, хэш цели (действие, pause_id).
+        Тот же op и та же цель → 202 без нового события; тот же op с другой целью или другим
+        действием → 409 IDEMPOTENCY_CONFLICT, событие client_op_id_conflict в security_events
+        после отката запроса (OVERRIDES AD-01). Действие уже выполнено другим op → 202 без события.
         Уточнено реализацией course-bot (pause.py).
       responses:
         "202": { description: "Принято или повтор", content: { application/json: { schema: { type: object, required: [status], properties: { status: { type: string, enum: [accepted] } } } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: "PARTICIPANT_NOT_FOUND", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "409": { description: "PAUSE_NOT_ACTIVE", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "PAUSE_NOT_ACTIVE / IDEMPOTENCY_CONFLICT", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "VALIDATION_ERROR (нет тела, pause_id не целое или < 1, нет op-id или не UUID4)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { $ref: "#/components/responses/RateLimited" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
