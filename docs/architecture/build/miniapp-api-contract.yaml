@@ -81,6 +81,16 @@ components:
           description: "Только при reconsent. Закрытый перечень; порядок вывода — как в enum."
           items: { type: string, enum: [C0_missing, C0_revoked, C0_text_changed, C1_missing, C1_revoked, C1_text_changed] }
 
+    PauseOut:
+      type: object
+      required: [id, status, start_at, planned_end_at]
+      description: "Пауза участника (course-bot pause.py). Время — UTC. Новая заявка — status requested; остальные статусы пишет проектор, перечень — по схеме participant_pauses."
+      properties:
+        id: { type: integer }
+        status: { type: string }
+        start_at: { type: string, format: date-time }
+        planned_end_at: { type: string, format: date-time }
+
   responses:
     Unauthorized:
       description: "initData невалидна / истекла"
@@ -290,7 +300,88 @@ paths:
       parameters: [{ in: header, name: X-Client-Op-Id, required: true, schema: { type: string, format: uuid }}]
       # TODO: request body, П-31 (day_counting: on_confirmed_db_write)
 
+  # ---------------- Паузы (Р-6а, Р-20; R-2026-11-21; course-bot pause-api-a1, pause-api-a2) ----------------
+  /miniapp/v1/pause:
+    get:
+      summary: "Бюджет пауз и текущая пауза (только чтение)"
+      description: |
+        Ничего не пишет, замок не берёт; бюджет считается без записи.
+        refusal: есть открытая или активная пауза kind user → already_open; иначе причина
+        правил старта (для паузы на 1 день с ближайшей 00:00 по поясу участника) или null.
+        Уточнено реализацией course-bot (pause.py).
+      responses:
+        "200": { description: "Состояние", content: { application/json: { schema: { type: object, required: [budget_days_left, budget_days_total, cycle_ends_at, pause, can_request, refusal], properties: { budget_days_left: { type: integer }, budget_days_total: { type: integer }, cycle_ends_at: { type: [string, "null"], format: date-time }, pause: { oneOf: [{ $ref: "#/components/schemas/PauseOut" }, { type: "null" }] }, can_request: { type: boolean }, refusal: { type: [string, "null"] } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "PARTICIPANT_NOT_FOUND", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /miniapp/v1/pause/request:
+    post:
+      summary: "Заявка на паузу «с завтра» на 1..7 дней (Р-6а)"
+      description: |
+        Под замком participant:pid, одна транзакция. start_at — ближайшая 00:00 по поясу участника,
+        planned_end_at — 00:00 местной даты старта + days.
+        start_date — местная дата, подтверждённая участником (R-2026-11-21): не совпала с датой
+        start_at → 409 PAUSE_REFUSED, details.reason start_date_passed; дата не сдвигается, ничего не пишется.
+        Идемпотентность: ключ pause_request:{pid}:{op} со сверкой хэша параметров (days, start_date).
+        Тот же op и те же параметры → 201 с прежней паузой. Тот же op и другие параметры →
+        409 IDEMPOTENCY_CONFLICT; событие client_op_id_conflict пишется в security_events
+        отдельной транзакцией после отката запроса. Бизнес-отказы 409 — без аудита (OVERRIDES AD-01).
+        Уточнено реализацией course-bot (pause.py, pause-api-a2).
+      parameters:
+        - { in: header, name: X-Client-Op-Id, required: true, description: "UUID версии 4; иная версия → 422", schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [days, start_date]
+              properties:
+                days: { type: integer, minimum: 1, maximum: 7 }
+                start_date: { type: string, format: date, description: "Местная дата начала, YYYY-MM-DD" }
+      responses:
+        "201": { description: "Заявка создана или повтор", content: { application/json: { schema: { type: object, required: [pause], properties: { pause: { $ref: "#/components/schemas/PauseOut" } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "PARTICIPANT_NOT_FOUND", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "PAUSE_ALREADY_OPEN / PAUSE_REFUSED (details.reason — причина правил старта или start_date_passed) / IDEMPOTENCY_CONFLICT", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "VALIDATION_ERROR (нет поля, неверная дата, days вне 1..7, op-id не UUID4)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /miniapp/v1/pause/cancel:
+    post:
+      summary: "Отмена заявки на паузу до старта (без тела и без X-Client-Op-Id)"
+      description: |
+        Пауза kind user в статусе requested или approved, старт часами ещё не выполнен →
+        событие pause_cancel {pause_id}. Повтор → тот же 202 без нового события.
+        Уточнено реализацией course-bot (pause.py).
+      responses:
+        "202": { description: "Принято или повтор", content: { application/json: { schema: { type: object, required: [status], properties: { status: { type: string, enum: [accepted] } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "PARTICIPANT_NOT_FOUND", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "PAUSE_NOT_CANCELLABLE", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /miniapp/v1/pause/resume:
+    post:
+      summary: "Досрочный выход из активной паузы (без тела и без X-Client-Op-Id)"
+      description: |
+        Пауза kind user в статусе active, конец часами ещё не выполнен → событие
+        pause_ended {pause_id, reason: by_participant}. Повтор → тот же 202 без нового события.
+        Уточнено реализацией course-bot (pause.py).
+      responses:
+        "202": { description: "Принято или повтор", content: { application/json: { schema: { type: object, required: [status], properties: { status: { type: string, enum: [accepted] } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "PARTICIPANT_NOT_FOUND", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "PAUSE_NOT_ACTIVE", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
   # ---------------- Чек-Ап (Блок 5) ----------------
+
   /miniapp/v1/checkup/config:
     get:
       summary: "Конфигурация Чек-Апа (3 зоны green / yellow / red, шкала, дисклеймер; границы и балл участнику не отдаются — I3 §C.7)"
