@@ -4,8 +4,10 @@
   GET  /pause          — бюджет и текущая пауза; ничего не пишет, замок не берёт;
   POST /pause/request  — заявка «с завтра» на 1..7 дней, тело {"days", "start_date"},
                          X-Client-Op-Id (UUID4) → 201;
-  POST /pause/cancel   — отмена заявки до старта, без тела → 202 {"status": "accepted"};
-  POST /pause/resume   — досрочный выход из активной паузы, без тела → 202.
+  POST /pause/cancel   — отмена заявки до старта, тело {"pause_id"}, X-Client-Op-Id (UUID4)
+                         → 202 {"status": "accepted"};
+  POST /pause/resume   — досрочный выход из активной паузы, тело {"pause_id"},
+                         X-Client-Op-Id (UUID4) → 202.
 API пишет только строку заявки (INSERT participant_pauses), события, ключи idempotency_keys
 и (только при доказанной коллизии op-id) security_events.
 Статус паузы, флаг, бюджет и позицию меняет проектор v8; старт и конец по сроку — pause_ops.
@@ -36,13 +38,26 @@ POST /pause/request (всё под замком participant:pid, одна тра
   затем record_security_event(session.get_bind(), client_op_id_conflict) — своё соединение
   и своя транзакция; при любом итоге записи → 409 IDEMPOTENCY_CONFLICT.
   Бизнес-409 (PAUSE_ALREADY_OPEN, PAUSE_REFUSED) — без аудита (OVERRIDES §AD-01).
-POST /pause/cancel (resume — в скобках):
-  active_pid_locked; строка kind user в статусе requested / approved (active) — нет →
-  409 PAUSE_NOT_CANCELLABLE (PAUSE_NOT_ACTIVE); ключ часов pause_start (pause_end) этой паузы
-  есть → тот же 409; INSERT ключа pause_cancel (pause_resume) ON CONFLICT DO NOTHING RETURNING
-  key; пусто → commit, 202 без события; иначе событие pause_cancel {"pause_id"}
-  (pause_ended {"pause_id", "reason": "by_participant"}), at = now → commit → 202.
-  Ключ и событие — одна транзакция, один commit, под замком participant:pid (часы — тот же замок).
+POST /pause/cancel (resume — в скобках; pause-api-a4). Тело {"pause_id": int >= 1} и
+X-Client-Op-Id (UUID4) обязательны, иначе 422. Всё под замком participant:pid, одна транзакция:
+  1) active_pid_locked — нет → 404;
+  2) h = _target_hash("cancel" ("resume"), pause_id), ключ pause_op:{pid}:{op}. Ключ есть:
+     params_hash равен h → commit, 202 «repeat» без проверок и без события; не равен
+     (в том числе NULL) → _OpIdConflict (op_kind pause_cancel / pause_resume);
+  3) строка (pid, pause_id) kind user в статусе requested / approved (active) — нет (в том числе
+     чужая или несуществующая пауза) → 409 PAUSE_NOT_CANCELLABLE (PAUSE_NOT_ACTIVE) без аудита;
+     ответ одинаковый — чужие паузы не раскрываются;
+  4) ключ часов pause_start (pause_end) этой паузы есть → тот же 409;
+  5) INSERT маркера pause_cancel (pause_resume):{pid}:{pause_id} ON CONFLICT DO NOTHING RETURNING
+     key; пусто (действие уже сделал другой op) → шаг 7, commit, 202 «repeat» без события;
+  6) событие pause_cancel {"pause_id"} (pause_ended {"pause_id", "reason": "by_participant"}),
+     at = now;
+  7) INSERT ключа pause_op (ref = pause_id, params_hash = h) без ON CONFLICT;
+     конфликт → IntegrityError → 503 (под замком невозможен);
+  8) commit → 202 «accepted».
+  Маркер, событие и ключ pause_op — один commit (часы — тот же замок). _OpIdConflict — как у request:
+  rollback, затем record_security_event, 409 IDEMPOTENCY_CONFLICT. Один op на /pause/request и
+  на cancel/resume не сверяется (разные виды ключа): клиент даёт новый UUID на каждую операцию.
 now — зависимость get_now() → day_clock.utcnow() (тесты подменяют). C0/C1 не проверяются (Д10).
 Любая SQLAlchemyError (и на commit) → rollback, 503 SERVICE_UNAVAILABLE; в лог — имя класса.
 
@@ -86,6 +101,10 @@ CLIENT_OP_ID_HEADER = "X-Client-Op-Id"
 REFUSAL_ALREADY_OPEN = "already_open"  # только GET; в pause_rules.REFUSAL_REASONS нет
 REFUSAL_START_DATE_PASSED = "start_date_passed"  # как already_open: в pause_rules нет
 OP_KIND_REQUEST = "pause_request"
+OP_KIND_CANCEL = "pause_cancel"
+OP_KIND_RESUME = "pause_resume"
+ACTION_CANCEL = "cancel"
+ACTION_RESUME = "resume"
 OPEN_INDEX = "participant_pauses_one_open_user_uq"
 STATUS_REQUESTED = "requested"
 CANCELLABLE = ("requested", "approved")
@@ -144,15 +163,21 @@ _INSERT_REQUEST_KEY_SQL = text(
     "INSERT INTO idempotency_keys (key, kind, ttl, result_ref, params_hash) "
     "VALUES (:key, :kind, CAST(:ttl AS interval), :ref, :h)"
 )
+# pause-api-a4: цель cancel / resume — только своя пауза (пара pid, pause_id)
+_TARGET_SQL = text(
+    "SELECT id, status FROM participant_pauses "
+    "WHERE pid = :pid AND id = :pause_id AND kind = 'user'"
+)
 
 
 class _OpIdConflict(Exception):
     """Доказанная коллизия op-id (не HTTPException): _run откатывает, пишет аудит, 409."""
 
-    def __init__(self, pid: uuid.UUID, op: str) -> None:
+    def __init__(self, pid: uuid.UUID, op: str, op_kind: str) -> None:
         super().__init__("client_op_id_conflict")
         self.pid = pid
         self.op = op
+        self.op_kind = op_kind
 
 
 def get_now() -> datetime:
@@ -167,6 +192,11 @@ class PauseRequestIn(BaseModel):
     # Лишние поля отбрасываются (pydantic по умолчанию).
     days: int = Field(ge=1, le=pause_rules.MAX_DAYS)
     start_date: date  # местная дата начала, подтверждённая участником (R-2026-11-21)
+
+
+class PauseTargetIn(BaseModel):
+    # цель cancel / resume (pause-api-a4); лишние поля отбрасываются
+    pause_id: int = Field(ge=1)
 
 
 class PauseOut(BaseModel):
@@ -332,6 +362,16 @@ def _params_hash(days: int, start_date: date) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _target_hash(action: str, pause_id: int) -> str:
+    """sha256 каноничного JSON цели cancel / resume — сверка повтора (pause-api-a4)."""
+    payload = json.dumps(
+        {"action": action, "pause_id": pause_id},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 def _repeat(session: Session, pid: uuid.UUID, op: str, h: str) -> Any:
     """Шаг 2: прежняя строка по op, None — нет; ключ с другим params_hash → _OpIdConflict."""
     key_row = session.execute(
@@ -339,7 +379,7 @@ def _repeat(session: Session, pid: uuid.UUID, op: str, h: str) -> Any:
     ).first()
     if key_row is not None:
         if key_row.params_hash != h:
-            raise _OpIdConflict(pid, op)
+            raise _OpIdConflict(pid, op, OP_KIND_REQUEST)
         return session.execute(_BY_OP_SQL, {"pid": pid, "op": op}).one()
     # ключа нет: строка по op — прежний результат без аудита (коллизия не доказана)
     return session.execute(_BY_OP_SQL, {"pid": pid, "op": op}).first()
@@ -456,11 +496,29 @@ def request_pause(
     )
 
 
+def _insert_op_key(session: Session, pid: uuid.UUID, op: str, pause_id: int, h: str) -> None:
+    """Шаг 7: ключ pause_op без ON CONFLICT (конфликт → IntegrityError → 503)."""
+    session.execute(
+        _INSERT_REQUEST_KEY_SQL,
+        {
+            "key": day_keys.key_pause_op(pid, op),
+            "kind": day_keys.KIND_PAUSE_OP,
+            "ttl": day_keys.TTL_BY_KIND[day_keys.KIND_PAUSE_OP],
+            "ref": str(pause_id),
+            "h": h,
+        },
+    )
+
+
 def _finish_pause(
     session: Session,
     tg_user_id: int,
+    op_id: uuid.UUID,
+    pause_id: int,
     now: datetime,
     *,
+    action: str,
+    op_kind: str,
     statuses: tuple[str, ...],
     clock_key: Any,
     own_kind: str,
@@ -469,20 +527,33 @@ def _finish_pause(
     payload_extra: dict[str, str],
     refuse: Any,
 ) -> str:
-    """cancel / resume → accepted / repeat. Ключ и событие — один commit под замком (Д7, Д8)."""
+    """cancel / resume шаги 1–8 → accepted / repeat. Маркер, событие и ключ pause_op —
+    один commit под замком. Ошибки — HTTPException / _OpIdConflict / SQLAlchemyError."""
+    # 1) участник под замком
     pid = active_pid_locked(session, tg_user_id)
     if pid is None:
         raise _released(session, _participant_not_found())
 
-    rows = session.execute(_OPEN_SQL, {"pid": pid}).all()
-    target = next((r for r in rows if r.status in statuses), None)
-    if target is None:
+    # 2) повтор того же op — раньше всех проверок; сверка хеша цели
+    op = str(op_id)
+    h = _target_hash(action, pause_id)
+    key_row = session.execute(_KEY_HASH_SQL, {"key": day_keys.key_pause_op(pid, op)}).first()
+    if key_row is not None:
+        if key_row.params_hash != h:
+            raise _OpIdConflict(pid, op, op_kind)
+        session.commit()
+        return "repeat"
+
+    # 3) цель — только своя пауза в нужном статусе; чужая / нет → тот же 409 без аудита
+    target = session.execute(_TARGET_SQL, {"pid": pid, "pause_id": pause_id}).first()
+    if target is None or target.status not in statuses:
         raise _released(session, refuse())
 
-    # гонка с часами: ключ часов этой паузы уже есть → поздно
+    # 4) гонка с часами: ключ часов этой паузы уже есть → поздно
     if session.execute(_KEY_EXISTS_SQL, {"key": clock_key(pid, target.id)}).first() is not None:
         raise _released(session, refuse())
 
+    # 5) маркер действия по pause_id
     added = session.execute(
         _INSERT_KEY_SQL,
         {
@@ -493,9 +564,12 @@ def _finish_pause(
         },
     ).first()
     if added is None:
+        # действие уже сделано другим op: только ключ этого op, без события
+        _insert_op_key(session, pid, op, target.id, h)
         session.commit()
         return "repeat"
 
+    # 6) событие
     session.execute(
         _INSERT_EVENT_SQL,
         {
@@ -505,15 +579,24 @@ def _finish_pause(
             "at": now,
         },
     )
+
+    # 7) ключ pause_op; 8) commit — ответ только после него
+    _insert_op_key(session, pid, op, target.id, h)
     session.commit()
     return "accepted"
 
 
-def cancel_pause(session: Session, tg_user_id: int, now: datetime) -> str:
+def cancel_pause(
+    session: Session, tg_user_id: int, op_id: uuid.UUID, pause_id: int, now: datetime
+) -> str:
     return _finish_pause(
         session,
         tg_user_id,
+        op_id,
+        pause_id,
         now,
+        action=ACTION_CANCEL,
+        op_kind=OP_KIND_CANCEL,
         statuses=CANCELLABLE,
         clock_key=day_keys.key_pause_start,
         own_kind=day_keys.KIND_PAUSE_CANCEL,
@@ -524,11 +607,17 @@ def cancel_pause(session: Session, tg_user_id: int, now: datetime) -> str:
     )
 
 
-def resume_pause(session: Session, tg_user_id: int, now: datetime) -> str:
+def resume_pause(
+    session: Session, tg_user_id: int, op_id: uuid.UUID, pause_id: int, now: datetime
+) -> str:
     return _finish_pause(
         session,
         tg_user_id,
+        op_id,
+        pause_id,
         now,
+        action=ACTION_RESUME,
+        op_kind=OP_KIND_RESUME,
         statuses=(ACTIVE,),
         clock_key=day_keys.key_pause_end,
         own_kind=day_keys.KIND_PAUSE_RESUME,
@@ -550,7 +639,7 @@ def _run(session: Session, tg_user_id: int, name: str, fn: Any, *args: Any) -> A
             session.get_bind(),
             event_type=CLIENT_OP_ID_CONFLICT,
             pid=exc.pid,
-            op_kind=OP_KIND_REQUEST,
+            op_kind=exc.op_kind,
             client_op_id=exc.op,
         )
         logger.info(
@@ -632,14 +721,22 @@ def post_pause_request(
     "/pause/cancel",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=AcceptedOut,
-    responses={**_COMMON, 409: {"description": "PAUSE_NOT_CANCELLABLE"}},
+    responses={
+        **_COMMON,
+        409: {"description": "PAUSE_NOT_CANCELLABLE / IDEMPOTENCY_CONFLICT"},
+        422: {"description": "VALIDATION_ERROR"},
+    },
 )
 def post_pause_cancel(
+    body: PauseTargetIn,
+    client_op_id: Annotated[UUID4, Header(alias=CLIENT_OP_ID_HEADER)],
     ctx: InitDataContext = Depends(require_init_data),
     session: Session = Depends(get_db_session),
     now: datetime = Depends(get_now),
 ) -> AcceptedOut:
-    outcome = _run(session, ctx.tg_user_id, "pause/cancel", cancel_pause, now)
+    outcome = _run(
+        session, ctx.tg_user_id, "pause/cancel", cancel_pause, client_op_id, body.pause_id, now
+    )
     logger.info("pause/cancel: tg_user_id=%s status=%s", ctx.tg_user_id, outcome)
     return AcceptedOut(status="accepted")
 
@@ -648,13 +745,21 @@ def post_pause_cancel(
     "/pause/resume",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=AcceptedOut,
-    responses={**_COMMON, 409: {"description": "PAUSE_NOT_ACTIVE"}},
+    responses={
+        **_COMMON,
+        409: {"description": "PAUSE_NOT_ACTIVE / IDEMPOTENCY_CONFLICT"},
+        422: {"description": "VALIDATION_ERROR"},
+    },
 )
 def post_pause_resume(
+    body: PauseTargetIn,
+    client_op_id: Annotated[UUID4, Header(alias=CLIENT_OP_ID_HEADER)],
     ctx: InitDataContext = Depends(require_init_data),
     session: Session = Depends(get_db_session),
     now: datetime = Depends(get_now),
 ) -> AcceptedOut:
-    outcome = _run(session, ctx.tg_user_id, "pause/resume", resume_pause, now)
+    outcome = _run(
+        session, ctx.tg_user_id, "pause/resume", resume_pause, client_op_id, body.pause_id, now
+    )
     logger.info("pause/resume: tg_user_id=%s status=%s", ctx.tg_user_id, outcome)
     return AcceptedOut(status="accepted")
