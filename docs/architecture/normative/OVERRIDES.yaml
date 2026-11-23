@@ -205,6 +205,37 @@ overrides:
     rationale: "Автор подтвердил минимальные служебные метаданные устойчивой очереди пауз. Остальные требования R380 не отменены; TTL снимка не становится сроком намерения."
     status: closed
 
+  # ---------- AD-03 — TTL ключа заявки пользовательской паузы ----------
+  - id: AD-03
+    source: "normative/I2-wave-b.md, врезка AD-03; course-bot pause-api-a2 (#286), apps/api/app/day_keys.py; OVERRIDES AD-02"
+    path: I2.idempotency_keys.ttl_by_kind
+    old_value:
+      financial_ops: 24h
+      erasure: forever
+      life_op: 1h
+      default: 1h
+    canonical:
+      financial_ops: 24h
+      erasure: forever
+      life_op: 1h
+      default: 1h
+      pause_request: 3650 days
+    rationale: "Ключ заявки паузы хранит хэш параметров для сверки повтора и доказательства коллизии op-id (AD-01). Очередь Mini App повторяет заявку без часового срока намерения (AD-02: «часовой срок намерения не вводится»), поэтому ключ хранится как остальные ключи пауз course-bot (pause_start, pause_end, pause_cancel, pause_resume — 3650 days)."
+    status: closed
+
+  # ---------- AD-04 — рецепт ключа заявки пользовательской паузы ----------
+  - id: AD-04
+    source: "normative/I2-wave-b.md, врезка AD-03; course-bot pause-api-a2 (#286), apps/api/app/day_keys.py"
+    path: I2.idempotency_keys.stable_key_recipes.user_pause_grant
+    old_value: "user_pause:{pid}:{client_op_id}"
+    canonical:
+      key: "pause_request:{pid}:{client_op_id}"
+      kind: pause_request
+      result_ref: "id строки participant_pauses"
+      params_hash: "хэш параметров заявки (days, start_date); несовпадение при том же client_op_id — доказанная коллизия (AD-01)"
+    rationale: "Имя вида ключа в реализации course-bot (day_keys.py, pause-api-a2). Смысл рецепта не меняется: один ключ на участника и client_op_id."
+    status: closed
+
 # ============================================================
 # КОНЕЦ РЕЕСТРА
 # ============================================================
