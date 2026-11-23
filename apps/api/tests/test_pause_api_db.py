@@ -570,12 +570,10 @@ def test_op_collision_cancel_then_resume(client, db_engine):
 
 
 def test_foreign_pause_409_no_audit(client, db_engine):
-    # A — заявка requested, A2 — активная пауза (две строки разных участников: индекс
-    # participant_pauses_one_open_user_uq не мешает); B бьёт по их pause_id
+    # у A две строки: requested и active (как в _OPEN_SQL); B бьёт по их pause_id
     pid_a = _participant(client, db_engine, 8844)
     requested_id = _request(client, 8844).json()["pause"]["id"]
-    pid_a2 = _participant(client, db_engine, 8846)
-    active_id = _pause_row(db_engine, pid_a2, "active", NOW - timedelta(hours=9))
+    active_id = _pause_row(db_engine, pid_a, "active", NOW - timedelta(hours=9))
     pid_b = _participant(client, db_engine, 8845)
     r = _cancel(client, 8845, requested_id)
     assert r.status_code == 409, r.text
@@ -584,9 +582,9 @@ def test_foreign_pause_409_no_audit(client, db_engine):
     assert r.status_code == 409, r.text
     assert r.json()["code"] == "PAUSE_NOT_ACTIVE"
     assert _events(db_engine, pid_a, "pause_cancel") == []
-    assert _events(db_engine, pid_a2, "pause_ended") == []
+    assert _events(db_engine, pid_a, "pause_ended") == []
     assert not _key_exists(db_engine, day_keys.key_pause_cancel(pid_a, requested_id))
-    assert not _key_exists(db_engine, day_keys.key_pause_resume(pid_a2, active_id))
+    assert not _key_exists(db_engine, day_keys.key_pause_resume(pid_a, active_id))
     assert _security_events(db_engine, pid_b) == []
 
 
