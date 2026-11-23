@@ -9,7 +9,7 @@
 Воркер одной операции: фазы queued и uncertain, backoff по op-id, Retry-After, гейт владельца,
 межвкладочный lock, разбор исхода. Отправитель передаётся снаружи; в main воркер никто не запускает (запуск — C2).
 
-## 3. Решения Автора (по R-2026-11-21 через t5-bc §6; ШТАБ сверяет с R-2026-11-21.md до промпта)
+## 3. Решения Автора (docs/decisions/R-2026-11-21.md, сверено ШТАБом по d7163a0)
 - Только 409 IDEMPOTENCY_CONFLICT — коллизия: очистка и текст R339; бизнес-409 — без удаления черновиков.
 - Аудит client_op_id_conflict — только сервер; клиент не логирует (R-2026-11-21, 22.11).
 - start_date не сдвигается; PAUSE_REFUSED start_date_passed — новое подтверждение и новый UUID (делает C1, не воркер).
@@ -30,13 +30,16 @@ idempotency: client_op_id from И2 idempotency_keys. 599–603 conflict_ux.on_se
 | Retry-After: notBefore = now + retryAfter × 1000, сохраняется в слоте | [ШТАБ-тех] |
 | Lock navigator.locks 'course-bot-pause-queue', ifAvailable; без navigator.locks — без межвкладочного lock (повтор безопасен: тот же opId, сервер вернёт прежний 201/202) | [ШТАБ-тех] |
 | 404, 422, прочие 409 → phase 'stopped', без автоповтора | [ШТАБ-тех] |
+| 401, 403 → ждать resumeAuth того же владельца, без отправки | [ШТАБ-тех] |
+| сеть, таймаут, 5xx → uncertain, attempt + 1, backoff | [ШТАБ-тех; И4 R339 retry_policy] |
 Правок канона нет.
 
 ## 5. ЧТО ПРОЧИТАТЬ (бюджет исполнителя)
-- эта карточка ≈ 7 КБ
+- эта карточка ≈ 8 КБ
 - apps/miniapp/src/components/pauseQueueStore.ts из B1 ≈ 7 КБ
-- apps/miniapp/src/api/client.ts — 18,3 КБ, только тип ApiError (status, code, message, retryAfter)
-- Чтение исполнителя ≈ 32 КБ.
+- apps/miniapp/src/api/client.ts — 18,3 КБ, только ApiError(status, code, message, retryAfter) и newClientOpId
+- apps/miniapp/src/components/OnboardingFlow.test.ts — 18,3 КБ (правится)
+- Чтение исполнителя ≈ 50 КБ.
 
 ## 6. Файлы
 - создать: apps/miniapp/src/components/pauseQueue.ts
@@ -46,12 +49,15 @@ idempotency: client_op_id from И2 idempotency_keys. 599–603 conflict_ux.on_se
 ## 7. Контракт модуля [ШТАБ-тех]
 createPauseQueue(deps): { enqueue(kind, args): Promise<string>; tick(): Promise<void>; resumeAuth(): void; stop(): void }
 deps: store (PauseQueueStore из B1); send(slot) → Promise<unknown>; getOwnerId() → string | null;
-now() → number; schedule(fn, ms) → отмена; locks? (по умолчанию navigator.locks, если есть); onOutcome(event).
-- enqueue: новый opId — от вызывающего через args или deps.newOpId (UUID v4, newClientOpId из client.ts передаёт C1).
-  Слот уже есть → не перезаписывать, вернуть его opId.
+now() → number; newOpId() → string; schedule(fn, ms) → отмена; locks? (по умолчанию navigator.locks, если есть); onOutcome(event).
+- Слот читать только как store.read(ownerId, deps.now()).
+- enqueue: opId — только deps.newOpId() (UUID v4; C1 передаёт newClientOpId из client.ts); в PauseOpArgs поля opId нет.
+  enqueue ставит savedAt = now(). Слот 'queued' или 'uncertain' уже есть → не перезаписывать, вернуть его opId.
+  Слот 'stopped' → clear и новый слот с новым opId (иначе 'stopped' навсегда блокирует очередь).
 - tick: isWipePending → wipeAll, onOutcome {type:'wiped'}; sendClosed → выход; нет владельца → выход;
-  slot.ownerId ≠ getOwnerId() → wipeAll сразу; now < notBefore → schedule; иначе под lock: phase 'uncertain', write, send.
-Разбор исхода (ошибка — объект с числовым status; иное — сеть):
+  slot.ownerId ≠ getOwnerId() → wipeAll сразу; phase 'stopped' → выход без send; now < notBefore → schedule;
+  иначе под lock: phase 'uncertain', write, send.
+Разбор исхода (ошибка — ApiError с числовым status; иное — сеть):
 - успех (201/202) → clear, onOutcome {type:'done', kind, result}; GET делает C1.
 - 409 IDEMPOTENCY_CONFLICT → setWipePending, отправка закрыта, onOutcome {type:'conflict', text: R339 show_error дословно}.
 - 409 PAUSE_ALREADY_OPEN, PAUSE_REFUSED, PAUSE_NOT_CANCELLABLE, PAUSE_NOT_ACTIVE → clear, onOutcome {type:'business', code, details?}.
@@ -59,7 +65,9 @@ now() → number; schedule(fn, ms) → отмена; locks? (по умолчан
 - 429 → тот же opId, notBefore по retryAfter (нет — backoff), attempt + 1.
 - 401, 403 → ждать resumeAuth() того же владельца; отправки нет.
 - сеть, таймаут, 5xx → 'uncertain', attempt + 1, notBefore = now + backoff.
-- В файле нет подстрок indexeddb, console., persist(, localstorage, sendbeacon, location.hash.
+- В файле нет ни одной подстроки BANNED_STORAGE и BANNED_HTML из OnboardingFlow.test.ts (localstorage, sessionstorage,
+  indexeddb, dexie, document.cookie, console., sendbeacon, pushstate, replacestate, location.hash, persist(; innerhtml,
+  insertadjacenthtml, document.write) — тест NO_STORAGE_FILES проверяет весь список; слово IndexedDB нельзя и в комментариях.
 
 ## 8. БД
 Нет.
@@ -73,12 +81,14 @@ pauseQueue.test.ts — фейковые store, lock, часы и send, без б
 - 409 IDEMPOTENCY_CONFLICT → wipePending, send больше не вызывается, текст R339 дословно.
 - каждый бизнес-409 → слот очищен, store.wipeAll не вызван.
 - 404, 422, неизвестный 409 → stopped, повтора нет.
+- tick при stopped send не вызывает.
+- enqueue при stopped даёт новый opId.
 - 401 → нет повтора до resumeAuth.
-- смена владельца → wipeAll до send.
+- смена владельца → wipeAll до send (полная очистка при смене пользователя — R-2026-11-21).
 - lock занят (ifAvailable → null) → send не вызван; без locks — send вызван.
 - enqueue при занятом слоте не меняет opId.
-Задетые тесты (правило «Т»): OnboardingFlow.test.ts — './pauseQueue.ts' в NO_STORAGE_FILES. Другие правок не ожидается.
-Цели tools/check.sh — miniapp-цели по AGENT-BRIEF.md.
+Задетые тесты (правило «Т»): OnboardingFlow.test.ts — './pauseQueue.ts' в NO_STORAGE_FILES. drafts.test.ts, drafts.support.test.ts — правок не ожидается.
+bash tools/check.sh miniapp; CI — то же.
 
 ## 10. Живые проверки
 Нет: воркер не подключён; выкат Mini App с C2 — только после api с #284, #286, #293 (SHTAB-DEBTS §1 п.6).
@@ -92,8 +102,8 @@ pauseQueue.test.ts — фейковые store, lock, часы и send, без б
 Тесты раздела 9 зелёные; в main воркер ни откуда не вызывается; diff — 3 файла.
 
 ## 13. Оценка
-Код 220–300 строк, тесты 280–380. Часы Автора ≈ 1; кредиты ≈ 300–450 + 60–100 за OnboardingFlow.test.ts.
-Исполнитель: Агент Р1, Claude Opus 5.5 — причина: таймеры, lock и 10+ сценариев, нужны прогоны тестов.
+Код 230–310 строк, тесты 300–400. Часы Автора ≈ 1; кредиты ≈ 300–450 + 60–100 за OnboardingFlow.test.ts.
+Исполнитель: Агент Р1, Claude Opus 5.5 — причина: таймеры, lock и 12 сценариев, нужны прогоны тестов.
 
 ## 14. РЕВЬЮЕР
 Нет: initData, 18+, согласий, серверного rate-limit (B-1), ролей и оплаты не трогает; 429 — только чтение Retry-After.
