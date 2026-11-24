@@ -54,12 +54,9 @@ Hash main: 7316c1f5fbc04329b5667cf8d111b1b814dca352. Ветка исполнит
     start_date: date
 3) read_status: start_at = day_clock.next_midnight(now, tz) считать ДО проверки open_row
    (сейчас он только в ветке else); в ветке else использовать его же. В PauseStatusOut передать
-   start_date=_utc(start_at).astimezone(day_clock.zone(tz)).date() или _local_start_date(now, tz).
-   Расчёт refusal не меняется.
-4) request_pause шаг 4: сравнение заменить на
-    if _local_start_date(now, tz) != start_date:
-   Поведение то же (одна формула). Порядок шагов и коды ошибок не менять.
-5) Docstring модуля, раздел GET /pause, добавить пункт:
+   start_date=_local_start_date(now, tz). Расчёт refusal не меняется.
+   _local_start_date используется только в read_status; request_pause не менять ни строки.
+4) Docstring модуля, раздел GET /pause, добавить пункт:
     4) start_date — местная дата next_midnight(now, tz) по поясу участника, всегда
        (и при can_request = false); клиент шлёт её в POST /pause/request (R-2026-11-21).
    Строку «pid, pause_id, op, tz и start_date в логе нет» оставить как есть.
@@ -78,8 +75,8 @@ test_pause_api_db.py; apps/api/tests/test_pause_api.py (строка 27 — сп
 - test_get_open_request (can_request = false, already_open): в конец добавить
     assert body["start_date"] == TOMORROW.date().isoformat()
 - Новый тест test_get_start_date_after_midnight: pause.get_now подменить на
-  datetime(2026, 11, 20, 21, 30, tzinfo=timezone.utc) (00:30 МСК 21.11), участник со своим
-  tg_user_id из диапазона 8811–8899, не занятым в файле; ожидать "start_date": "2026-11-22".
+  datetime(2026, 11, 20, 21, 30, tzinfo=timezone.utc) (00:30 МСК 21.11), участник
+  tg_user_id = 8849 [ШТАБ-тех]; ожидать "start_date": "2026-11-22".
 
 ## 8. Исполнитель
 КОДЕР (Р0+, 0 кредитов). Причина: одна функция и одно поле в одном файле, 3 точечные правки
@@ -90,7 +87,7 @@ test_pause_api_db.py; apps/api/tests/test_pause_api.py (строка 27 — сп
 bash tools/check.sh api. CI — 7 проверок, проверяет Автор.
 
 ## 10. Готово, когда
-GET /pause возвращает start_date во всех ветках; request ведёт себя как раньше;
+GET /pause возвращает start_date во всех ветках; request ведёт себя как раньше (код не менялся);
 тесты разделов 6–7 зелёные в CI; лог app.pause без новых полей.
 
 ## 11. Не делать
