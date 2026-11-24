@@ -17,6 +17,8 @@ GET /pause:
   2) состояние, бюджет (roll_cycle только для расчёта, без записи), открытая / активная строка;
   3) refusal: есть строка → "already_open" (константа роутера, только GET); иначе
      start_refusal(status="approved", days=1, start_at = завтра 00:00 по поясу).
+  4) start_date — местная дата next_midnight(now, tz) по поясу участника, всегда
+     (и при can_request = false); клиент шлёт её в POST /pause/request (R-2026-11-21).     
 POST /pause/request (всё под замком participant:pid, одна транзакция; pause-api-a2):
   1) active_pid_locked — нет → 404;
   2) h = _params_hash(days, start_date), ключ pause_request:{pid}:{op}. Ключ есть: params_hash
@@ -213,6 +215,7 @@ class PauseStatusOut(BaseModel):
     pause: PauseOut | None
     can_request: bool
     refusal: str | None
+    start_date: date
 
 
 class PauseRequestOut(BaseModel):
@@ -395,6 +398,12 @@ def _bounds(now: datetime, tz: str | None, days: int) -> tuple[datetime, datetim
     return _utc(start), end
 
 
+def _local_start_date(now: datetime, tz: str | None) -> date:
+    """Местная дата ближайшей 00:00 по поясу (Д3) — та же, что start_at в _bounds."""
+    start = day_clock.next_midnight(now, tz)
+    return _utc(start).astimezone(day_clock.zone(tz)).date()
+
+
 def read_status(session: Session, tg_user_id: int, now: datetime) -> PauseStatusOut:
     found = find_active_participant(session, tg_user_id)
     if found is None:
@@ -404,10 +413,10 @@ def read_status(session: Session, tg_user_id: int, now: datetime) -> PauseStatus
     tz = state.tz if state is not None else None
     days_left, restart, cycle_ends_at = _budget(session, pid, now, tz)
     open_row = session.execute(_OPEN_SQL, {"pid": pid}).first()
+    start_at = day_clock.next_midnight(now, tz)
     if open_row is not None:
         refusal: str | None = REFUSAL_ALREADY_OPEN
     else:
-        start_at = day_clock.next_midnight(now, tz)
         refusal = _refusal(session, pid, state, 1, days_left, restart, start_at)
     return PauseStatusOut(
         budget_days_left=days_left,
@@ -416,6 +425,7 @@ def read_status(session: Session, tg_user_id: int, now: datetime) -> PauseStatus
         pause=_pause_out(open_row) if open_row is not None else None,
         can_request=refusal is None,
         refusal=refusal,
+        start_date=_local_start_date(now, tz),
     )
 
 

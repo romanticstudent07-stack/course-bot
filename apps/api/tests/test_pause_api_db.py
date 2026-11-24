@@ -290,6 +290,7 @@ def test_get_without_budget_row(client, db_engine):
         "pause": None,
         "can_request": True,
         "refusal": None,
+        "start_date": "2026-11-21",
     }
 
 
@@ -321,6 +322,19 @@ def test_get_open_request(client, db_engine):
     assert body["can_request"] is False
     assert body["pause"]["id"] == created["id"]
     assert body["pause"]["status"] == "requested"
+    assert body["start_date"] == TOMORROW.date().isoformat()
+
+
+def test_get_start_date_after_midnight(client, db_engine):
+    from main import app
+
+    _participant(client, db_engine, 8849)
+    app.dependency_overrides[pause.get_now] = lambda: datetime(
+        2026, 11, 20, 21, 30, tzinfo=timezone.utc
+    )
+    r = _get(client, 8849)
+    assert r.status_code == 200, r.text
+    assert r.json()["start_date"] == "2026-11-22"
 
 
 # ============================ cancel ============================
