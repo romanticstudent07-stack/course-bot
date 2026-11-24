@@ -308,9 +308,10 @@ paths:
         Ничего не пишет, замок не берёт; бюджет считается без записи.
         refusal: есть открытая или активная пауза kind user → already_open; иначе причина
         правил старта (для паузы на 1 день с ближайшей 00:00 по поясу участника) или null.
+        start_date — дата, которую участник подтверждает в POST /pause/request (R-2026-11-21).
         Уточнено реализацией course-bot (pause.py).
       responses:
-        "200": { description: "Состояние", content: { application/json: { schema: { type: object, required: [budget_days_left, budget_days_total, cycle_ends_at, pause, can_request, refusal], properties: { budget_days_left: { type: integer }, budget_days_total: { type: integer }, cycle_ends_at: { type: [string, "null"], format: date-time }, pause: { oneOf: [{ $ref: "#/components/schemas/PauseOut" }, { type: "null" }] }, can_request: { type: boolean }, refusal: { type: [string, "null"] } } } } } }
+        "200": { description: "Состояние", content: { application/json: { schema: { type: object, required: [budget_days_left, budget_days_total, cycle_ends_at, pause, can_request, refusal, start_date], properties: { budget_days_left: { type: integer }, budget_days_total: { type: integer }, cycle_ends_at: { type: [string, "null"], format: date-time }, pause: { oneOf: [{ $ref: "#/components/schemas/PauseOut" }, { type: "null" }] }, can_request: { type: boolean }, refusal: { type: [string, "null"] }, start_date: { type: string, format: date, description: "местная дата ближайшей 00:00 по поясу участника (YYYY-MM-DD); есть всегда" } } } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: "PARTICIPANT_NOT_FOUND", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { $ref: "#/components/responses/RateLimited" }
