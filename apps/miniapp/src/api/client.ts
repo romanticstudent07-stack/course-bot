@@ -18,6 +18,8 @@ export class ApiError extends Error {
     message: string,
     /** Секунды из Retry-After (только для 429, только целое > 0); иначе null. */
     public readonly retryAfter: number | null = null,
+    /** payload.details ошибки, только если это объект (не массив, не null); иначе undefined. */
+    public readonly details: Record<string, unknown> | undefined = undefined,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -89,6 +91,15 @@ export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT';
   body?: unknown;
   clientOpId?: string;
+  /** Отмена запроса (координатор чтений pause.ts); передаётся в fetch как есть. */
+  signal?: AbortSignal;
+}
+
+/** details из тела ошибки: только объект — не массив и не null. */
+function pickDetails(payload: unknown): Record<string, unknown> | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined;
+  const d = (payload as { details?: unknown }).details;
+  return typeof d === 'object' && d !== null && !Array.isArray(d) ? (d as Record<string, unknown>) : undefined;
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -103,13 +114,20 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
     credentials: 'same-origin',
+    signal: options.signal,
   });
 
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const err = (payload ?? {}) as { code?: string; message?: string };
     const retryAfter = response.status === 429 ? parseRetryAfter(response.headers.get('Retry-After')) : null;
-    throw new ApiError(response.status, err.code ?? 'HTTP_ERROR', err.message ?? response.statusText, retryAfter);
+    throw new ApiError(
+      response.status,
+      err.code ?? 'HTTP_ERROR',
+      err.message ?? response.statusText,
+      retryAfter,
+      pickDetails(payload),
+    );
   }
   return payload as T;
 }
@@ -468,3 +486,74 @@ export interface SupportQuestionBody {
  */
 export const postSupportQuestion = (body: SupportQuestionBody, clientOpId: string) =>
   apiRequest<{ status: 'sent' }>('/miniapp/v1/support/question', { method: 'POST', body, clientOpId });
+
+// ---- Паузы (api-pause-2; карточка miniapp-pause-c1 §7.1, Р-6а / R-2026-11-21) ----
+// Типы — буква в букву по моделям apps/api/app/routers/pause.py (PauseOut, PauseStatusOut,
+// PauseRequestOut, AcceptedOut). datetime — строка ISO 8601, date — строка YYYY-MM-DD.
+// Три POST вызывает только отправитель очереди components/pauseSend.ts.
+
+export interface PauseOut {
+  id: number;
+  status: string;
+  start_at: string;
+  planned_end_at: string;
+}
+
+export interface PauseStatus {
+  budget_days_left: number;
+  budget_days_total: number;
+  cycle_ends_at: string | null;
+  pause: PauseOut | null;
+  can_request: boolean;
+  /** "already_open" при открытой строке; иначе причина отказа или null. */
+  refusal: string | null;
+  /** Местная дата начала паузы YYYY-MM-DD; приходит всегда, и при can_request = false. */
+  start_date: string;
+}
+
+export interface PauseRequestBody {
+  /** 1..7. */
+  days: number;
+  /** start_date из последнего GET /pause, подтверждённая участником (R-2026-11-21). */
+  start_date: string;
+}
+
+export interface PauseTargetBody {
+  pause_id: number;
+}
+
+export interface PauseRequestOut {
+  pause: PauseOut;
+}
+
+export interface PauseAcceptedOut {
+  status: string;
+}
+
+/** Только чтение, без X-Client-Op-Id. Ошибки: 401, 404 PARTICIPANT_NOT_FOUND, 429, 503. */
+export const getPause = (signal?: AbortSignal) =>
+  apiRequest<PauseStatus>('/miniapp/v1/pause', { signal });
+
+/**
+ * Заявка на паузу → 201 {"pause": {...}}. clientOpId — из слота очереди, повтор — с ним же.
+ * Ошибки: 404 PARTICIPANT_NOT_FOUND; 409 PAUSE_ALREADY_OPEN / PAUSE_REFUSED (details.reason, в т. ч.
+ * start_date_passed) / IDEMPOTENCY_CONFLICT; 422 VALIDATION_ERROR; 401, 429 + Retry-After, 503.
+ */
+export const postPauseRequest = (body: PauseRequestBody, clientOpId: string) =>
+  apiRequest<PauseRequestOut>('/miniapp/v1/pause/request', { method: 'POST', body, clientOpId });
+
+/**
+ * Отмена заявки до старта → 202 {"status":"accepted"}.
+ * Ошибки: 404 PARTICIPANT_NOT_FOUND; 409 PAUSE_NOT_CANCELLABLE / IDEMPOTENCY_CONFLICT;
+ * 422 VALIDATION_ERROR; 401, 429 + Retry-After, 503.
+ */
+export const postPauseCancel = (body: PauseTargetBody, clientOpId: string) =>
+  apiRequest<PauseAcceptedOut>('/miniapp/v1/pause/cancel', { method: 'POST', body, clientOpId });
+
+/**
+ * Досрочный выход из активной паузы → 202 {"status":"accepted"}.
+ * Ошибки: 404 PARTICIPANT_NOT_FOUND; 409 PAUSE_NOT_ACTIVE / IDEMPOTENCY_CONFLICT;
+ * 422 VALIDATION_ERROR; 401, 429 + Retry-After, 503.
+ */
+export const postPauseResume = (body: PauseTargetBody, clientOpId: string) =>
+  apiRequest<PauseAcceptedOut>('/miniapp/v1/pause/resume', { method: 'POST', body, clientOpId });
