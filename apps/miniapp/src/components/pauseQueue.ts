@@ -5,6 +5,8 @@
 // 409 IDEMPOTENCY_CONFLICT → флаг полной очистки, отправка закрыта, текст R339 (R-2026-11-21);
 //   клиент коллизию не логирует, аудит — только сервер.
 // Смена владельца → wipeAll сразу (И4 R380 on_tg_user_id_change).
+// pauseStartupGate (miniapp-pause-c2): wipePending → claimOwner → wipeAll → claimOwner, таймаут 3 с;
+//   не 'open' → отправки нет. Перед send запись слота должна вернуть true, иначе исход stopped.
 // Межвкладочный lock — navigator.locks 'course-bot-pause-queue' с ifAvailable; без него повтор
 //   безопасен: тот же opId, сервер вернёт прежний ответ.
 // Отправитель передаётся снаружи (deps.send). В main модуль никто не вызывает (запуск — C2).
@@ -60,6 +62,47 @@ export function pauseBackoffMs(attempt: number): number {
   return Math.min(PAUSE_BACKOFF_MAX_MS, PAUSE_BACKOFF_BASE_MS * 2 ** exp);
 }
 
+export const PAUSE_GATE_TIMEOUT_MS = 3_000;
+
+async function gateSteps(
+  store: PauseQueueStore,
+  ownerId: string,
+  onWipe: (() => void) | undefined,
+): Promise<'open' | 'closed'> {
+  if (store.sendClosed()) return 'closed';
+  if (await store.isWipePending()) {
+    onWipe?.();
+    if ((await store.wipeAll()) === 'blocked') return 'closed';
+  }
+  const claim = await store.claimOwner(ownerId);
+  if (claim === 'unavailable') return 'closed';
+  if (claim === 'changed') {
+    onWipe?.();
+    if ((await store.wipeAll()) === 'blocked') return 'closed';
+    if ((await store.claimOwner(ownerId)) !== 'same') return 'closed';
+  }
+  return 'open';
+}
+
+/** Гейт запуска: владелец, флаг очистки, смена владельца (И4 R380). Не уложились в timeoutMs → closed. */
+export async function pauseStartupGate(
+  store: PauseQueueStore,
+  ownerId: string | null,
+  timeoutMs: number = PAUSE_GATE_TIMEOUT_MS,
+  onWipe?: () => void,
+): Promise<'open' | 'closed'> {
+  if (ownerId === null) return 'closed';
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<'closed'>((resolve) => {
+    timer = setTimeout(() => resolve('closed'), timeoutMs);
+  });
+  try {
+    return await Promise.race([gateSteps(store, ownerId, onWipe).catch(() => 'closed' as const), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function defaultLocks(): PauseLockManager | null {
   const nav = (globalThis as { navigator?: { locks?: unknown } }).navigator;
   const locks = nav?.locks;
@@ -81,6 +124,11 @@ export function createPauseQueue(deps: PauseQueueDeps): PauseQueue {
       cancelTimer();
       cancelTimer = null;
     }
+  }
+
+  function resetOnWipe(): void {
+    clearTimer();
+    authOwner = null;
   }
 
   function setTimer(ms: number): void {
@@ -156,7 +204,10 @@ export function createPauseQueue(deps: PauseQueueDeps): PauseQueue {
       return;
     }
     const sending: PauseSlot = { ...cur, phase: 'uncertain' };
-    await store.write(sending);
+    if (!(await store.write(sending))) {
+      deps.onOutcome({ type: 'stopped', status: 0, code: 'STORAGE_WRITE_FAILED' });
+      return;
+    }
     let result: unknown;
     try {
       result = await deps.send(sending);
@@ -177,9 +228,9 @@ export function createPauseQueue(deps: PauseQueueDeps): PauseQueue {
       deps.onOutcome({ type: 'wiped' });
       return;
     }
-    if (store.sendClosed()) return;
     const owner = deps.getOwnerId();
-    if (owner === null) return;
+    if ((await pauseStartupGate(store, owner, PAUSE_GATE_TIMEOUT_MS, resetOnWipe)) !== 'open') return;
+    if (owner === null || halted || closed) return;
     const slot = await store.read(owner, deps.now());
     if (slot === null) return;
     if (slot.ownerId !== owner) {
@@ -208,6 +259,9 @@ export function createPauseQueue(deps: PauseQueueDeps): PauseQueue {
 
   async function enqueue(kind: PauseOpKind, args: PauseOpArgs): Promise<string> {
     const owner = deps.getOwnerId();
+    if (!closed && (await pauseStartupGate(store, owner, PAUSE_GATE_TIMEOUT_MS, resetOnWipe)) !== 'open') {
+      throw new Error('pauseQueue: startup gate closed');
+    }
     if (owner === null) throw new Error('pauseQueue: no owner');
     const existing = await store.read(owner, deps.now());
     if (existing !== null && existing.phase !== 'stopped') return existing.opId;
@@ -223,7 +277,7 @@ export function createPauseQueue(deps: PauseQueueDeps): PauseQueue {
       notBefore: now,
       savedAt: now,
     };
-    await store.write(slot);
+    if (!(await store.write(slot))) throw new Error('pauseQueue: write failed');
     return slot.opId;
   }
 
