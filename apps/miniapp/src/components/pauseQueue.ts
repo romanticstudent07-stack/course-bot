@@ -23,7 +23,7 @@ const BUSINESS_409 = new Set(['PAUSE_ALREADY_OPEN', 'PAUSE_REFUSED', 'PAUSE_NOT_
 export type PauseQueueOutcome =
   | { type: 'done'; kind: PauseOpKind; result: unknown }
   | { type: 'conflict'; text: string }
-  | { type: 'business'; code: string; details?: unknown }
+  | { type: 'business'; code: string; details?: Record<string, unknown> }
   | { type: 'stopped'; status: number; code: string }
   | { type: 'wiped' };
 
@@ -127,7 +127,7 @@ export function createPauseQueue(deps: PauseQueueDeps): PauseQueue {
     }
     if (status === 409 && BUSINESS_409.has(code)) {
       await store.clear(slot.ownerId);
-      deps.onOutcome({ type: 'business', code });
+      deps.onOutcome(err.details ? { type: 'business', code, details: err.details } : { type: 'business', code });
       return;
     }
     if (status === 429) {

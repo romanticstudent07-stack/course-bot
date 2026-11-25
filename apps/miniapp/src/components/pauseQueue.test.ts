@@ -192,6 +192,17 @@ describe('pauseQueue', () => {
     },
   );
 
+  it('PAUSE_REFUSED с details {reason: start_date_passed} → исход business с этими details', async () => {
+    const h = harness();
+    await h.queue.enqueue('request', ARGS);
+    h.replies.push(fail(new ApiError(409, 'PAUSE_REFUSED', 'refused', null, { reason: 'start_date_passed' })));
+    await h.queue.tick();
+    expect(h.store.slot).toBeNull();
+    expect(h.outcomes).toEqual([
+      { type: 'business', code: 'PAUSE_REFUSED', details: { reason: 'start_date_passed' } },
+    ]);
+  });
+
   it.each<[number, string]>([
     [404, 'PAUSE_NOT_FOUND'],
     [422, 'VALIDATION_ERROR'],
