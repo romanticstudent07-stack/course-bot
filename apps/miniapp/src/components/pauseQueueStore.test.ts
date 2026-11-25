@@ -167,9 +167,66 @@ describe('pauseQueueStore: IndexedDB (фейк)', () => {
     expect(store.sendClosed()).toBe(true);
     expect(await store.isWipePending()).toBe(true);
   });
+
+  it('claimOwner: ключа нет → same и записан; равен → same; другой → changed, ключ не перезаписан', async () => {
+    const fake = createFakeIdb();
+    const store = createPauseQueueStore(fake.factory);
+    expect(await store.claimOwner('A1')).toBe('same');
+    expect(fake.dbs.get(PAUSE_DB_NAME)?.get('owner')).toBe('A1');
+    expect(await store.claimOwner('A1')).toBe('same');
+    expect(await store.claimOwner('B1')).toBe('changed');
+    expect(fake.dbs.get(PAUSE_DB_NAME)?.get('owner')).toBe('A1');
+  });
+
+  it('claimOwner после wipeAll пишет нового владельца', async () => {
+    const fake = createFakeIdb();
+    const store = createPauseQueueStore(fake.factory);
+    expect(await store.claimOwner('A1')).toBe('same');
+    expect(await store.claimOwner('B1')).toBe('changed');
+    expect(await store.wipeAll()).toBe('done');
+    expect(await store.claimOwner('B1')).toBe('same');
+    expect(fake.dbs.get(PAUSE_DB_NAME)?.get('owner')).toBe('B1');
+  });
+
+  it('ошибка хранилища: claimOwner → unavailable, write → false', async () => {
+    const broken = {
+      open: () => {
+        throw new Error('boom');
+      },
+    } as unknown as IDBFactory;
+    const store = createPauseQueueStore(broken);
+    expect(await store.claimOwner('A1')).toBe('unavailable');
+    expect(await store.write(slot('A1'))).toBe(false);
+  });
+
+  it('write: true после записи; битый слот → false, записи нет', async () => {
+    const fake = createFakeIdb();
+    const store = createPauseQueueStore(fake.factory);
+    expect(await store.write(slot('A1'))).toBe(true);
+    expect(await store.write({ ...slot('A2'), kind: 'bad' } as unknown as PauseSlot)).toBe(false);
+    expect(fake.dbs.get(PAUSE_DB_NAME)?.has('slot:A2')).toBe(false);
+  });
 });
 
 describe('pauseQueueStore: idb = null → память', () => {
+  it('claimOwner: same, changed без перезаписи, после wipeAll — новый владелец', async () => {
+    const store = createPauseQueueStore(null);
+    expect(await store.claimOwner('A1')).toBe('same');
+    expect(await store.claimOwner('A1')).toBe('same');
+    expect(await store.claimOwner('B1')).toBe('changed');
+    expect(await store.claimOwner('A1')).toBe('same');
+    expect(await store.wipeAll()).toBe('done');
+    expect(await store.claimOwner('B1')).toBe('same');
+    expect(await store.claimOwner('A1')).toBe('changed');
+  });
+
+  it('write: true; битый слот → false', async () => {
+    const store = createPauseQueueStore(null);
+    expect(await store.write(slot('A1'))).toBe(true);
+    expect(await store.write({ ...slot('A2'), opId: '' })).toBe(false);
+    expect(await store.read('A2', NOW)).toBeNull();
+  });
+
   it('те же операции работают', async () => {
     const store = createPauseQueueStore(null);
     await store.write(slot('A1'));
