@@ -419,6 +419,7 @@ const NO_STORAGE_FILES = [
   './pauseQueue.ts',
   './pause.ts',
   './pauseSend.ts',
+  './dayAccess.ts',
 ];
 const BANNED_STORAGE = [
   'localstorage',

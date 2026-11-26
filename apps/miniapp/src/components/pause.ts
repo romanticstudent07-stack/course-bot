@@ -32,8 +32,10 @@ export const PAUSE_BUSINESS_FALLBACK_TEXT = 'Операция отклонена
 /** Серия старта: 1 GET сразу + PAUSE_START_SERIES_REPEATS повторов через PAUSE_START_SERIES_STEP_MS. */
 export const PAUSE_START_SERIES_REPEATS = 5;
 export const PAUSE_START_SERIES_STEP_MS = 2_000;
-/** Статус активной паузы (pause.py: строка в статусе active). */
-const ACTIVE = 'active';
+/** Статус активной паузы (apps/api/app/routers/pause.py:113, ACTIVE = "active"). */
+export const PAUSE_STATUS_ACTIVE = 'active';
+/** Статусы заявки, которую можно отменить (apps/api/app/routers/pause.py:112, CANCELLABLE). */
+export const PAUSE_STATUS_CANCELLABLE = ['requested', 'approved'] as const;
 
 export interface PauseViewError {
   /** HTTP-статус; 0 — сеть или таймаут. */
@@ -138,8 +140,8 @@ export function createPauseCoordinator(deps: PauseCoordinatorDeps): PauseCoordin
   function afterApply(status: PauseStatus): void {
     const p = status.pause;
     const key = p ? `${p.id}|${p.start_at}` : null;
-    if (series !== null && (p === null || p.status === ACTIVE || key !== series.key)) finishSeries(series);
-    if (p === null || key === null || p.status === ACTIVE) return;
+    if (series !== null && (p === null || p.status === PAUSE_STATUS_ACTIVE || key !== series.key)) finishSeries(series);
+    if (p === null || key === null || p.status === PAUSE_STATUS_ACTIVE) return;
     const startAt = Date.parse(p.start_at);
     if (!Number.isFinite(startAt) || startAt > deps.now()) return;
     if (startedKeys.has(key)) return; // один старт серии на (pause.id, start_at)
