@@ -27,6 +27,8 @@
 //   скрытого, но смонтированного LaterSteps (ответы экрана в памяти не теряются, Р-16, Р-18);
 //   app: маршрут /help в этом файле (routes.tsx не трогаем) и HelpBar под Routes.
 //   Черновик вопроса — drafts.ts (createSupportDraftStore), отдельно от черновика шага.
+// miniapp-pause-c3a: гейт пауз (pauseStartupGate) — один раз при монтировании, параллельно с checking;
+//   routeByDraft и переход в later ждут его; в фазе app при открытом гейте работает очередь пауз (pauseRuntime.ts).
 // OnboardingFlow монтируется ТОЛЬКО в фазе onboarding (он шлёт /texts/bulk при монтировании).
 // «Пускать ли» решает сервер: клиент не смотрит ни initDataUnsafe, ни черновик, ни время.
 // short_no, status и reasons на устройстве не хранятся — только в памяти до закрытия.
@@ -43,6 +45,10 @@ import {
 } from '@/components/drafts.ts';
 import { LaterSteps } from '@/components/LaterSteps.tsx';
 import { OnboardingFlow } from '@/components/OnboardingFlow.tsx';
+import { createPauseQueue, pauseStartupGate } from '@/components/pauseQueue.ts';
+import { createPauseQueueStore } from '@/components/pauseQueueStore.ts';
+import { PauseRuntimeContext, createPauseRuntime, runPauseGate } from '@/components/pauseRuntime.ts';
+import { buildPauseQueueDeps, pauseOwnerId } from '@/components/pauseSend.ts';
 import {
   NO_ACCESS_BUTTON,
   NO_ACCESS_TEXT,
@@ -116,6 +122,39 @@ export function App() {
   const [tgUserId] = useState(() => readTgUserId());
   const [draftStore] = useState(() => createDraftStore());
   const [supportStore] = useState(() => createSupportDraftStore());
+  const [pauseStore] = useState(() => createPauseQueueStore());
+  const [runtime] = useState(() =>
+    createPauseRuntime({
+      makeQueue: (onOutcome) => createPauseQueue(buildPauseQueueDeps({ store: pauseStore, onOutcome })),
+      sendClosed: () => pauseStore.sendClosed(),
+    }),
+  );
+  // Начальное значение не используется: routeByDraft и onComplete вызываются только после checking.
+  const gateRef = useRef<Promise<boolean>>(Promise.resolve(false));
+  const [gateOpen, setGateOpen] = useState(false);
+
+  // Гейт пауз — один раз при монтировании, параллельно с GET status; «Повторить» его не запускает.
+  // Отказ гейта не ведёт в start-error: просто нет отправки.
+  useEffect(() => {
+    let cancelled = false;
+    const gate = runPauseGate(pauseStartupGate, pauseStore, pauseOwnerId());
+    gateRef.current = gate;
+    void gate.then((open) => {
+      if (!cancelled) setGateOpen(open);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Очередь пауз — только в фазе app и только при открытом гейте.
+  useEffect(() => {
+    if (phase !== 'app' || !gateOpen) return undefined;
+    runtime.start();
+    return () => {
+      runtime.stop();
+    };
+  }, [phase, gateOpen]);
 
   // Один запрос status на попытку (при монтировании и после «Повторить»).
   useEffect(() => {
@@ -159,11 +198,13 @@ export function App() {
   // finished или ошибка хранилища → GET /onboarding/form: нет → с оферты; отправлена →
   // GET /checkup/status: пройден → курс, нет → с шага checkup.
   // Ошибка любого GET → start-error; «Повторить» → checking.
+  // Сначала ждём гейт пауз: его wipeAll удаляет и БД черновиков course-bot.
   const routeByDraft = () => {
     if (routingRef.current) return;
     routingRef.current = true;
     setRouting(true);
     Promise.resolve()
+      .then(() => gateRef.current)
       .then(() => openDraft(draftStore, tgUserId, Date.now()))
       .catch(() => null)
       .then(async (draft) => {
@@ -234,7 +275,7 @@ export function App() {
       <OnboardingFlow
         onComplete={() => {
           if (reconsent) routeByDraft();
-          else setPhase('later');
+          else void gateRef.current.then(() => setPhase('later'));
         }}
         onSubmitError={(err) => {
           if (!isAccessNotGranted(err)) return false;
@@ -276,13 +317,15 @@ export function App() {
   }
 
   return (
-    <HashRouter>
-      <Routes>
-        {routes.map((route) => <Route key={route.path} {...route}/>)}
-        <Route path="/help" element={<HelpRoute tgUserId={tgUserId} store={supportStore} onRestart={retry}/>}/>
-        <Route path="*" element={<Navigate to="/day"/>}/>
-      </Routes>
-      <HelpBar/>
-    </HashRouter>
+    <PauseRuntimeContext.Provider value={runtime}>
+      <HashRouter>
+        <Routes>
+          {routes.map((route) => <Route key={route.path} {...route}/>)}
+          <Route path="/help" element={<HelpRoute tgUserId={tgUserId} store={supportStore} onRestart={retry}/>}/>
+          <Route path="*" element={<Navigate to="/day"/>}/>
+        </Routes>
+        <HelpBar/>
+      </HashRouter>
+    </PauseRuntimeContext.Provider>
   );
 }
