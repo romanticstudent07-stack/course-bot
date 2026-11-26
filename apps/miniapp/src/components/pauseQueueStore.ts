@@ -1,6 +1,9 @@
 // apps/miniapp/src/components/pauseQueueStore.ts — хранилище очереди пауз (miniapp-pause-b1, T5-B1).
 // Своя БД course-bot-pause-queue v1, хранилище slots; БД черновиков (drafts.ts) и её версию не трогаем.
-// Один слот на владельца (ключ 'slot:' + ownerId), флаг 'wipe-pending' в той же БД.
+// Один слот на владельца (ключ 'slot:' + ownerId), флаг 'wipe-pending' и ключ 'owner' в той же БД.
+// claimOwner (miniapp-pause-c2): ключа 'owner' нет → записать, 'same'; равен → 'same'; другой → 'changed'
+//   без перезаписи; ошибка хранилища → 'unavailable'. wipeAll стирает и ключ 'owner'.
+// write → true только после завершения транзакции; ошибка или слот не по формату → false.
 // В слоте только kind, неизменные аргументы, opId, владелец и расписание (R-2026-11-21):
 //   без токенов, данных запуска Telegram, ответов сервера и снимка экрана.
 // Слот битый, старше 24 ч или из будущего дальше 60 с — удалить при чтении (I4 R380).
@@ -27,7 +30,8 @@ export interface PauseSlot {
 
 export interface PauseQueueStore {
   read(ownerId: string, now: number): Promise<PauseSlot | null>;
-  write(slot: PauseSlot): Promise<void>;
+  write(slot: PauseSlot): Promise<boolean>;
+  claimOwner(ownerId: string): Promise<'same' | 'changed' | 'unavailable'>;
   clear(ownerId: string): Promise<void>;
   setWipePending(): Promise<void>;
   isWipePending(): Promise<boolean>;
@@ -42,6 +46,7 @@ export const PAUSE_SLOT_TTL_MS = 24 * 60 * 60 * 1000;
 export const PAUSE_SLOT_FUTURE_SKEW_MS = 60 * 1000;
 const STORE_NAME = 'slots';
 const WIPE_KEY = 'wipe-pending';
+const OWNER_KEY = 'owner';
 
 const KINDS: readonly PauseOpKind[] = ['request', 'cancel', 'resume'];
 const PHASES: readonly PausePhase[] = ['queued', 'uncertain', 'stopped'];
@@ -220,8 +225,19 @@ export function createPauseQueueStore(idb?: IDBFactory | null): PauseQueueStore 
     write: (slot) =>
       safe(async () => {
         const clean = parsePauseSlot(slot);
-        if (clean !== null) await backend.put(slotKey(clean.ownerId), clean);
-      }, undefined),
+        if (clean === null) return false;
+        await backend.put(slotKey(clean.ownerId), clean);
+        return true;
+      }, false),
+    claimOwner: (ownerId) =>
+      safe(async () => {
+        const cur = await backend.get(OWNER_KEY);
+        if (cur === undefined || cur === null) {
+          await backend.put(OWNER_KEY, ownerId);
+          return 'same' as const;
+        }
+        return cur === ownerId ? ('same' as const) : ('changed' as const);
+      }, 'unavailable' as const),
     clear: (ownerId) => safe(() => backend.del(slotKey(ownerId)), undefined),
     setWipePending: () => safe(() => backend.put(WIPE_KEY, true), undefined),
     isWipePending: () => safe(async () => (await backend.get(WIPE_KEY)) === true, false),

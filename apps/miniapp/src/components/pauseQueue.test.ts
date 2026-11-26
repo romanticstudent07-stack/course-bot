@@ -1,16 +1,17 @@
 // Тесты воркера очереди пауз (miniapp-pause-b2, T5-B2): фейковые store, lock, часы, schedule и send.
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../api/client.ts';
 import {
   PAUSE_CONFLICT_TEXT,
   createPauseQueue,
   pauseBackoffMs,
+  pauseStartupGate,
   type PauseLockManager,
   type PauseQueueOutcome,
 } from './pauseQueue.ts';
-import type { PauseQueueStore, PauseSlot } from './pauseQueueStore.ts';
+import { createPauseQueueStore, type PauseQueueStore, type PauseSlot } from './pauseQueueStore.ts';
 
 const T0 = 1_800_000_000_000;
 const ARGS = { days: 3, start_date: '2026-12-01' };
@@ -19,6 +20,8 @@ interface FakeStore extends PauseQueueStore {
   slot: PauseSlot | null;
   wipePending: boolean;
   wipeCalls: number;
+  owner: string | null;
+  writeOk: boolean;
 }
 
 /** Один слот на store; read отдаёт его как есть — так видна чужая запись (гейт владельца). */
@@ -27,9 +30,20 @@ function fakeStore(): FakeStore {
     slot: null,
     wipePending: false,
     wipeCalls: 0,
+    owner: null,
+    writeOk: true,
     read: async () => (s.slot ? { ...s.slot } : null),
     write: async (slot) => {
+      if (!s.writeOk) return false;
       s.slot = { ...slot };
+      return true;
+    },
+    claimOwner: async (ownerId) => {
+      if (s.owner === null) {
+        s.owner = ownerId;
+        return 'same';
+      }
+      return s.owner === ownerId ? 'same' : 'changed';
     },
     clear: async () => {
       s.slot = null;
@@ -42,6 +56,7 @@ function fakeStore(): FakeStore {
       s.wipeCalls += 1;
       s.slot = null;
       s.wipePending = false;
+      s.owner = null;
       return 'done';
     },
     sendClosed: () => false,
@@ -60,8 +75,8 @@ function fakeLocks(busy: boolean): PauseLockManager & { calls: number } {
   return m;
 }
 
-interface Harness {
-  store: FakeStore;
+interface Harness<S extends PauseQueueStore = FakeStore> {
+  store: S;
   sent: PauseSlot[];
   outcomes: PauseQueueOutcome[];
   timers: number[];
@@ -72,8 +87,10 @@ interface Harness {
   newWorker(): ReturnType<typeof createPauseQueue>;
 }
 
-function harness(opts: { store?: FakeStore; locks?: PauseLockManager | null } = {}): Harness {
-  const store = opts.store ?? fakeStore();
+function harness<S extends PauseQueueStore = FakeStore>(
+  opts: { store?: S; locks?: PauseLockManager | null } = {},
+): Harness<S> {
+  const store = (opts.store ?? fakeStore()) as S;
   const sent: PauseSlot[] = [];
   const outcomes: PauseQueueOutcome[] = [];
   const timers: number[] = [];
@@ -263,8 +280,10 @@ describe('pauseQueue', () => {
   it('смена владельца → wipeAll до send', async () => {
     const h = harness();
     await h.queue.enqueue('request', ARGS);
+    expect(h.store.owner).toBe('A');
     h.owner.id = 'B';
     await h.queue.tick();
+    expect(h.store.owner).toBe('B');
     expect(h.store.wipeCalls).toBe(1);
     expect(h.sent).toEqual([]);
     expect(h.store.slot).toBeNull();
@@ -295,5 +314,157 @@ describe('pauseQueue', () => {
     await h.queue.tick();
     expect(h.store.slot?.phase).toBe('uncertain');
     expect(await h.queue.enqueue('cancel', { pause_id: 1 })).toBe(first);
+  });
+});
+
+const slotOf = (ownerId: string): PauseSlot => ({
+  ownerId, kind: 'request', args: ARGS, opId: 'old-' + ownerId, phase: 'queued', attempt: 0, notBefore: 0, savedAt: T0,
+});
+
+describe('pauseQueue: гейт владельца на настоящем хранилище в памяти (miniapp-pause-c2)', () => {
+  it('(1) A ставит операцию, владелец → B, tick → send 0, read(A) = null', async () => {
+    const h = harness({ store: createPauseQueueStore(null) });
+    await h.queue.enqueue('request', ARGS);
+    expect(await h.store.read('A', T0)).not.toBeNull();
+    h.owner.id = 'B';
+    await h.queue.tick();
+    expect(h.sent).toEqual([]);
+    expect(await h.store.read('A', T0)).toBeNull();
+    expect(h.timers).toEqual([]);
+  });
+
+  it('(2) A ставит операцию, новый воркер с владельцем B делает enqueue → слота A нет, слот B есть', async () => {
+    const h = harness({ store: createPauseQueueStore(null) });
+    await h.queue.enqueue('request', ARGS);
+    h.owner.id = 'B';
+    const opId = await h.newWorker().enqueue('cancel', { pause_id: 4 });
+    expect(await h.store.read('A', T0)).toBeNull();
+    expect(await h.store.read('B', T0)).toMatchObject({ ownerId: 'B', opId, kind: 'cancel' });
+    expect(h.sent).toEqual([]);
+  });
+});
+
+describe('pauseQueue: гейт владельца и запись до send на фейке (miniapp-pause-c2)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('(3) owner null → enqueue бросает, send 0', async () => {
+    const h = harness();
+    h.owner.id = null;
+    await expect(h.queue.enqueue('request', ARGS)).rejects.toThrow();
+    await h.queue.tick();
+    expect(h.sent).toEqual([]);
+    expect(h.store.slot).toBeNull();
+  });
+
+  it("(4) claimOwner 'unavailable' → send 0, enqueue бросает", async () => {
+    const store = fakeStore();
+    store.slot = slotOf('A');
+    store.claimOwner = async () => 'unavailable';
+    const h = harness({ store });
+    await h.queue.tick();
+    expect(h.sent).toEqual([]);
+    await expect(h.queue.enqueue('request', ARGS)).rejects.toThrow();
+    expect(h.sent).toEqual([]);
+    expect(h.timers).toEqual([]);
+    expect(h.outcomes).toEqual([]);
+  });
+
+  it("(5) 'changed' и wipeAll 'blocked' → send 0, enqueue бросает", async () => {
+    const store = fakeStore();
+    store.slot = slotOf('A');
+    store.owner = 'X';
+    store.wipeAll = async () => {
+      store.wipeCalls += 1;
+      return 'blocked';
+    };
+    const h = harness({ store });
+    await h.queue.tick();
+    expect(h.sent).toEqual([]);
+    await expect(h.queue.enqueue('request', ARGS)).rejects.toThrow();
+    expect(h.sent).toEqual([]);
+    expect(store.wipeCalls).toBe(2);
+    expect(h.timers).toEqual([]);
+  });
+
+  it('(6) claimOwner не отвечает → closed по таймауту, send 0', async () => {
+    const store = fakeStore();
+    store.slot = slotOf('A');
+    store.claimOwner = () => new Promise<'same'>(() => undefined);
+    expect(await pauseStartupGate(store, 'A', 10)).toBe('closed');
+
+    vi.useFakeTimers();
+    const h = harness({ store });
+    const done = h.queue.tick();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await done;
+    expect(h.sent).toEqual([]);
+    expect(h.outcomes).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('(7) write false в enqueue → бросает, слота нет, send 0', async () => {
+    const h = harness();
+    h.store.writeOk = false;
+    await expect(h.queue.enqueue('request', ARGS)).rejects.toThrow();
+    expect(h.store.slot).toBeNull();
+    await h.queue.tick();
+    expect(h.sent).toEqual([]);
+  });
+
+  it('(8) wipePending у нового воркера → wipeAll до первого send', async () => {
+    const store = fakeStore();
+    store.slot = slotOf('A');
+    store.owner = 'A';
+    store.wipePending = true;
+    const h = harness({ store });
+    const wipesAtSend: number[] = [];
+    const worker = createPauseQueue({
+      store,
+      send: async (slot) => {
+        wipesAtSend.push(store.wipeCalls);
+        h.sent.push({ ...slot });
+        return { status: 201 };
+      },
+      getOwnerId: () => 'A',
+      now: () => T0,
+      newOpId: () => 'op-new',
+      schedule: () => () => undefined,
+      locks: null,
+      onOutcome: (e) => h.outcomes.push(e),
+    });
+    const opId = await worker.enqueue('request', ARGS);
+    expect(store.wipeCalls).toBe(1);
+    expect(opId).toBe('op-new');
+    await worker.tick();
+    expect(wipesAtSend).toEqual([1]);
+    expect(h.sent.map((s) => s.opId)).toEqual(['op-new']);
+  });
+
+  it("(9) write false на 'uncertain' перед send → send 0, таймеров 0, исход stopped STORAGE_WRITE_FAILED", async () => {
+    const h = harness();
+    await h.queue.enqueue('request', ARGS);
+    h.store.writeOk = false;
+    await h.queue.tick();
+    expect(h.sent).toEqual([]);
+    expect(h.timers).toEqual([]);
+    expect(h.outcomes).toEqual([{ type: 'stopped', status: 0, code: 'STORAGE_WRITE_FAILED' }]);
+  });
+
+  it('(10) 401 у A → владелец B, enqueue и tick → слот A стёрт, send для B вызван', async () => {
+    const h = harness();
+    await h.queue.enqueue('request', ARGS);
+    h.replies.push(fail(new ApiError(401, 'TG_INIT_INVALID', 'auth')));
+    await h.queue.tick();
+    expect(h.sent).toHaveLength(1);
+    h.owner.id = 'B';
+    const opId = await h.queue.enqueue('cancel', { pause_id: 9 });
+    expect(h.store.wipeCalls).toBe(1);
+    expect(h.store.slot).toMatchObject({ ownerId: 'B', opId });
+    await h.queue.tick();
+    expect(h.sent).toHaveLength(2);
+    expect(h.sent[1]).toMatchObject({ ownerId: 'B', opId, kind: 'cancel' });
+    expect(h.store.slot).toBeNull();
   });
 });
