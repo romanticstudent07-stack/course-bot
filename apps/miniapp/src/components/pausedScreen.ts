@@ -4,9 +4,16 @@
 // и «Ход паузы» (только active, от start_at до planned_end_at, обрезка 0..100), плюс ETA.
 // Вход — снимок координатора pause.ts (PauseView из onView). Кнопки решает статус паузы:
 // это экран управления паузой, а не кнопки дня. ETA без пояса (решение ШТАБа З2, К-5).
+// pauseErrorToApi (c3b-2): ошибка снимка → ApiError или TypeError для retryAtFrom и dayErrorMessage.
 // Тексты — заглушки интерфейса [ШТАБ-тех], не тексты курса.
-import type { PauseStatus } from '../api/client.ts';
-import { PAUSE_CONFLICT_TEXT, PAUSE_STATUS_ACTIVE, PAUSE_STATUS_CANCELLABLE, type PauseView } from './pause.ts';
+import { ApiError, type PauseStatus } from '../api/client.ts';
+import {
+  PAUSE_CONFLICT_TEXT,
+  PAUSE_STATUS_ACTIVE,
+  PAUSE_STATUS_CANCELLABLE,
+  type PauseView,
+  type PauseViewError,
+} from './pause.ts';
 
 export const PAUSED_TEXT = {
   etaPrefix: 'До конца паузы',
@@ -94,6 +101,15 @@ export function pauseBars(status: PauseStatus, nowMs: number): PauseBar[] {
 export function refusalText(code: string | null): string {
   if (code === null) return REFUSAL_FALLBACK_TEXT;
   return REFUSAL_TEXTS[code] ?? REFUSAL_FALLBACK_TEXT;
+}
+
+/**
+ * Ошибка GET из снимка координатора → значение для retryAtFrom и dayErrorMessage.
+ * status > 0 → ApiError(status, code, '', retryAfter); status 0 (сеть или таймаут) → TypeError(code).
+ */
+export function pauseErrorToApi(e: PauseViewError): unknown {
+  if (e.status > 0) return new ApiError(e.status, e.code, '', e.retryAfter);
+  return new TypeError(e.code);
 }
 
 function isCancellable(status: string): boolean {

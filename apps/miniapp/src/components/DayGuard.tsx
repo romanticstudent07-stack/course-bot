@@ -1,17 +1,16 @@
 // apps/miniapp/src/components/DayGuard.tsx — охрана экрана /day (miniapp-pause-c3b §7.2, регрессия 4 t5-bc §4).
 // При монтировании — один checkDayAccess(getPause, Date.now()); пока ждём — «Загрузка…».
-// open → children. paused → строка «Пауза активна» без перехода: маршрута /paused ещё нет (c3b-2),
-// а переход попал бы в path="*" → /day → снова сюда, то есть петля. Переход на /paused включит c3b-2.
+// open → children. paused → Navigate на /paused с заменой текущей записи (c3b-2): маршрут /paused
+// есть в routes.tsx, поэтому path="*" не срабатывает и петли нет.
 // error → текст dayErrorMessage и «Повторить»: кнопка disabled, пока !canRetry; таймер только
 // включает кнопку и GET не делает; по нажатию — проверка canRetry и ровно один checkDayAccess.
 // Повтор с отсрочкой экрана дня здесь не применяется (§7.2). Ответ GET живёт только в state React.
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Navigate } from 'react-router-dom';
 
 import { getPause } from '../api/client.ts';
 import { canRetry, checkDayAccess, type DayAccess } from './dayAccess.ts';
 import { dayErrorMessage } from './dayScreen.ts';
-
-export const DAY_GUARD_PAUSED_TEXT = 'Пауза активна';
 
 const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 16, padding: 16 };
 
@@ -81,13 +80,7 @@ export function DayGuard({ children }: { children: ReactNode }) {
 
   if (access.kind === 'open') return <>{children}</>;
 
-  if (access.kind === 'paused') {
-    return (
-      <div className="page" style={pageStyle}>
-        <p>{DAY_GUARD_PAUSED_TEXT}</p>
-      </div>
-    );
-  }
+  if (access.kind === 'paused') return <Navigate to="/paused" replace/>;
 
   return <DayGuardErrorView text={dayErrorMessage(access.error)} retryEnabled={retryEnabled} onRetry={onRetry}/>;
 }
