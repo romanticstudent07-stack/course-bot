@@ -1,15 +1,16 @@
 // apps/miniapp/src/components/pausedScreen.test.ts — vitest, environment node, без DOM (miniapp-pause-c3b §9, c3b-1).
 // JSX здесь запрещён (файл .ts): рендер через createElement + renderToStaticMarkup.
-// Исходники DayGuard.tsx и pausedScreen.ts проверяются поиском по тексту.
-// Пункт «PausedPage.tsx: нет setInterval» — в c3b-2 вместе с экраном.
+// Исходники DayGuard.tsx, pausedScreen.ts, PausedPage.tsx и routes.tsx проверяются поиском по тексту.
+// c3b-2: pauseErrorToApi, переход DayGuard на /paused, маршрут /paused, таймеры и POST в PausedPage.
 import { readFileSync } from 'node:fs';
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import type { PauseOut, PauseStatus } from '../api/client.ts';
-import { DAY_GUARD_PAUSED_TEXT, DayGuard, DayGuardErrorView } from './DayGuard.tsx';
+import { ApiError, type PauseOut, type PauseStatus } from '../api/client.ts';
+import { DayGuard, DayGuardErrorView } from './DayGuard.tsx';
+import { retryAtFrom } from './dayAccess.ts';
 import { PAUSE_CONFLICT_TEXT, PAUSE_STATUS_CANCELLABLE, type PauseView } from './pause.ts';
 import {
   PAUSED_TEXT,
@@ -17,6 +18,7 @@ import {
   REFUSAL_TEXTS,
   formatEta,
   pauseBars,
+  pauseErrorToApi,
   pausedView,
   refusalText,
 } from './pausedScreen.ts';
@@ -195,6 +197,33 @@ describe('refusalText', () => {
   });
 });
 
+describe('pauseErrorToApi (c3b-2, П7)', () => {
+  it('429 с retryAfter 30 → ApiError, retryAtFrom = NOW + 30 000', () => {
+    const err = pauseErrorToApi({ status: 429, code: 'RATE_LIMITED', retryAfter: 30 });
+    expect(err).toBeInstanceOf(ApiError);
+    const api = err as ApiError;
+    expect(api.status).toBe(429);
+    expect(api.code).toBe('RATE_LIMITED');
+    expect(api.retryAfter).toBe(30);
+    expect(retryAtFrom(err, NOW)).toBe(NOW + 30_000);
+  });
+
+  it('503 → ApiError 503', () => {
+    const err = pauseErrorToApi({ status: 503, code: 'SERVICE_UNAVAILABLE', retryAfter: null });
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(503);
+    expect((err as ApiError).code).toBe('SERVICE_UNAVAILABLE');
+    expect(retryAtFrom(err, NOW)).toBe(NOW);
+  });
+
+  it('status 0 → не ApiError', () => {
+    const err = pauseErrorToApi({ status: 0, code: 'NETWORK_ERROR', retryAfter: null });
+    expect(err).not.toBeInstanceOf(ApiError);
+    expect(err).toBeInstanceOf(TypeError);
+    expect(retryAtFrom(err, NOW)).toBe(NOW);
+  });
+});
+
 describe('DayGuardErrorView', () => {
   it('retryEnabled false → кнопка disabled', () => {
     const html = renderToStaticMarkup(createElement(DayGuardErrorView, { text: 'err', retryEnabled: false, onRetry: noop }));
@@ -213,12 +242,13 @@ describe('DayGuard: до ответа GET день не открыт', () => {
     const html = renderToStaticMarkup(createElement(DayGuard, { children: createElement('p', null, 'день открыт') }));
     expect(html).toContain('Загрузка…');
     expect(html).not.toContain('день открыт');
-    expect(html).not.toContain(DAY_GUARD_PAUSED_TEXT);
   });
 });
 
 describe('исходники: таймеры', () => {
   const guard = source('./DayGuard.tsx');
+  const page = source('../pages/PausedPage/PausedPage.tsx');
+  const routesText = source('../navigation/routes.tsx');
 
   it('DayGuard.tsx: нет setInterval', () => {
     expect(guard.toLowerCase()).not.toContain('setinterval');
@@ -243,5 +273,25 @@ describe('исходники: таймеры', () => {
     for (const banned of ['date.now', 'settimeout', 'setinterval']) {
       expect(text.includes(banned), banned).toBe(false);
     }
+  });
+
+  it('PausedPage.tsx: нет setInterval, setTimeout ровно 2 раза (П8)', () => {
+    expect(page.toLowerCase()).not.toContain('setinterval');
+    expect(page.split('setTimeout(').length).toBe(3);
+  });
+
+  it('PausedPage.tsx: три POST и повторный вход очереди напрямую не вызываются (П2, §11)', () => {
+    for (const banned of ['postPauseRequest', 'postPauseCancel', 'postPauseResume', 'resumeAuth']) {
+      expect(page.includes(banned), banned).toBe(false);
+    }
+  });
+
+  it('DayGuard.tsx: при паузе — Navigate на /paused', () => {
+    expect(guard).toContain('Navigate');
+    expect(guard).toContain('/paused');
+  });
+
+  it("routes.tsx: есть маршрут path: '/paused'", () => {
+    expect(routesText).toContain("path: '/paused'");
   });
 });
