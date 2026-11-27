@@ -421,6 +421,8 @@ const NO_STORAGE_FILES = [
   './pauseSend.ts',
   './dayAccess.ts',
   './pauseRuntime.ts',
+  './DayGuard.tsx',
+  './pausedScreen.ts',
 ];
 const BANNED_STORAGE = [
   'localstorage',
