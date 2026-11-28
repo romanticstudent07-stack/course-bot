@@ -9,7 +9,7 @@ from aiogram.methods import AnswerCallbackQuery, EditMessageText, GetMe, SendMes
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 from psycopg.types.json import Jsonb
 
-from bot import revive, texts
+from bot import card, revive, texts
 from bot.app import build_dispatcher
 from bot.config import BotConfig
 from bot.life import BIGINT_MAX, FIND, LOCK
@@ -23,6 +23,7 @@ OP = "0123456789abcdef"
 AFTER_ID = 5030
 BLOCKED = ("active", ["block_lives"], 2, 3, 5)
 ROWS = [(5031, 2, 2, 4), (5032, 2, 3, 1), (5033, 2, 3, 5), (5034, 1, 5, 5)]
+REPLY_MID, THREAD = 5035, 5036
 
 
 def cfg(**kw) -> BotConfig:
@@ -106,9 +107,26 @@ def db(state=BLOCKED, found=True, key_rowcount=1, rows=ROWS):
     ("2.", (revive.USAGE, None, None, None)),
     ("abc", (revive.USAGE, None, None, None)),
     ("#9223372036854775808", (revive.NOT_FOUND, None, None, None)),
+    ("#1232.3", (revive.USAGE, None, None, None)),
+    ("#123  2.3", ("ok", 123, 2, 3)),
+    ("٢.٣", (revive.USAGE, None, None, None)),
+    ("#١٢٣", (revive.USAGE, None, None, None)),
 ])
 def test_parse_args(args, expected):
     assert revive.parse_args(args) == expected
+
+
+@pytest.mark.parametrize("data", [
+    f"rvb:y:5028:0:1:{OP}",
+    f"rvb:y:5028:3:0:{OP}",
+    f"rvb:y:5028:1000:1:{OP}",
+    "rvb:y:5028:3:1:zzzzzzzzzzzzzzzz",
+    f"rvb:y:5028:3:1:{OP[:15]}",
+    f"rvb:y:9223372036854775808:3:1:{OP}",
+    f"rvb:y:٥٠٢٨:3:1:{OP}",
+])
+def test_parse_callback_rejects(data):
+    assert revive.parse_callback(data) is None
 
 
 # --- check ---
@@ -181,6 +199,25 @@ def _button(data, chat_id=GROUP, user=ADMIN, age=timedelta(0)):
                         date=datetime.now(timezone.utc) - age)))
 
 
+def _reply_cmd(text, reply, thread_id=None):
+    return Update(update_id=3, message=Message(
+        message_id=MID, date=datetime.now(), chat=Chat(id=GROUP, type="supergroup"),
+        from_user=User(id=ADMIN, is_bot=False, first_name="A"), text=text,
+        message_thread_id=thread_id, reply_to_message=reply))
+
+
+def _post(from_id, message_id=REPLY_MID, reply_markup=None, text="пост"):
+    return Message(message_id=message_id, date=datetime.now(), chat=Chat(id=GROUP, type="supergroup"),
+                   from_user=User(id=from_id, is_bot=from_id == BOT_ID, first_name="P"), text=text,
+                   reply_markup=reply_markup)
+
+
+def _db_down():
+    def answer(sql, params):
+        raise RuntimeError("db down")
+    return FakeConn(answer)
+
+
 def _user_sends(calls):
     return [c for c in calls if isinstance(c, SendMessage) and c.chat_id == TG_USER]
 
@@ -219,6 +256,40 @@ def test_preview_usage_without_number_and_reply():
     calls, connected, _ = asyncio.run(_feed(cfg(), _cmd("/revive"), conn))
     assert connected == []
     assert [c.text for c in calls if isinstance(c, SendMessage)] == [texts.REVIVE_USAGE]
+
+
+def test_command_other_bot_mention_ignored():
+    conn = db()
+    calls, connected, _ = asyncio.run(_feed(cfg(), _cmd("/revive@other_bot #005028 3.1"), conn))
+    assert not any(isinstance(c, SendMessage) for c in calls)
+    assert connected == []
+
+
+def test_preview_db_error_try_later():
+    calls, _, _ = asyncio.run(_feed(cfg(), _cmd("/revive #005028"), _db_down()))
+    sends = [c for c in calls if isinstance(c, SendMessage)]
+    assert len(sends) == 1 and sends[0].text == texts.REVIVE_TRY_LATER and sends[0].reply_markup is None
+    assert _user_sends(calls) == []
+
+
+def test_reply_to_bot_card_preview():
+    conn = db()
+    reply = _post(BOT_ID, reply_markup=card.card_button(SHORT))
+    asyncio.run(_feed(cfg(), _reply_cmd("/revive 2.3", reply), conn))
+    assert conn.sqls()[:1] == [FIND]
+    assert conn.params_of(FIND) == [(SHORT,)]
+
+
+@pytest.mark.parametrize(("reply", "thread_id", "text"), [
+    (_post(BOT_ID, message_id=THREAD, reply_markup=card.card_button(SHORT)), THREAD, texts.REVIVE_USAGE),
+    (_post(ADMIN, reply_markup=card.card_button(SHORT)), None, texts.REVIVE_NOT_FOUND),
+    (_post(BOT_ID), None, texts.REVIVE_NOT_FOUND),
+])
+def test_reply_target_refusals(reply, thread_id, text):
+    conn = db()
+    calls, connected, _ = asyncio.run(_feed(cfg(), _reply_cmd("/revive", reply, thread_id), conn))
+    assert connected == []
+    assert [c.text for c in calls if isinstance(c, SendMessage)] == [text]
 
 
 # --- подтверждение: revive.apply ---
@@ -298,6 +369,23 @@ def test_confirm_refused_muted():
     assert KEY not in conn.sqls() and EVENT not in conn.sqls()
     edits = [c for c in calls if isinstance(c, EditMessageText)]
     assert len(edits) == 1 and texts.REVIVE_REFUSE_PHASE in edits[0].text
+    assert _user_sends(calls) == []
+
+
+def test_cancel_button_no_db():
+    conn = db()
+    calls, connected, _ = asyncio.run(_feed(cfg(), _button("rvb:n"), conn))
+    edits = [c for c in calls if isinstance(c, EditMessageText)]
+    assert len(edits) == 1 and edits[0].reply_markup is None and texts.REVIVE_CANCELLED in edits[0].text
+    assert connected == []
+    assert _user_sends(calls) == []
+
+
+def test_confirm_db_error_try_later():
+    calls, _, _ = asyncio.run(_feed(cfg(), _button(revive.confirm_data(SHORT, 3, 1, OP)), _db_down()))
+    answers = [c for c in calls if isinstance(c, AnswerCallbackQuery)]
+    assert [a.text for a in answers] == [texts.REVIVE_TRY_LATER]
+    assert not any(isinstance(c, EditMessageText) for c in calls)
     assert _user_sends(calls) == []
 
 
