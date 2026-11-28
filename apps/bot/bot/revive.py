@@ -72,9 +72,10 @@ TEXT_FOR = {
     DONE: texts.REVIVE_DONE,
 }
 
-_ARGS_RE = re.compile(r"(?:#(\d+))?\s*(?:(\d{1,3})\.(\d{1,3}))?")
+_ARGS_RE = re.compile(r"(?:#(\d+)(?=\s|$))?\s*(?:(\d{1,3})\.(\d{1,3}))?", re.ASCII)
 _CONFIRM_RE = re.compile(
-    rf"{CALLBACK_PREFIX}:{CONFIRM}:(\d{{1,19}}):(\d{{1,3}}):(\d{{1,3}}):([0-9a-f]{{16}})"
+    rf"{CALLBACK_PREFIX}:{CONFIRM}:(\d{{1,19}}):(\d{{1,3}}):(\d{{1,3}}):([0-9a-f]{{16}})",
+    re.ASCII,
 )
 
 

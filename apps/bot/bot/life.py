@@ -3,7 +3,7 @@
 Автор в Рабочей группе меняет жизни участника. Бот пишет только событие life_op
 {delta, reason 'author_cmd'} в participant_events; жизни меняет проектор (v5/v6).
 participant_state, outbox, access_grants бот здесь не пишет. RETURNING не используется
-(SELECT на participant_events у app_bot нет).
+(у app_bot на participant_events только SELECT (id, pid, kind) — 0020; здесь не нужен).
 
 Права app_bot (0009, 0011, 0013, 0018) — SQL ниже использует только их:
     tg_user_registry (pid, tg_user_id, tombstoned_at, short_no) — SELECT
